@@ -4,6 +4,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Database & state
 
+### [hits: 1] Number a new drizzle migration against `origin/main`, not the local checkout — parallel PRs collide on `NNNN_`
+- 2026-09-01: PR #220 added `0048_agent_pool_failover.sql` while #216 merged `0048_agent_capture_thinking.sql` to main; GitHub flagged the branch CONFLICTING on `drizzle/meta/_journal.json`. Fix = `git fetch origin main`, rename to the next free number (`git mv`), add a fresh journal entry with a later `when`.
+- Before writing a migration: `git fetch -q origin main && git ls-tree --name-only origin/main packages/orchestrator/drizzle/ | tail -1` and take that number + 1. The journal `when` must stay monotonically increasing.
+
+
 ### [hits: 2] DB is Postgres (Supabase); the PROD url is in /opt/opencara/.env.production
 - Not SQLite. Since the container cutover the live url is `/opt/opencara/.env.production` → `DATABASE_URL` (chmod 600, owned by `quabug`, so no sudo needed). `packages/orchestrator/.env` is the local-dev copy.
 - Quick query against prod: `psql "$(grep -m1 '^DATABASE_URL=' /opt/opencara/.env.production | cut -d= -f2- | tr -d '\"')" -c "..."`. `psql` is installed at /usr/bin/psql.

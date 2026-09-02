@@ -226,8 +226,11 @@ export class FlowEngine {
     }
     const downstream = computeDownstreamSet(def, failedStep.nodeId);
 
+    // Deterministic order: idx then attempt, so a multi-success pool's
+    // fan-in sections come out in a stable order on every rerun.
     const allSteps = await this.deps.db.query.flowRunSteps.findMany({
       where: eq(flowRunSteps.flowRunId, originalRunId),
+      orderBy: [asc(flowRunSteps.idx), asc(flowRunSteps.attempt)],
     });
 
     // Note: worktree state used to invalidate reuse (the per-run
@@ -276,8 +279,11 @@ export class FlowEngine {
       reused.push({
         nodeId: s.nodeId,
         nodeKind: s.nodeKind,
+        attempt: s.attempt,
         outputJson: s.outputJson,
         agentName,
+        agentId: readStringField(s.inputJson, "agentId"),
+        pool: readField(s.inputJson, "pool"),
         startedAt: s.startedAt,
         finishedAt: s.finishedAt,
         originalStepId: s.id,
@@ -595,14 +601,25 @@ export class FlowEngine {
     // untouched on the source run; we just stamp a "reused" marker into
     // inputJson with the originals' ids for traceability.
     if (preloaded) {
+      // A pool node with several successes reuses several rows: they share
+      // ONE idx (like the original attempts did) and keep their attempt
+      // ordinal + agent/pool stamps so the run page renders the same attempt
+      // strip and steering chat targets the right agent.
+      const reusedIdxByNode = new Map<string, number>();
       for (const r of preloaded.reused) {
         const stepId = ulid();
+        let idx = reusedIdxByNode.get(r.nodeId);
+        if (idx === undefined) {
+          idx = nodeIdx++;
+          reusedIdxByNode.set(r.nodeId, idx);
+        }
         await this.deps.db.insert(flowRunSteps).values({
           id: stepId,
           flowRunId,
           nodeId: r.nodeId,
           nodeKind: r.nodeKind,
-          idx: nodeIdx++,
+          idx,
+          attempt: r.attempt,
           status: "succeeded",
           startedAt: r.startedAt ?? new Date(),
           finishedAt: r.finishedAt ?? new Date(),
@@ -611,6 +628,9 @@ export class FlowEngine {
             reusedFromRunId: r.originalRunId,
             reusedFromStepId: r.originalStepId,
             reusedAgentRunId: r.originalAgentRunId,
+            ...(r.agentName ? { agentName: r.agentName } : {}),
+            ...(r.agentId ? { agentId: r.agentId } : {}),
+            ...(r.pool !== undefined ? { pool: r.pool } : {}),
           },
         });
         await this.deps.pg.notify("flow_run_steps", flowRunId);
@@ -1220,9 +1240,14 @@ interface PreparedRun {
 interface ReusedStep {
   nodeId: string;
   nodeKind: string;
+  /** Original attempt ordinal (pool nodes reuse one row per success). */
+  attempt: number;
   outputJson: unknown;
   /** `inputJson.agentName` of the original step, when it was an agent node. */
   agentName: string | null;
+  /** `inputJson.agentId` / `inputJson.pool` stamps of a pool attempt, if any. */
+  agentId: string | null;
+  pool: unknown;
   startedAt: Date | null;
   finishedAt: Date | null;
   originalStepId: string;
@@ -1399,6 +1424,16 @@ function parseFlowDefinition(row: {
  * dispatch). Null for non-agent steps and for rows written before the field
  * existed.
  */
+function readField(inputJson: unknown, key: string): unknown {
+  if (!inputJson || typeof inputJson !== "object") return undefined;
+  return (inputJson as Record<string, unknown>)[key];
+}
+
+function readStringField(inputJson: unknown, key: string): string | null {
+  const v = readField(inputJson, key);
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
 function readAgentName(inputJson: unknown): string | null {
   if (!inputJson || typeof inputJson !== "object") return null;
   const name = (inputJson as { agentName?: unknown }).agentName;

@@ -759,7 +759,9 @@ export const flowRunSteps = pgTable(
     idx: integer("idx").notNull(),
     // Agent-pool attempt ordinal. Every attempt of a node (retry on the same
     // agent, or failover to the next candidate) gets its OWN step row sharing
-    // `nodeId`/`idx`; the highest `attempt` is the node's current state.
+    // `nodeId`/`idx`. The node's outcome is aggregated over all its attempts
+    // (quorum met = succeeded) — with parallel slots the highest `attempt`
+    // is just the last one STARTED, not the one that decided the node.
     attempt: integer("attempt").notNull().default(0),
     status: flowStepStatusEnum("status").notNull().default("pending"),
     inputJson: jsonb("input_json"),

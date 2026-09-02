@@ -20,6 +20,12 @@ import {
 import { formatRelative, formatAbsolute } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
 import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
+import {
+  aggregateNodeStatus,
+  groupAttemptsByNode,
+  parsePoolMeta,
+  pickFailedStep,
+} from "@/lib/flowStepStatus";
 import type { StepStatus } from "@/components/flow/nodes";
 import { StepSteeringChat } from "@/components/flow/StepSteeringChat";
 import { useEventSource } from "@/lib/sse";
@@ -76,23 +82,19 @@ export function FlowRunDetailPage() {
     return m;
   }, [flow, settingsQ.data, agentsQ.data, data?.steps]);
 
-  // Latest attempt per node: agent-pool retries/failovers each add a step row
-  // sharing the nodeId, and the graph badge + rerun control must reflect the
-  // attempt that decided the node's fate, not the first one that failed.
-  const latestByNode = useMemo(() => {
-    const m = new Map<string, FlowRunStep>();
-    for (const s of data?.steps ?? []) {
-      const prev = m.get(s.nodeId);
-      if (!prev || s.attempt >= prev.attempt) m.set(s.nodeId, s);
-    }
-    return m;
-  }, [data?.steps]);
+  // Agent-pool retries/failovers each add a step row sharing the nodeId. The
+  // graph badge and the rerun control need the node's OUTCOME across all of
+  // them (quorum met = succeeded), not any single row — see flowStepStatus.
+  const attemptsByNode = useMemo(() => groupAttemptsByNode(data?.steps ?? []), [data?.steps]);
 
   const stepStatuses = useMemo<Record<string, StepStatus>>(() => {
     const m: Record<string, StepStatus> = {};
-    for (const [nodeId, s] of latestByNode) m[nodeId] = s.status;
+    if (!data) return m;
+    for (const [nodeId, attempts] of attemptsByNode) {
+      m[nodeId] = aggregateNodeStatus(attempts, data.run.status);
+    }
     return m;
-  }, [latestByNode]);
+  }, [attemptsByNode, data]);
 
   if ((initialQ.isLoading && !data) || flowsQ.isLoading) {
     return <Skeleton className="h-64 w-full" />;
@@ -102,11 +104,7 @@ export function FlowRunDetailPage() {
   }
 
   const { run, steps, agentRuns } = data;
-  const nodeAttempts = selectedNodeId
-    ? steps
-        .filter((s) => s.nodeId === selectedNodeId)
-        .sort((a, b) => a.attempt - b.attempt)
-    : [];
+  const nodeAttempts = selectedNodeId ? attemptsByNode.get(selectedNodeId) ?? [] : [];
   const selectedStep =
     nodeAttempts.find((s) => s.id === selectedStepId) ??
     nodeAttempts[nodeAttempts.length - 1] ??
@@ -115,8 +113,7 @@ export function FlowRunDetailPage() {
     ? agentRuns.find((a) => a.flowRunStepId === selectedStep.id)?.id ?? null
     : null;
 
-  const failedStep =
-    Array.from(latestByNode.values()).find((s) => s.status === "failed") ?? null;
+  const failedStep = pickFailedStep(attemptsByNode, run);
 
   return (
     <div className="space-y-6">
@@ -457,40 +454,6 @@ function RerunControls({
       )}
     </div>
   );
-}
-
-interface StepPoolMeta {
-  agentId: string;
-  agentName: string;
-  candidateIndex: number;
-  retryIndex: number;
-  candidateCount: number;
-  retrySame: number;
-}
-
-// Engine stamps `pool` onto agent-attempt steps (engine.runStepAttempt) so
-// the panel can say where this attempt sits in the node's failover list.
-function parsePoolMeta(inputJson: unknown): StepPoolMeta | null {
-  if (!inputJson || typeof inputJson !== "object") return null;
-  const pool = (inputJson as { pool?: unknown }).pool;
-  if (!pool || typeof pool !== "object") return null;
-  const o = pool as Partial<StepPoolMeta>;
-  if (
-    typeof o.agentName !== "string" ||
-    typeof o.candidateIndex !== "number" ||
-    typeof o.retryIndex !== "number" ||
-    typeof o.candidateCount !== "number"
-  ) {
-    return null;
-  }
-  return {
-    agentId: typeof o.agentId === "string" ? o.agentId : "",
-    agentName: o.agentName,
-    candidateIndex: o.candidateIndex,
-    retryIndex: o.retryIndex,
-    candidateCount: o.candidateCount,
-    retrySame: typeof o.retrySame === "number" ? o.retrySame : 0,
-  };
 }
 
 function parseReused(

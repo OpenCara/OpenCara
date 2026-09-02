@@ -516,8 +516,9 @@ function AgentNodePanel({
             </div>
             <p className="text-xs text-muted-foreground">
               Agents run from the top of the list, {Math.min(concurrency, Math.max(poolSize, 1))} at
-              a time; a failed one is retried that many times, then the next agent in the list
-              takes its slot with the same prompt. The node succeeds once every slot has
+              a time. A failed agent is retried {retrySame} more time{retrySame === 1 ? "" : "s"}
+              {retrySame === 0 ? " (no retries)" : ""}, then the next agent in the list takes its
+              slot with the same prompt. The node succeeds once every slot has
               finished with at least {Math.min(quorum, concurrency)} success
               {Math.min(quorum, concurrency) === 1 ? "" : "es"}, and hands every successful
               output downstream (one section per agent). 1 / 1 is plain failover.
