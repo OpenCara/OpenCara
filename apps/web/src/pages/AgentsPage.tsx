@@ -177,6 +177,13 @@ function ThoughtLevelField({
           <>
             Reasoning effort selected over ACP on every run. <code>{kind}</code>{" "}
             accepts {levels}. Empty = the adapter&apos;s default.
+            {kind === "claude" && (
+              <>
+                {" "}
+                Needs a <code>claude</code> CLI with <code>--effort</code>; an older
+                CLI on the device fails the turn instead of ignoring it.
+              </>
+            )}
           </>
         ) : (
           <>

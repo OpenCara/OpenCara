@@ -422,6 +422,18 @@ function parseExtraArgs(body: Record<string, unknown>): string[] {
  * - `null` to reset to the kind default (explicit null, or an empty value),
  * - `string[]` for an override (array as-is, or a shell string tokenized).
  */
+/**
+ * Normalise the reasoning-effort input: a trimmed non-empty string, or
+ * undefined for "not set" (null / "" / non-string). Values are free text —
+ * each adapter has its own vocabulary and the device validates against what
+ * the adapter actually advertises, so nothing is rejected here.
+ */
+export function parseThoughtLevel(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  return t.length > 0 ? t : undefined;
+}
+
 function parseAcpArgs(body: Record<string, unknown>): string[] | null | undefined {
   if (!("acpArgs" in body)) return undefined;
   const raw = body.acpArgs;
@@ -446,18 +458,6 @@ function parseAcpArgs(body: Record<string, unknown>): string[] | null | undefine
  * for this kind + the agent's `args`). The UI shows the command read-only and
  * pre-fills the editable args field with `acpArgs ?? defaultAcpArgs`.
  */
-/**
- * Normalise the reasoning-effort input: a trimmed non-empty string, or
- * undefined for "not set" (null / "" / non-string). Values are free text —
- * each adapter has its own vocabulary and the device validates against what
- * the adapter actually advertises, so nothing is rejected here.
- */
-export function parseThoughtLevel(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const t = raw.trim();
-  return t.length > 0 ? t : undefined;
-}
-
 function serializeAgent(row: typeof agents.$inferSelect) {
   return {
     ...row,

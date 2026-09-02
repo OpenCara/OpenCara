@@ -435,9 +435,13 @@ const THOUGHT_LEVEL_OPTION_IDS = new Set([
 export function findThoughtLevelOption(
   configOptions: AcpConfigOption[] | undefined,
 ): AcpConfigOption | undefined {
-  return configOptions?.find(
-    (o) =>
-      o.category === "thought_level" || THOUGHT_LEVEL_OPTION_IDS.has(o.id.toLowerCase()),
+  if (!configOptions) return undefined;
+  // The ACP-standard category wins outright; the id heuristics only apply
+  // when no option is tagged, so a generic `thinking` toggle advertised
+  // ahead of a proper `thought_level` select can't shadow it.
+  return (
+    configOptions.find((o) => o.category === "thought_level") ??
+    configOptions.find((o) => THOUGHT_LEVEL_OPTION_IDS.has(o.id.toLowerCase()))
   );
 }
 
@@ -475,7 +479,9 @@ export async function selectAcpThoughtLevel(
     } catch {
       onLog(
         "stderr",
-        `[acp] thought level "${want}" not among available levels [${values.join(", ")}]; using the default\n`,
+        values.length > 0
+          ? `[acp] thought level "${want}" not among available levels [${values.join(", ")}]; using the default\n`
+          : `[acp] thought level "${want}" rejected by the agent; using the default\n`,
       );
     }
     return;

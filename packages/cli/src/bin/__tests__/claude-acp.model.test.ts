@@ -14,6 +14,7 @@ import {
   handleSetConfigOption,
   parseModelFromArgs,
   sessions,
+  thoughtLevelConfigOption,
 } from "../claude-acp.js";
 
 beforeEach(() => sessions.clear());
@@ -127,14 +128,20 @@ describe("thought_level config option", () => {
     );
   });
 
-  it("stores a valid level (case-insensitive) and reflects it in currentValue", () => {
+  it("stores a valid level (case-insensitive) and advertises it as currentValue", () => {
     const { sessionId } = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
     handleSetConfigOption({ sessionId, configId: "thought_level", value: "High" });
-    assert.equal(sessions.get(sessionId)?.thoughtLevel, "high");
+    const state = sessions.get(sessionId)!;
+    assert.equal(state.thoughtLevel, "high");
+    assert.equal(thoughtLevelConfigOption(state).currentValue, "high");
+  });
+
+  it("session/load starts a fresh state, so the level resets to default", () => {
+    const { sessionId } = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
+    handleSetConfigOption({ sessionId, configId: "thought_level", value: "max" });
     const r = handleLoadSession({ sessionId, cwd: "/tmp", mcpServers: [] }) as {
       configOptions?: AcpConfigOption[];
     };
-    // session/load re-registers the session; a fresh state has no level yet.
     assert.equal(r.configOptions?.find((o) => o.id === "thought_level")?.currentValue, "default");
   });
 

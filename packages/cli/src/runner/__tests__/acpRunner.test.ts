@@ -146,6 +146,23 @@ describe("selectAcpThoughtLevel", () => {
     assert.equal(findThoughtLevelOption(undefined), undefined);
   });
 
+  it("prefers the thought_level category over an earlier heuristic id match", () => {
+    const opts: AcpConfigOption[] = [
+      { type: "toggle", id: "thinking", options: [{ value: "on" }, { value: "off" }] },
+      ...levelOption(["low", "high"]),
+    ];
+    assert.equal(findThoughtLevelOption(opts)?.id, "thought_level");
+  });
+
+  it("logs a plain rejection when the option advertises no values", async () => {
+    const { client } = fakeClient(async () => {
+      throw new Error("nope");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "high", levelOption([]), sink);
+    assert.ok(lines.some((l) => l.includes('thought level "high" rejected by the agent')));
+  });
+
   it("selects a case-insensitive match and logs it", async () => {
     const { client, calls } = fakeClient(async () => ({}));
     const { lines, sink } = collectLogs();
