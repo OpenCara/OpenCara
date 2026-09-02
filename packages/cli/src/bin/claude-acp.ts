@@ -25,7 +25,10 @@
 //   - Translates a small set of Claude events:
 //       * `{type:"stream_event", event:{type:"content_block_delta",
 //          delta:{type:"text_delta",text}}}`
-//          → `session/update` `agent_message_chunk` (text)
+//          → `session/update` `agent_message_chunk` (text). A new
+//          content block that follows text stopped mid-line gets a
+//          "\n\n" prefix so assistant messages split by tool calls
+//          don't run together (see TurnTextState).
 //       * `{type:"assistant", message:{content:[{type:"tool_use",
 //          name:"AskUserQuestion", input:{...}}, ...]}}`
 //          → `session/update` `agent_message_chunk` carrying a
@@ -665,6 +668,9 @@ async function runClaudeTurn(
     const decoder = new FrameDecoder();
     let resolved = false;
     let stopReason: ClaudePromptResult["stopReason"] = "end_turn";
+    // One per turn: continuity only matters between the assistant messages
+    // of a single prompt, and a fresh turn always starts a fresh paragraph.
+    const turn = newTurnTextState();
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -679,7 +685,7 @@ async function runClaudeTurn(
         // FrameDecoder types incoming frames as JsonRpcMessage (used by
         // the rest of acp/), but Claude's stream-json speaks its own
         // shape — coerce through unknown and let the handler narrow.
-        handleClaudeEvent(sessionId, msg as unknown, (sr) => {
+        handleClaudeEvent(sessionId, msg as unknown, turn, (sr) => {
           if (resolved) return;
           resolved = true;
           stopReason = sr;
@@ -738,9 +744,34 @@ export interface TranslatedEvent {
   stopReason?: ClaudePromptResult["stopReason"];
 }
 
+/**
+ * Per-turn text continuity. Claude answers in several assistant messages
+ * per turn — one text block, then tool calls, then another text block —
+ * and this shim forwards only the text deltas (tool calls are not
+ * surfaced as ACP `tool_call` updates). Each text block ends without a
+ * trailing newline, so the captured output read "…the verdict.Still
+ * verifying…" and a `verdict:` marker glued mid-line went unparsed
+ * (flow run 01M1GWKV0F4AGJRGP93RBSK5SW). Track where the last forwarded
+ * text stopped and whether a new block has begun since, so the first
+ * delta of a new block is preceded by a paragraph break when needed.
+ */
+export interface TurnTextState {
+  /** Any text forwarded yet this turn. */
+  emitted: boolean;
+  /** The last forwarded text ended with a newline. */
+  atLineStart: boolean;
+  /** A `message_start` / `content_block_start` arrived since the last delta. */
+  newBlock: boolean;
+}
+
+export function newTurnTextState(): TurnTextState {
+  return { emitted: false, atLineStart: true, newBlock: false };
+}
+
 export function translateClaudeEvent(
   sessionId: string,
   raw: unknown,
+  turn: TurnTextState = newTurnTextState(),
 ): TranslatedEvent {
   const out: AcpUpdateNotification[] = [];
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -780,10 +811,23 @@ export function translateClaudeEvent(
     const event = msg["event"] as
       | { type?: string; delta?: { type?: string; text?: string } }
       | undefined;
+    if (event?.type === "message_start" || event?.type === "content_block_start") {
+      turn.newBlock = true;
+      return { notifications: out };
+    }
     if (event?.type !== "content_block_delta") return { notifications: out };
     if (event.delta?.type !== "text_delta") return { notifications: out };
-    const text = typeof event.delta.text === "string" ? event.delta.text : "";
-    if (text.length === 0) return { notifications: out };
+    const delta = typeof event.delta.text === "string" ? event.delta.text : "";
+    if (delta.length === 0) return { notifications: out };
+    // First delta of a new block after text that stopped mid-line: open a
+    // new paragraph so consecutive assistant messages don't run together.
+    // Blank lines (never a lone "\n") so markdown renders them as separate
+    // paragraphs too, not just as separate lines for the marker parser.
+    const separator = turn.newBlock && turn.emitted && !turn.atLineStart ? "\n\n" : "";
+    const text = separator + delta;
+    turn.newBlock = false;
+    turn.emitted = true;
+    turn.atLineStart = delta.endsWith("\n");
     out.push({
       method: "session/update",
       params: {
@@ -924,9 +968,10 @@ function renderAskUserQuestionItem(raw: unknown): string | null {
 function handleClaudeEvent(
   sessionId: string,
   raw: unknown,
+  turn: TurnTextState,
   done: (stopReason: ClaudePromptResult["stopReason"]) => void,
 ): void {
-  const { notifications, stopReason } = translateClaudeEvent(sessionId, raw);
+  const { notifications, stopReason } = translateClaudeEvent(sessionId, raw, turn);
   for (const n of notifications) notify(n.method, n.params);
   if (stopReason) done(stopReason);
 }

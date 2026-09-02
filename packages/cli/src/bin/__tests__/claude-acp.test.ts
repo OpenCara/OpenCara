@@ -11,6 +11,7 @@ import {
   handleNewSession,
   sessions,
   translateClaudeEvent,
+  newTurnTextState,
 } from "../claude-acp.js";
 
 beforeEach(() => sessions.clear());
@@ -145,6 +146,42 @@ describe("translateClaudeEvent", () => {
         },
       },
     });
+  });
+
+  it("opens a paragraph before a new block when the previous text stopped mid-line", () => {
+    const turn = newTurnTextState();
+    const delta = (text: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    });
+    const textOf = (r: ReturnType<typeof translateClaudeEvent>) =>
+      (r.notifications[0]?.params.update as { content: { text: string } }).content.text;
+
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "message_start" } }, turn);
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
+    assert.equal(textOf(translateClaudeEvent(SID, delta("I'll verify the claims"), turn)), "I'll verify the claims");
+    assert.equal(textOf(translateClaudeEvent(SID, delta(" first."), turn)), " first.");
+    // Tool use happens here (assistant tool_use frame, user tool_result) —
+    // not forwarded. The next assistant message begins a new block.
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "message_start" } }, turn);
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
+    assert.equal(textOf(translateClaudeEvent(SID, delta("verdict: request_changes"), turn)), "\n\nverdict: request_changes");
+    // Same block continues: no separator inside a block.
+    assert.equal(textOf(translateClaudeEvent(SID, delta("\n\n## Summary"), turn)), "\n\n## Summary");
+  });
+
+  it("adds no separator when the previous block already ended a line, or before the first text", () => {
+    const turn = newTurnTextState();
+    const delta = (text: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    });
+    const textOf = (r: ReturnType<typeof translateClaudeEvent>) =>
+      (r.notifications[0]?.params.update as { content: { text: string } }).content.text;
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
+    assert.equal(textOf(translateClaudeEvent(SID, delta("Done.\n"), turn)), "Done.\n");
+    translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
+    assert.equal(textOf(translateClaudeEvent(SID, delta("Next"), turn)), "Next");
   });
 
   it("drops non-text content_block_delta", () => {
