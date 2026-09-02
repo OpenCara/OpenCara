@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { effectivePoolShape } from "../agentPool.js";
 import {
   AgentPoolExhaustedError,
   clampConcurrency,
@@ -320,5 +321,39 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
     await assert.rejects(run, (err) => err === skip);
     // b settles later without an unhandled rejection
     await h.fail("b#0");
+  });
+});
+
+describe("effectivePoolShape", () => {
+  it("caps quorum to one slot on a worktree node (the reviewer-pool 'failed' paint)", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5, worktree: true }),
+      { concurrency: 1, quorum: 1, forcedSingleSlot: true, quorumCapped: true },
+    );
+  });
+
+  it("keeps a satisfiable shape untouched", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5, worktree: false }),
+      { concurrency: 2, quorum: 2, forcedSingleSlot: false, quorumCapped: false },
+    );
+  });
+
+  it("caps both to the candidate count and quorum to concurrency", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 3, quorum: 3, candidateCount: 2, worktree: false }),
+      { concurrency: 2, quorum: 2, forcedSingleSlot: false, quorumCapped: true },
+    );
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 1, quorum: 3, candidateCount: 4, worktree: false }),
+      { concurrency: 1, quorum: 1, forcedSingleSlot: false, quorumCapped: true },
+    );
+  });
+
+  it("clamps garbage settings to the defaults", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: "x", quorum: -4, candidateCount: 1, worktree: true }),
+      { concurrency: 1, quorum: 1, forcedSingleSlot: false, quorumCapped: false },
+    );
   });
 });

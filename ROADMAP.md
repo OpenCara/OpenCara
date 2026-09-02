@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#225](https://github.com/OpenCara/OpenCara/pull/225) - fix(flows): persist the effective pool quorum, capped to the slot count
 - **2026-09-02**: Merged [#223](https://github.com/OpenCara/OpenCara/pull/223) - feat(flows): review grace period, event-driven pre-emption, and four stage flows
 - **2026-09-02**: Merged [#222](https://github.com/OpenCara/OpenCara/pull/222) - feat(flows): projects inherit the account-scope flow by default, override per node
 - **2026-09-02**: Merged [#221](https://github.com/OpenCara/OpenCara/pull/221) - feat(web): one ordered agent list per node, drop reviewer +/-, prompt + agents on graph nodes
@@ -23,6 +24,7 @@
 
 ## Completed
 
+- [x] fix(flows): persist the effective pool quorum, capped to the slot count ([#225](https://github.com/OpenCara/OpenCara/pull/225))
 - [x] docs(readme): refresh for ACP cutover + new-user onboarding section ([#197](https://github.com/OpenCara/OpenCara/pull/197))
 - [x] fix(claude-acp): advertise the model as an ACP config option ([#192](https://github.com/OpenCara/OpenCara/pull/192))
 - [x] fix(flows): stop synthesizer stub reviews from reaching GitHub ([#191](https://github.com/OpenCara/OpenCara/pull/191))
