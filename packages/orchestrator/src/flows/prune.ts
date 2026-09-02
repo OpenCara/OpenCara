@@ -1,6 +1,5 @@
-import { and, eq, lt, sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { agentRuns, flowRuns, platformEvents } from "../db/schema.js";
 
 /**
  * How long to keep `trigger_skip` flow runs before pruning them.
@@ -15,40 +14,6 @@ import { agentRuns, flowRuns, platformEvents } from "../db/schema.js";
  */
 export const DEFAULT_TRIGGER_SKIP_RETENTION_DAYS = 7;
 
-/** Cutoff instant: rows created before this are eligible for pruning. */
-export function retentionCutoff(now: Date, retentionDays: number): Date {
-  return new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
-}
-
-/**
- * Delete `cancelled` + `trigger_skip` flow runs older than the retention
- * window. Returns the number of rows removed.
- *
- * Scoped narrowly on purpose: only `cancel_reason = 'trigger_skip'` is touched,
- * so `abandoned` (reaper-restored) runs and every succeeded/failed run are kept
- * for history regardless of age. These rows have no dependent steps/agent_runs,
- * so the delete doesn't cascade into meaningful work even when clearing a large
- * first-run backlog (OpenCara#146 left ~14k of them).
- */
-export async function pruneTriggerSkipFlowRuns(
-  db: Db,
-  retentionDays: number = DEFAULT_TRIGGER_SKIP_RETENTION_DAYS,
-  now: Date = new Date(),
-): Promise<number> {
-  const cutoff = retentionCutoff(now, retentionDays);
-  const deleted = await db
-    .delete(flowRuns)
-    .where(
-      and(
-        eq(flowRuns.status, "cancelled"),
-        eq(flowRuns.cancelReason, "trigger_skip"),
-        lt(flowRuns.createdAt, cutoff),
-      ),
-    )
-    .returning({ id: flowRuns.id });
-  return deleted.length;
-}
-
 /**
  * How long to keep platform events that nothing references.
  *
@@ -56,12 +21,16 @@ export async function pruneTriggerSkipFlowRuns(
  * trigger accepted are ever pointed at by a `flow_runs.trigger_event_id` /
  * `agent_runs.trigger_event_id`. The rest (bot comments, label churn, pushes
  * to branches no flow watches, and — after the trigger_skip prune — the
- * events behind those skipped runs) are read by exactly one thing: the
- * Activity feed, which only ever shows the newest page. Payloads average
- * ~17kB, so on a busy instance the unreferenced majority is most of the
- * table's footprint.
+ * events behind those skipped runs) have two readers: the Activity feed,
+ * which only shows the newest page, and the Azure DevOps webhook handler's
+ * `previousPrDelivery` probe (routes/webhooksAzure.ts), which looks back
+ * 90 days for the last `pull_request` delivery of the same PR to tell a
+ * real push from a metadata edit. The default must stay >= that lookback,
+ * or a PR quiet for longer than the retention window gets one extra review
+ * (fail-open) when it next changes. Payloads average ~17kB, so on a busy
+ * instance the unreferenced majority is still most of the table.
  */
-export const DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS = 30;
+export const DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS = 90;
 
 /**
  * How long to keep housekeeping agent runs (`spec.kind` = 'internal:*',
@@ -75,6 +44,72 @@ export const DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS = 30;
 export const DEFAULT_INTERNAL_RUN_RETENTION_DAYS = 7;
 
 /**
+ * Rows deleted per statement. Every pooled connection runs with a 30s
+ * `statement_timeout` (db/client.ts); one unbounded DELETE over a first-run
+ * backlog of tens of thousands of TOASTed rows (plus cascading
+ * `agent_run_logs`) could trip it, roll back in full, and be retried
+ * unchanged every day without ever converging. Fixed-size batches keep each
+ * statement well inside the timeout and make partial progress durable.
+ */
+export const PRUNE_BATCH_SIZE = 1000;
+
+/** Cutoff instant: rows created before this are eligible for pruning. */
+export function retentionCutoff(now: Date, retentionDays: number): Date {
+  return new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Run `batch(limit)` — a DELETE that returns one row `{ n }` with the count it
+ * removed — until a batch comes back short. Returns the total removed.
+ */
+export async function deleteInBatches(
+  db: Db,
+  batch: (limit: number) => SQL,
+  batchSize: number = PRUNE_BATCH_SIZE,
+): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const rows = await db.execute<{ n: number | string }>(batch(batchSize));
+    const n = Number(rows[0]?.n ?? 0);
+    total += n;
+    if (n < batchSize) return total;
+  }
+}
+
+/**
+ * Delete `cancelled` + `trigger_skip` flow runs older than the retention
+ * window. Returns the number of rows removed.
+ *
+ * Scoped narrowly on purpose: only `cancel_reason = 'trigger_skip'` is touched,
+ * so `abandoned` (reaper-restored) runs and every succeeded/failed run are kept
+ * for history regardless of age. These rows have no dependent steps/agent_runs,
+ * so the delete doesn't cascade into meaningful work even when clearing a large
+ * first-run backlog (OpenCara#146 left ~14k of them).
+ */
+export function triggerSkipFlowRunsBatch(cutoff: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT id FROM flow_runs
+      WHERE status = 'cancelled'
+        AND cancel_reason = 'trigger_skip'
+        AND created_at < ${cutoff}
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM flow_runs WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
+export async function pruneTriggerSkipFlowRuns(
+  db: Db,
+  retentionDays: number = DEFAULT_TRIGGER_SKIP_RETENTION_DAYS,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = retentionCutoff(now, retentionDays);
+  return deleteInBatches(db, (limit) => triggerSkipFlowRunsBatch(cutoff, limit));
+}
+
+/**
  * Delete platform events older than the retention window that no flow run
  * or agent run references. Returns the number of rows removed.
  *
@@ -82,23 +117,27 @@ export const DEFAULT_INTERNAL_RUN_RETENTION_DAYS = 7;
  * safe: an event still pointed at by a run is history for that run's detail
  * page and its Activity entries, so it stays regardless of age.
  */
+export function unreferencedPlatformEventsBatch(cutoff: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT e.id FROM platform_events e
+      WHERE e.received_at < ${cutoff}
+        AND NOT EXISTS (SELECT 1 FROM flow_runs fr WHERE fr.trigger_event_id = e.id)
+        AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.trigger_event_id = e.id)
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM platform_events WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
 export async function pruneUnreferencedPlatformEvents(
   db: Db,
   retentionDays: number = DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS,
   now: Date = new Date(),
 ): Promise<number> {
   const cutoff = retentionCutoff(now, retentionDays);
-  const deleted = await db
-    .delete(platformEvents)
-    .where(
-      and(
-        lt(platformEvents.receivedAt, cutoff),
-        sql`NOT EXISTS (SELECT 1 FROM flow_runs fr WHERE fr.trigger_event_id = ${platformEvents.id})`,
-        sql`NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.trigger_event_id = ${platformEvents.id})`,
-      ),
-    )
-    .returning({ id: platformEvents.id });
-  return deleted.length;
+  return deleteInBatches(db, (limit) => unreferencedPlatformEventsBatch(cutoff, limit));
 }
 
 /**
@@ -109,21 +148,25 @@ export async function pruneUnreferencedPlatformEvents(
  * Only terminal rows go: a still-running internal job is owned by a live
  * flow step and must not vanish under it, however old its created_at.
  */
+export function internalAgentRunsBatch(cutoff: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT id FROM agent_runs
+      WHERE created_at < ${cutoff}
+        AND spec->>'kind' LIKE 'internal:%'
+        AND status::text IN ('succeeded', 'failed', 'cancelled')
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM agent_runs WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
 export async function pruneInternalAgentRuns(
   db: Db,
   retentionDays: number = DEFAULT_INTERNAL_RUN_RETENTION_DAYS,
   now: Date = new Date(),
 ): Promise<number> {
   const cutoff = retentionCutoff(now, retentionDays);
-  const deleted = await db
-    .delete(agentRuns)
-    .where(
-      and(
-        lt(agentRuns.createdAt, cutoff),
-        sql`${agentRuns.spec}->>'kind' LIKE 'internal:%'`,
-        sql`${agentRuns.status}::text IN ('succeeded', 'failed', 'cancelled')`,
-      ),
-    )
-    .returning({ id: agentRuns.id });
-  return deleted.length;
+  return deleteInBatches(db, (limit) => internalAgentRunsBatch(cutoff, limit));
 }

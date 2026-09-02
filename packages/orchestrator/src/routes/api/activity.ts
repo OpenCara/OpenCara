@@ -223,6 +223,9 @@ export function activityRoutes(deps: ActivityRouteDeps) {
         WHERE c.kind = 'flow_run'
       ) u
       ORDER BY ts DESC
+      -- cand already bounds the result (every phase-2 join is on a primary
+      -- key); this is insurance against a future non-unique join.
+      LIMIT ${limit}
     `);
 
     const projectIds = uniq(rows.map((row) => row.project_id));
