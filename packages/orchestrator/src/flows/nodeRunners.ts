@@ -38,7 +38,6 @@ import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import { providerFor } from "../scm/registry.js";
 import type { PullRequestState } from "../scm/types.js";
-import { AGENT_KINDS, type AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -621,24 +620,6 @@ async function projectsV2ItemTrigger(
   };
 }
 
-/**
- * Validate the `{kind, id}` the device reports from `agent-session.json` so a
- * run can resume the previous conversation on the same (repo, branch).
- *
- * The kind allowlist is derived from AGENT_KINDS rather than written out: a
- * hardcoded literal still type-checks after a new kind is added (it stays
- * assignable to the widened union), and the failure is silent — priorSession
- * comes back null, `acp.priorSessionId` is never set, and every iteration for
- * that kind starts a cold `session/new` with no error and no log line.
- */
-export function parsePriorSession(value: unknown): { kind: AgentKind; id: string } | null {
-  if (!value || typeof value !== "object") return null;
-  const ps = value as { kind?: unknown; id?: unknown };
-  if (typeof ps.kind !== "string" || typeof ps.id !== "string") return null;
-  if (!(AGENT_KINDS as string[]).includes(ps.kind)) return null;
-  return { kind: ps.kind as AgentKind, id: ps.id };
-}
-
 // Non-greedy capture preserves filenames with spaces (`a/my file.ts b/my file.ts`).
 function parseChangedFiles(diff: string): string[] {
   if (!diff) return [];
@@ -894,14 +875,13 @@ export async function runAgentAttempt(
   // first iteration clones, every subsequent iteration on the same
   // (repo, branch) finds .git/ already present and just fetches +
   // checks out the branch. Pinning sticks the device that allocated
-  // first so the agent-session.json file (used for conversation
-  // resume) survives across iterations.
+  // first so the cached checkout is reused across iterations.
   let worktree: {
     workdir: string;
     branch: string;
+    /** Device-local dir surfaced to the agent as OPENCARA_SESSION_DIR. */
     sessionDir: string | null;
     hostId: string;
-    priorSession: { kind: AgentKind; id: string } | null;
   } | null = null;
   if (node.config.worktree) {
     const tplVars = collectTemplateVars(ctx);
@@ -1025,7 +1005,7 @@ export async function runAgentAttempt(
       );
     }
 
-    // Parse {workdir, branch, sessionDir, priorSession} from the CLI's
+    // Parse {workdir, branch, sessionDir} from the CLI's
     // single-line JSON. Defensive last→first scan in case future
     // versions interleave progress lines.
     const lines = allocateResult.stdoutCaptured
@@ -1035,7 +1015,6 @@ export async function runAgentAttempt(
       workdir?: unknown;
       branch?: unknown;
       sessionDir?: unknown;
-      priorSession?: unknown;
     };
     let parsed: DevicePayload | null = null;
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -1053,9 +1032,8 @@ export async function runAgentAttempt(
       );
     }
 
-    const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-    const priorSession = parsePriorSession(parsed.priorSession);
 
+    const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
     // Upsert the pin so the next iteration on this branch hits the
     // same device. lastRunAt drives the reaper's pruning later.
     await ctx.db
@@ -1077,7 +1055,6 @@ export async function runAgentAttempt(
       branch: parsed.branch,
       sessionDir,
       hostId: allocateResult.agentHostId,
-      priorSession,
     };
 
     // Surface to the agent's env so its scripts can see them without
@@ -1136,18 +1113,13 @@ export async function runAgentAttempt(
   // is gone; per-kind specifics now live inside the per-kind ACP
   // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
   //
-  // Session resume across iterations is wired via ACP `session/load`:
-  //   - `worktree-allocate` reads `<sessionDir>/agent-session.json`
-  //     (if any) and emits `priorSession: {kind, id}`.
-  //   - We forward that `id` as `acp.priorSessionId` only when the
-  //     persisted `kind` matches the current agent's kind — operators
-  //     can swap agents mid-PR via labels, and a Claude UUID must not
-  //     leak into a Codex session.
-  //   - After a successful run, we dispatch a best-effort `worktree
-  //     write-session` on the same pinned device to persist the new
-  //     session id for the next iteration. A failure logs and moves
-  //     on — losing resume next iteration is preferable to failing
-  //     this flow.
+  // Flow runs never resume a prior ACP session. Every attempt starts a
+  // cold `session/new`: the previous iteration's context reaches the agent
+  // through the PR/issue conversation and `previousOutput`, not through the
+  // adapter's transcript. Resuming by (repo, branch, agent kind) made a
+  // re-reviewer inherit the synthesizer's session and a synthesizer inherit
+  // the reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
+  // still resumes via the id recorded on the agent_runs row after the run.
   //
   // What we keep:
   //   - Worktree allocation (the per-(repo, branch) checkout on a
@@ -1253,16 +1225,6 @@ export async function runAgentAttempt(
   if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
   if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
 
-  // Kind guard: only resume when the persisted session was for this
-  // agent kind. Two simultaneous reviews on the same branch can race
-  // here — second writer wins on the agent-session.json file. Same
-  // behavior as the pre-cutover path; the worktree pin serializes most
-  // real-world traffic.
-  const priorSessionId =
-    worktree?.priorSession && worktree.priorSession.kind === agent.kind.toLowerCase()
-      ? worktree.priorSession.id
-      : undefined;
-
   // Validate the project-level instructions file setting and forward the
   // relative path into the spec when it's safe + the agent will run in a
   // worktree. The device-side adapter (claude-acp) does the actual disk
@@ -1296,7 +1258,6 @@ export async function runAgentAttempt(
     systemPromptMd,
     userPromptMd,
     pageContext,
-    priorSessionId,
     instructionsFile: projectInstructionsFile,
   });
 
@@ -1314,54 +1275,6 @@ export async function runAgentAttempt(
 
   if (result.exitCode !== 0) {
     throw new Error(`agent exited with code ${result.exitCode}`);
-  }
-
-  // Persist the session id for next iteration on this (repo, branch).
-  // Runs on the same pinned device that just ran the agent, since the
-  // sessionDir is local to it. Best-effort: a write-session failure
-  // here disables resume for the NEXT run only — the parent flow's
-  // result is already determined by the agent's exit code above.
-  if (worktree?.sessionDir && result.acpSessionId) {
-    const writeRunId = ulid();
-    try {
-      // dispatchAgentRun returns RunResult and only throws on transport
-      // errors (device disconnect, mint-token failure, etc.) — a non-zero
-      // exitCode from the CLI itself comes back via the returned value,
-      // so we have to check it explicitly. Otherwise a failed
-      // write-session (disk full, permissions on sessionDir) would
-      // silently disable resume next iteration with no diagnostic.
-      const writeResult = await dispatchAgentRun(ctx, {
-        agentRunId: writeRunId,
-        kind: "internal:worktree-write-session",
-        command: "opencara",
-        args: [
-          "internal",
-          "worktree",
-          "write-session",
-          "--session-dir",
-          worktree.sessionDir,
-          "--kind",
-          agent.kind.toLowerCase(),
-          "--id",
-          result.acpSessionId,
-        ],
-        env: { OPENCARA_AGENT_RUN_ID: writeRunId },
-        hostId: worktree.hostId,
-        triggerEventId: ctx.event.id,
-        flowRunStepId: null,
-      });
-      if (writeResult.exitCode !== 0) {
-        console.error(
-          `[flows] worktree write-session exited ${writeResult.exitCode} ` +
-            `(resume disabled for next run on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch})`,
-        );
-      }
-    } catch (err) {
-      console.error(
-        "[flows] worktree write-session dispatch failed (resume disabled for next run)",
-        err,
-      );
-    }
   }
 
   // Post-step: when an issue-implement-shaped run succeeds (issue
