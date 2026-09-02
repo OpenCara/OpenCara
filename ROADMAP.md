@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#233](https://github.com/OpenCara/OpenCara/pull/233) - feat(activity): list flow runs on the Activity timeline
 - **2026-09-02**: Merged [#232](https://github.com/OpenCara/OpenCara/pull/232) - feat(flows): one worktree per agent attempt; derive branch from trigger
 - **2026-09-02**: Merged [#230](https://github.com/OpenCara/OpenCara/pull/230) - fix(claude-acp): separate assistant text blocks split by tool calls
 - **2026-09-02**: Merged [#229](https://github.com/OpenCara/OpenCara/pull/229) - fix(agents): accept verdict markers glued to prose or in markdown
@@ -53,6 +54,7 @@
 - [x] fix(web): only offer the Azure DevOps source when it is configured ([#201](https://github.com/OpenCara/OpenCara/pull/201))
 - [x] Azure DevOps support: platform-neutral `scm.*` flow node kinds + `ScmProvider` seam, Entra sign-in, organization connect, service hook subscriptions, and PR flows end-to-end ([#200](https://github.com/OpenCara/OpenCara/pull/200))
 - [x] feat(flows): one worktree per agent attempt; derive branch from trigger ([#232](https://github.com/OpenCara/OpenCara/pull/232))
+- [x] feat(activity): list flow runs on the Activity timeline ([#233](https://github.com/OpenCara/OpenCara/pull/233))
 
 ## In Progress
 
