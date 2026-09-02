@@ -14,11 +14,14 @@ import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 
 const IN_FLIGHT = ["queued", "assigned", "running"] as const;
 
+/** Reasons the device cancel frame understands (shared host-protocol enum). */
+export type WireCancelReason = "user_stopped" | "wave_cancelled" | "review_preempted";
+
 export async function cancelFlowRunAgents(
   db: Db,
   dispatcher: AgentDispatcher,
   flowRunId: string,
-  reason: "user_stopped" | "wave_cancelled",
+  reason: WireCancelReason,
 ): Promise<{ cancelled: number; signalled: number }> {
   const rows = await db
     .select({ id: agentRuns.id })

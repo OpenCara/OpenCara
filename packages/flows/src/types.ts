@@ -109,6 +109,13 @@ export const ScmPullRequestTriggerSchema = z.object({
     // comment.body when "commented" is in actions. Empty string disables
     // comment-triggering.
     commentPhrase: z.string().default("@opencara review"),
+    // Grace period before the review actually starts. When > 0 the trigger
+    // holds the run for this long after matching a `pull_request` event,
+    // then re-reads the PR and cancels the review if it was merged/closed
+    // meanwhile or picked up one of `labelsIgnore`. Lets a quick follow-up
+    // push, a self-merge or a `no-review` label pre-empt a wasted review.
+    // Not applied to the `commented` path (an explicit ask runs at once).
+    delaySeconds: z.number().int().min(0).max(86400).default(0),
   }),
 });
 export type ScmPullRequestTrigger = z.infer<typeof ScmPullRequestTriggerSchema>;

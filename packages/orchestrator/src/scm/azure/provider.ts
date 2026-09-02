@@ -4,6 +4,7 @@ import type {
   AddCommentResult,
   AddLabelResult,
   PostReviewResult,
+  PullRequestState,
   ScmProvider,
   ScmPullRequestRef,
   ScmReviewEvent,
@@ -89,6 +90,12 @@ const ConnectionDataSchema = z.object({
   authenticatedUser: z.object({ id: z.string() }),
 });
 
+// Azure reports `active` | `completed` (merged) | `abandoned`; anything else
+// is treated as closed-not-merged by the caller, so a plain string suffices.
+const PullRequestStatusSchema = z.object({ status: z.string() });
+const LabelListSchema = z.object({
+  value: z.array(z.object({ name: z.string().optional() })).default([]),
+});
 const LabelsSchema = z.object({
   value: z.array(z.object({ name: z.string() })).optional(),
   name: z.string().optional(),
@@ -243,6 +250,24 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
         applied.push(parsed.success && parsed.data.name ? parsed.data.name : name);
       }
       return { labels: applied };
+    },
+
+    async getPullRequestState(prNumber): Promise<PullRequestState> {
+      const [prRes, labelsRes] = await Promise.all([
+        client.request(prBase(prNumber), { method: "GET" }),
+        client.request(`${prBase(prNumber)}/labels`, { method: "GET" }),
+      ]);
+      const pr = PullRequestStatusSchema.safeParse(prRes);
+      if (!pr.success) throw new Error("azure devops pull request response had no status");
+      const labels = LabelListSchema.safeParse(labelsRes);
+      return {
+        // Azure statuses: active | completed (merged) | abandoned.
+        state: pr.data.status === "active" ? "open" : "closed",
+        merged: pr.data.status === "completed",
+        labels: labels.success
+          ? labels.data.value.map((l) => l.name).filter((n): n is string => typeof n === "string")
+          : [],
+      };
     },
   };
 }

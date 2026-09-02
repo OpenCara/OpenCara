@@ -6,9 +6,17 @@
 
 /** The run should stop cleanly (flow status `cancelled`), not fail. */
 export class SkipFlowError extends Error {
-  constructor(reason: string) {
+  /**
+   * Optional `flow_runs.cancel_reason` for this skip. Defaults to the
+   * generic `trigger_skip` (hidden by the runs page filter); a skip an
+   * operator should still see — e.g. a review cancelled by its grace period
+   * — names its own reason.
+   */
+  readonly cancelReason: string | null;
+  constructor(reason: string, cancelReason: string | null = null) {
     super(reason);
     this.name = "SkipFlowError";
+    this.cancelReason = cancelReason;
   }
 }
 

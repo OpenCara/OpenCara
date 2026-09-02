@@ -4,6 +4,7 @@ import type {
   AddCommentResult,
   AddLabelResult,
   PostReviewResult,
+  PullRequestState,
   ScmProvider,
   ScmPullRequestRef,
   ScmReviewEvent,
@@ -105,6 +106,21 @@ export function createGithubProvider(opts: GithubProviderOptions): ScmProvider {
         { owner, repo, issue_number: issueNumber, labels },
       );
       return { labels: res.data.map((l) => l.name) };
+    },
+
+    async getPullRequestState(prNumber): Promise<PullRequestState> {
+      const res = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner,
+        repo,
+        pull_number: prNumber,
+      });
+      return {
+        state: res.data.state === "open" ? "open" : "closed",
+        merged: res.data.merged === true,
+        labels: (res.data.labels ?? [])
+          .map((l) => l.name)
+          .filter((n): n is string => typeof n === "string"),
+      };
     },
   };
 }

@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TriggerNode } from "@opencara/flows";
-import { SkipFlowError, triggerRunner, type NodeRunCtx } from "../nodeRunners.js";
+import {
+  SkipFlowError,
+  gracePeriodSkipReason,
+  triggerRunner,
+  type NodeRunCtx,
+} from "../nodeRunners.js";
 
 const pullRequestTrigger: TriggerNode = {
   id: "t1",
@@ -16,6 +21,7 @@ const pullRequestTrigger: TriggerNode = {
     labels: [],
     labelsIgnore: [],
     ignoreDrafts: false,
+    delaySeconds: 0,
     commentPhrase: "@opencara review",
   },
 };
@@ -344,6 +350,46 @@ describe("triggerRunner schedule.cron", () => {
     await assert.rejects(
       triggerRunner(ctxForSchedule("schedule", { nodeId: "sched-1" }), pullRequestTrigger),
       (err) => err instanceof SkipFlowError && err.message === "not a schedule trigger",
+    );
+  });
+});
+
+describe("gracePeriodSkipReason (review grace period re-check)", () => {
+  it("proceeds when the PR is still open with no ignored label", () => {
+    assert.equal(
+      gracePeriodSkipReason({ state: "open", merged: false, labels: ["bug"] }, ["no-review"]),
+      null,
+    );
+  });
+
+  it("cancels when the PR was merged", () => {
+    assert.match(
+      gracePeriodSkipReason({ state: "closed", merged: true, labels: [] }, []) ?? "",
+      /merged during the review grace period/,
+    );
+  });
+
+  it("cancels when the PR was closed without merging", () => {
+    assert.match(
+      gracePeriodSkipReason({ state: "closed", merged: false, labels: [] }, []) ?? "",
+      /closed during the review grace period/,
+    );
+  });
+
+  it("cancels when an ignored label appeared, naming the label", () => {
+    assert.match(
+      gracePeriodSkipReason(
+        { state: "open", merged: false, labels: ["wip", "no-review"] },
+        ["do-not-review", "no-review"],
+      ) ?? "",
+      /labels-ignore 'no-review'/,
+    );
+  });
+
+  it("labels are exact-match, like the trigger filter", () => {
+    assert.equal(
+      gracePeriodSkipReason({ state: "open", merged: false, labels: ["no-review-yet"] }, ["no-review"]),
+      null,
     );
   });
 });

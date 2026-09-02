@@ -49,6 +49,9 @@ import {
 } from "./nodeRunners.js";
 import { runWithAgentPool } from "./agentPool.js";
 import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
+import { cancelPreemptedReviewRuns } from "./preempt.js";
+import { flowMayMatchEvent } from "./eventMatch.js";
+import { ReviewGate, reviewGateKeyFor } from "./reviewGate.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
 import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
@@ -80,15 +83,25 @@ export interface FlowEngineDeps {
 }
 
 export class FlowEngine {
+  /** Serialises review runs per PR (flows/reviewGate.ts). */
+  private readonly reviewGate = new ReviewGate();
+
   constructor(private deps: FlowEngineDeps) {}
 
   /** Fire-and-forget: webhook caller should NOT await this. */
   onPlatformEvent(event: PlatformEventInput): void {
     if (!event.projectId) return;
     setImmediate(() => {
-      this.dispatchEvent(event).catch((err) => {
-        console.error("[flow-engine] dispatch error", { eventId: event.id, err });
-      });
+      // Pre-empt first: a merge / close / ignored label must stop an in-flight
+      // review before this same event gets a chance to start anything new.
+      cancelPreemptedReviewRuns(this.deps, event)
+        .catch((err) => {
+          console.error("[flow-engine] review pre-emption error", { eventId: event.id, err });
+        })
+        .then(() => this.dispatchEvent(event))
+        .catch((err) => {
+          console.error("[flow-engine] dispatch error", { eventId: event.id, err });
+        });
     });
   }
 
@@ -317,6 +330,12 @@ export class FlowEngine {
       if (triggers.length > 0 && triggers.every((t) => t.kind === "schedule.cron")) {
         continue;
       }
+      // Same idea for the stage flows: an event whose type / action / comment
+      // phrase can't satisfy ANY trigger of this flow gets no run at all,
+      // instead of a cancelled `trigger_skip` one. Filters that need PR
+      // context (branches, paths, labels, drafts) still run — and record
+      // their skip — inside the trigger step.
+      if (!flowMayMatchEvent(def, event)) continue;
 
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
@@ -636,6 +655,9 @@ export class FlowEngine {
     }
     let failed = false;
     let errorMsg: string | undefined;
+    /** Specific `cancel_reason` for a skip that should stay visible (grace
+     *  period, review queue) instead of the default `trigger_skip`. */
+    let skipCancelReason: string | undefined;
     let skipped = false;
 
     let layers: FlowNode[][];
@@ -716,6 +738,7 @@ export class FlowEngine {
         if (r.value.skipped) {
           // A skipped trigger deactivates ONLY its own subgraph; it does
           // not fail/cancel the run.
+          if (r.value.skipCancelReason) skipCancelReason ??= r.value.skipCancelReason;
           return { id: node.id, status: "skipped", skipReason: r.value.skipReason };
         }
         return { id: node.id, status: "matched", stdoutCaptured: r.value.stdoutCaptured };
@@ -786,8 +809,72 @@ export class FlowEngine {
     // already done (their ids are in `outputs`); pruned nodes — not
     // downstream of any matched trigger — are filtered out, so they get
     // no step row and don't affect the run's status.
+    // ── Review gate ─────────────────────────────────────────────────
+    // One review per PR at a time across BOTH review flows; one more may
+    // wait behind it (status `pending`); any further request is discarded —
+    // the queued run reviews the PR's newest state anyway.
+    const reviewGateKey =
+      !failed && !skipped ? reviewGateKeyFor(def, matchedTriggerIds, event, project.id) : null;
+    let reviewGateHeld = false;
+    if (reviewGateKey) {
+      const verdict = await this.reviewGate.acquire(reviewGateKey, flowRunId, {
+        onQueued: async (aheadRunId) => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "pending", error: `queued: waiting for review run ${aheadRunId} on this PR to finish` })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "running")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        onResumed: async () => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "running", error: null })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "pending")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        isCancelled: async () => {
+          const row = await this.deps.db.query.flowRuns.findFirst({
+            where: eq(flowRuns.id, flowRunId),
+            columns: { status: true },
+          });
+          return !row || (row.status !== "pending" && row.status !== "running");
+        },
+      });
+      if (verdict === "run") {
+        reviewGateHeld = true;
+      } else {
+        skipped = true;
+        errorMsg ??=
+          verdict === "superseded"
+            ? "superseded: a newer review request for this PR took the queue slot"
+            : "cancelled while queued behind another review of this PR";
+        skipCancelReason =
+          verdict === "superseded" ? "review_superseded" : "review_queue_cancelled";
+      }
+    }
+
+    try {
     if (!failed && !skipped) {
       outer: for (const layer of layers) {
+        // A cancel from outside (UI stop, review pre-emption on merge / ignored
+        // label) flips flow_runs.status; agents in flight get killed, but a
+        // run between layers would otherwise march on into post_review. Check
+        // once per layer so nothing new starts after the run was cancelled.
+        const live = await this.deps.db.query.flowRuns.findFirst({
+          where: eq(flowRuns.id, flowRunId),
+          columns: { status: true },
+        });
+        if (!live || (live.status !== "running" && live.status !== "pending")) {
+          skipped = true;
+          errorMsg ??= `run ${live?.status ?? "deleted"} externally; no further nodes started`;
+          break outer;
+        }
         // Snapshot idx per node before launching the layer so step rows
         // have stable, sequential idx even when siblings run
         // concurrently. Skip nodes whose output is already in the map
@@ -865,6 +952,9 @@ export class FlowEngine {
         if (failed || skipped) break outer;
       }
     }
+    } finally {
+      if (reviewGateKey && reviewGateHeld) this.reviewGate.release(reviewGateKey, flowRunId);
+    }
 
     // Worktrees no longer get cleaned up at end-of-run — they
     // persist across iterations on the same PR branch (implementer
@@ -888,7 +978,9 @@ export class FlowEngine {
         // skipped → trigger_skip so the Flow runs page can hide these by
         // default. (Other 'cancelled' rows come from the reaper, which
         // sets cancel_reason='abandoned'.)
-        cancelReason: skipped ? "trigger_skip" : null,
+        // A specific reason set for this skip (grace period, review queue)
+        // wins over the generic marker; the runs page hides trigger_skip.
+        cancelReason: skipped ? (skipCancelReason ?? "trigger_skip") : null,
       })
       .where(
         and(
@@ -1175,7 +1267,11 @@ export class FlowEngine {
           .set({ status: "skipped", finishedAt: new Date(), error: err.message })
           .where(eq(flowRunSteps.id, stepId));
         await this.deps.pg.notify("flow_run_steps", flowRunId);
-        return { skipped: true, skipReason: err.message };
+        return {
+          skipped: true,
+          skipReason: err.message,
+          ...(err.cancelReason ? { skipCancelReason: err.cancelReason } : {}),
+        };
       }
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.db
@@ -1207,6 +1303,8 @@ interface StepOutcome {
   stdoutCaptured?: string;
   skipped: boolean;
   skipReason?: string;
+  /** `SkipFlowError.cancelReason` when the skip named one. */
+  skipCancelReason?: string;
   /** Set by agent nodes: the agent that was actually resolved and run. */
   agentName?: string;
   /**

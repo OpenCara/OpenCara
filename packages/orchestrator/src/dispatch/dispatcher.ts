@@ -106,6 +106,6 @@ export interface AgentDispatcher {
    */
   cancel(
     runId: string,
-    reason: "user_stopped" | "wave_cancelled",
+    reason: "user_stopped" | "wave_cancelled" | "review_preempted",
   ): boolean;
 }

@@ -4,13 +4,13 @@ Orchestration layer between AI agents and GitHub (extensible to other platforms)
 
 OpenCara receives webhook events from GitHub, coordinates agents driven by those events, and writes results back to the platform.
 
-The full development lifecycle ships as one built-in flow, `development-lifecycle`, with three trigger entry-points in a single graph:
+The full development lifecycle ships as four built-in flows — `issue-implement`, `pr-review-multi`, `pr-review`, `pr-review-fix` — one trigger each, chained by platform round-trips:
 
 - Issue moves from `backlog` → `ready` on a GitHub Projects v2 board → dispatch the implement agent (it commits, pushes, and opens the PR).
-- PR opened → fan out to three reviewer agents (correctness, performance, style) → synthesize their reviews into one → post it.
+- PR opened → run the reviewer agent pool (an ordered list of agents sharing one prompt, N in parallel with failover) → synthesize the successful reviews into one → post it; follow-up pushes get a lighter single-reviewer pass.
 - Review submitted (or an `@opencara fix` comment) → wake the implement agent in the same worktree to address feedback, then optionally auto-merge.
 
-Each incoming webhook activates only the matching stage's subgraph, so a single event no longer fans out to four separate flows with three immediately cancelled as `trigger_skip`. (The earlier `issue-implement`, `pr-review`, `pr-review-multi`, and `pr-review-fix` templates are superseded by this one; their definitions remain in `packages/flows` for reference.)
+Each flow has exactly one trigger, and the engine pre-filters every incoming webhook per flow (trigger kind, PR action, comment phrase), so an event reaches only the stage that can take it — no `trigger_skip` noise on the other three. Reviews of one PR are serialised (one running, the newest request queued), a configurable grace period lets a quick merge or an ignored label cancel a review before it starts, and a merge / ignored label during a review cancels it, agents included.
 
 ## Using opencara.com
 
@@ -26,7 +26,7 @@ Each incoming webhook activates only the matching stage's subgraph, so a single 
 
 1. **Sign in** at [opencara.com](https://opencara.com) with your GitHub account.
 2. **Install the GitHub App** on the repos you want automated: [github.com/apps/opencara](https://github.com/apps/opencara/installations/new). The permissions it asks for are listed [below](#github-app-permissions-and-events).
-3. **Add a project** (`/projects` → add): pick the installation and repo. The built-in `development-lifecycle` flow is seeded automatically.
+3. **Add a project** (`/projects` → add): pick the installation and repo. The four built-in stage flows are seeded automatically.
 4. **Pair a device** — on the machine that should run agents:
 
    ```bash
@@ -117,8 +117,8 @@ Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure Dev
 
 Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
 
-> **The review→fix half of `development-lifecycle` does not run on Azure DevOps.**
-> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — says nothing about what changed, so a vote is not distinguishable from any other edit. If you assign the built-in `development-lifecycle` flow to an Azure DevOps project, the implement and review stages work and the **review-submitted → fix loop silently never fires**. Reviews still post; nothing consumes them.
+> **The `pr-review-fix` flow does not run on Azure DevOps.**
+> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — says nothing about what changed, so a vote is not distinguishable from any other edit. On an Azure DevOps project the implement and review flows work and the **`pr-review-fix` flow silently never fires**. Reviews still post; nothing consumes them.
 >
 > A lossy proxy is possible — treat `git.pullrequest.updated` as a review event when any reviewer carries a non-zero vote — but it would re-fire on every later update to the same PR, so it needs deduplication work first. Tracked in ROADMAP.md.
 
@@ -250,7 +250,7 @@ Pick the kind in the agents view (`/agents`) and set the relevant provider key o
 
 ## PR review → fix loop
 
-The `development-lifecycle` flow's fix stage triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It re-dispatches the implement agent pinned to the **same device** that produced the branch, in the same persistent worktree, **resuming the same conversation** via the ACP adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+The `pr-review-fix` flow triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It re-dispatches the implement agent pinned to the **same device** that produced the branch, in the same persistent worktree, **resuming the same conversation** via the ACP adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
 
 How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
 

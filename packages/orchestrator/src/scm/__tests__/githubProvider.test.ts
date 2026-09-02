@@ -173,3 +173,22 @@ describe("github provider addComment / addLabel", () => {
     assert.deepEqual(res.labels, ["agent:claude", "prompt:review"]);
   });
 });
+
+describe("github provider getPullRequestState", () => {
+  it("reads state, merged and label names off GET /pulls/{n}", async () => {
+    const { octokit, requests } = fakeOctokit(() => ({
+      data: { state: "closed", merged: true, labels: [{ name: "no-review" }, { name: "bug" }] },
+    }));
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const state = await provider.getPullRequestState(42);
+    assert.deepEqual(state, { state: "closed", merged: true, labels: ["no-review", "bug"] });
+    assert.equal(requests[0]!.route, "GET /repos/{owner}/{repo}/pulls/{pull_number}");
+    assert.equal(requests[0]!.params.pull_number, 42);
+  });
+
+  it("an open PR without labels is open / not merged / []", async () => {
+    const { octokit } = fakeOctokit(() => ({ data: { state: "open", merged: false, labels: [] } }));
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    assert.deepEqual(await provider.getPullRequestState(7), { state: "open", merged: false, labels: [] });
+  });
+});

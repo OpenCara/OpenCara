@@ -278,3 +278,29 @@ describe("azure provider postReview — which vote failures degrade", () => {
     await assert.rejects(provider.postReview(PR, "APPROVE", "Ship it."), /Too Many Requests/);
   });
 });
+
+describe("azure provider getPullRequestState", () => {
+  it("maps completed → merged/closed and reads the labels list", async () => {
+    const { provider, calls } = providerWith((call) => {
+      if (call.url.endsWith("/labels")) return { value: [{ name: "no-review" }] };
+      return { status: "completed" };
+    });
+    const state = await provider.getPullRequestState(42);
+    assert.deepEqual(state, { state: "closed", merged: true, labels: ["no-review"] });
+    const urls = calls.map((c) => c.url);
+    assert.ok(urls.some((u) => u.endsWith("/pullRequests/42")));
+    assert.ok(urls.some((u) => u.endsWith("/pullRequests/42/labels")));
+    assert.ok(calls.every((c) => c.method === "GET"));
+  });
+
+  it("active → open; abandoned → closed but not merged", async () => {
+    const open = providerWith((call) =>
+      call.url.endsWith("/labels") ? { value: [] } : { status: "active" },
+    );
+    assert.deepEqual(await open.provider.getPullRequestState(1), { state: "open", merged: false, labels: [] });
+    const abandoned = providerWith((call) =>
+      call.url.endsWith("/labels") ? { value: [] } : { status: "abandoned" },
+    );
+    assert.deepEqual(await abandoned.provider.getPullRequestState(1), { state: "closed", merged: false, labels: [] });
+  });
+});

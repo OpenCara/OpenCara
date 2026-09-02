@@ -615,7 +615,7 @@ export class WebSocketDispatcher implements AgentDispatcher {
 
   cancel(
     runId: string,
-    reason: "user_stopped" | "wave_cancelled",
+    reason: "user_stopped" | "wave_cancelled" | "review_preempted",
   ): boolean {
     // Resolve the device from the in-memory pending map rather than
     // the DB. `agent_runs.host_id` is written by the device pool's

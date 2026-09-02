@@ -181,7 +181,7 @@ export const CancelJobSchema = z.object({
   // reason (e.g. "timeout") degrades on THIS client to "user_stopped"
   // instead of failing the whole frame's parse and silently dropping the
   // cancel, which left the job unkillable on pre-versioning CLIs.
-  reason: z.enum(["user_stopped", "wave_cancelled"]).catch("user_stopped"),
+  reason: z.enum(["user_stopped", "wave_cancelled", "review_preempted"]).catch("user_stopped"),
 });
 export type CancelJob = z.infer<typeof CancelJobSchema>;
 

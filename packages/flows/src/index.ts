@@ -7,30 +7,30 @@ import { prReviewFixFlow } from "./builtin/pr-review-fix.js";
 
 export * from "./types.js";
 
-// The single unified development-lifecycle flow is the only auto-seeded
-// built-in (issue #124). It merges the old four stage-specific flows into
-// one graph with three trigger entry-points, so a single event no longer
-// fans out to four flows with three cancelled as `trigger_skip`. Single
-// vs. multi review is handled *inside* its review stage (add/remove
-// reviewer nodes), not by a separate flow.
+// The development cycle ships as FOUR single-stage built-ins, each with one
+// trigger entry-point, linked by platform round-trips rather than in-graph
+// edges: issue → implement → (PR opened) → multi review → (review submitted)
+// → fix → (push) → single review → … Every project is seeded with all four.
+// The engine's per-flow event pre-filter (flows/eventMatch.ts) keeps an
+// event from minting cancelled runs on the three flows it can't match.
 export const builtinFlows: Record<string, FlowDefinition> = {
-  [developmentLifecycleFlow.slug]: developmentLifecycleFlow,
+  [issueImplementFlow.slug]: issueImplementFlow,
+  [prReviewMultiFlow.slug]: prReviewMultiFlow,
+  [prReviewFlow.slug]: prReviewFlow,
+  [prReviewFixFlow.slug]: prReviewFixFlow,
 };
 
-export { developmentLifecycleFlow };
+export { issueImplementFlow, prReviewMultiFlow, prReviewFlow, prReviewFixFlow };
 
-// The legacy stage-specific flows are no longer seeded into new projects,
-// but their definitions stay exported for reference and for the convergence
-// step that disables their per-project rows. Existing projects keep any
-// customised rows on disk; they are just disabled so they stop
-// double-dispatching alongside the unified flow.
+// The unified `development-lifecycle` graph that briefly replaced the four
+// (issue #124) is no longer seeded. Its definition stays exported for the
+// split migration in the orchestrator (flows/builtin.ts), which disables the
+// per-project rows and carries drafts + node settings over to the four
+// stage flows by node id.
 export const legacyBuiltinFlows: Record<string, FlowDefinition> = {
-  [prReviewFlow.slug]: prReviewFlow,
-  [prReviewMultiFlow.slug]: prReviewMultiFlow,
-  [issueImplementFlow.slug]: issueImplementFlow,
-  [prReviewFixFlow.slug]: prReviewFixFlow,
+  [developmentLifecycleFlow.slug]: developmentLifecycleFlow,
 };
 
 export const LEGACY_BUILTIN_FLOW_SLUGS = Object.keys(legacyBuiltinFlows);
 
-export { prReviewFlow, prReviewMultiFlow, issueImplementFlow, prReviewFixFlow };
+export { developmentLifecycleFlow };
