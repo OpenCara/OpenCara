@@ -33,7 +33,11 @@ import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
-import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
+import {
+  pruneInternalAgentRuns,
+  pruneTriggerSkipFlowRuns,
+  pruneUnreferencedPlatformEvents,
+} from "./flows/prune.js";
 import { pruneStaleWorktrees, sweepDeviceWorktrees } from "./worktrees/cleanup.js";
 import { runSchedulerTick } from "./flows/scheduler.js";
 
@@ -184,17 +188,30 @@ reapOrphanedRuns(db)
 // and once a day. Left unbounded it grows without limit and bloats every
 // flow_id scan the kanban board issues (OpenCara#146). Best-effort: a failure
 // here never blocks startup or serving.
-const runFlowRunPrune = () => {
-  pruneTriggerSkipFlowRuns(db)
-    .then((n) => {
-      if (n > 0) console.log(`[orchestrator] pruned ${n} trigger_skip flow_run(s)`);
-    })
-    .catch((err: unknown) => console.error("[orchestrator] flow_run prune failed", err));
+//
+// The same daily pass also drops the two other unbounded populations that
+// the Activity feed / run lists never show: housekeeping agent runs
+// (internal:*) and webhook events nothing references. Run in this order so
+// events behind just-pruned runs become unreferenced in the same pass.
+const runFlowRunPrune = async () => {
+  const steps: [string, () => Promise<number>][] = [
+    ["trigger_skip flow_run(s)", () => pruneTriggerSkipFlowRuns(db)],
+    ["internal agent_run(s)", () => pruneInternalAgentRuns(db)],
+    ["unreferenced platform_event(s)", () => pruneUnreferencedPlatformEvents(db)],
+  ];
+  for (const [label, run] of steps) {
+    try {
+      const n = await run();
+      if (n > 0) console.log(`[orchestrator] pruned ${n} ${label}`);
+    } catch (err) {
+      console.error(`[orchestrator] prune of ${label} failed`, err);
+    }
+  }
 };
-runFlowRunPrune();
+void runFlowRunPrune();
 const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
-setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
+setInterval(() => void runFlowRunPrune(), FLOW_RUN_PRUNE_INTERVAL_MS).unref();
 
 // Worktrees are torn down when their attempt finishes; this reclaims the
 // leftovers (orchestrator crash, device offline at teardown) and asks every

@@ -275,6 +275,9 @@ async function previousPrDelivery(
           eq(platformEvents.projectId, projectId),
           eq(platformEvents.type, "pull_request"),
           ne(platformEvents.id, excludeEventId),
+          // Bounded by the unreferenced-event prune: these deliveries are
+          // usually behind trigger_skip runs, so flows/prune.ts must keep
+          // them at least this long (DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS).
           sql`${platformEvents.receivedAt} > now() - interval '90 days'`,
           sql`${platformEvents.payload}->'resource'->>'pullRequestId' = ${String(pullRequestId)}`,
           sql`${sha} IS NOT NULL`,
