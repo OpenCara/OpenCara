@@ -1041,9 +1041,9 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
         branch comes from the trigger: a PR trigger checks out the PR head ref,
         an issue trigger creates{" "}
         <code className="font-mono">opencara/issue-&lt;n&gt;</code>, anything
-        else <code className="font-mono">opencara/run-&lt;id&gt;</code>. Removed
-        on <code className="font-mono">pull_request.closed</code> or after 3
-        days.
+        else <code className="font-mono">opencara/run-&lt;id&gt;</code>. The
+        checkout is removed as soon as the attempt finishes; a periodic sweep
+        reclaims any leftovers.
       </p>
       {enabled && (
         <div className="space-y-3 rounded-md border bg-muted/20 p-3">

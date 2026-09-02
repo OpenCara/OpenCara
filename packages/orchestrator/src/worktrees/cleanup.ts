@@ -52,15 +52,34 @@ export async function cleanupClosedPrWorktree(
   }
 }
 
-/** Default age after which an attempt's checkout is reclaimed. */
-export const DEFAULT_WORKTREE_RETENTION_DAYS = 3;
+/**
+ * Remove ONE attempt's checkout right after the attempt finishes. Nothing
+ * reads a worktree once its agent exits (steering chat resumes by session id,
+ * not by cwd), so the engine calls this from `runAgentAttempt`'s finally.
+ * No-op when the pin is already gone.
+ */
+export async function removeAttemptWorktree(
+  deps: CleanupDeps,
+  key: string,
+  projectId: string | null,
+): Promise<void> {
+  const pin = await deps.db.query.worktreePins.findFirst({ where: eq(worktreePins.key, key) });
+  if (!pin) return;
+  await removePinnedWorktree(deps, pin, projectId);
+}
 
 /**
- * Reclaim checkouts that no PR-close event will ever remove — schedule /
- * manual runs, PRs closed while the device was offline, anything older than
- * the retention window. Nothing reuses a worktree after its attempt finished
- * (every attempt clones afresh), so removing an old one is always safe.
- * Returns the number of pins processed.
+ * Pins normally live only as long as their attempt (see
+ * `removeAttemptWorktree`). One this old is a leftover from an orchestrator
+ * crash or a device that was offline at teardown.
+ */
+export const DEFAULT_WORKTREE_RETENTION_DAYS = 1;
+
+/**
+ * Reclaim checkouts whose after-attempt teardown never happened — anything
+ * older than the retention window. Nothing reuses a worktree after its
+ * attempt finished (every attempt clones afresh), so removing an old one is
+ * always safe. Returns the number of pins processed.
  */
 export async function pruneStaleWorktrees(
   deps: CleanupDeps,
@@ -84,20 +103,80 @@ async function removePinnedWorktree(
   pin: PinRow,
   projectId: string | null,
 ): Promise<void> {
-  const { ownerRepo, branch, key } = pin;
+  // Best-effort: an unreachable device is logged inside runInternalOnHost
+  // and the pin row is dropped regardless, so nothing keeps targeting a
+  // dead host. The orphaned dir, if the device ever comes back, is what
+  // its own `worktree gc` sweep is for.
+  await runInternalOnHost(
+    deps,
+    pin.hostId,
+    "internal:worktree-remove",
+    ["internal", "worktree", "remove", "--key", pin.key],
+    projectId,
+  );
+  await deps.db.delete(worktreePins).where(eq(worktreePins.id, pin.id));
+}
 
-  // Persist the cleanup as an agent_runs row for audit (so an operator
-  // can see "we asked the device to remove the worktree at <time>")
-  // even though it isn't tied to a flow_run_step.
+/** Checkouts on a device older than this with no live pin are swept. */
+export const DEFAULT_DEVICE_GC_MAX_AGE_HOURS = 24;
+
+/**
+ * Device-side detection of worktrees the orchestrator has lost track of:
+ * asks every connected device to `worktree gc`, keeping only the keys of
+ * this host's live pins (in-flight attempts). Catches checkouts whose pin
+ * row is gone, legacy per-branch checkouts, and half-built dirs from a
+ * crashed allocation. A device on a CLI predating `gc` rejects the op;
+ * that is logged and skipped. Returns the number of devices swept.
+ */
+export async function sweepDeviceWorktrees(
+  deps: CleanupDeps,
+  maxAgeHours: number = DEFAULT_DEVICE_GC_MAX_AGE_HOURS,
+): Promise<number> {
+  const hosts = deps.dispatcher.connectedHostIds?.() ?? [];
+  let swept = 0;
+  for (const hostId of hosts) {
+    const pins = await deps.db.query.worktreePins.findMany({
+      where: eq(worktreePins.hostId, hostId),
+    });
+    const args = [
+      "internal",
+      "worktree",
+      "gc",
+      "--max-age-hours",
+      String(maxAgeHours),
+      ...pins.flatMap((p) => ["--keep", p.key]),
+    ];
+    const result = await runInternalOnHost(deps, hostId, "internal:worktree-gc", args, null);
+    if (result === null) continue;
+    swept++;
+    if (result.exitCode !== 0) {
+      console.warn("[worktree-gc] device sweep failed", { hostId, exitCode: result.exitCode });
+    } else if (result.stdoutCaptured.includes('"removed":[')) {
+      const summary = result.stdoutCaptured.trim().split("\n").pop() ?? "";
+      if (!summary.includes('"removed":[]')) console.log("[worktree-gc] swept", { hostId, summary });
+    }
+  }
+  return swept;
+}
+
+/**
+ * Dispatch one `opencara internal …` housekeeping command to a specific
+ * device, persisted as an agent_runs row for audit. Returns null when the
+ * device could not be reached (offline / revoked) — the caller decides what
+ * that means for its bookkeeping.
+ */
+async function runInternalOnHost(
+  deps: CleanupDeps,
+  hostId: string,
+  kind: string,
+  args: string[],
+  projectId: string | null,
+): Promise<{ exitCode: number; stdoutCaptured: string } | null> {
   const runId = ulid();
+  const spec = { kind, command: "opencara", args, env: {} };
   await deps.db.insert(agentRuns).values({
     id: runId,
-    spec: {
-      kind: "internal:worktree-remove",
-      command: "opencara",
-      args: ["internal", "worktree", "remove", "--key", key],
-      env: {},
-    },
+    spec,
     status: "running",
     projectId,
     flowRunStepId: null,
@@ -115,20 +194,7 @@ async function removePinnedWorktree(
   };
 
   try {
-    const result = await deps.dispatcher.run(
-      {
-        kind: "internal:worktree-remove",
-        command: "opencara",
-        args: ["internal", "worktree", "remove", "--key", key],
-        env: {},
-      },
-      {
-        runId,
-        onLog,
-        hostId: pin.hostId,
-        projectId,
-      },
-    );
+    const result = await deps.dispatcher.run(spec, { runId, onLog, hostId, projectId });
     await deps.db
       .update(agentRuns)
       .set({
@@ -137,17 +203,13 @@ async function removePinnedWorktree(
         finishedAt: new Date(),
       })
       .where(eq(agentRuns.id, runId));
+    return { exitCode: result.exitCode, stdoutCaptured: result.stdoutCaptured };
   } catch (err) {
-    // The pinned device may be offline or revoked. Log + proceed —
-    // we still drop the pin row so nothing keeps targeting the dead
-    // device. The orphaned dir on the device, if it ever comes back,
-    // is an operator concern.
-    console.warn("[worktree-cleanup] dispatch failed", { ownerRepo, branch, key, hostId: pin.hostId, err });
+    console.warn("[worktree-cleanup] dispatch failed", { kind, hostId, err });
     await deps.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })
       .where(eq(agentRuns.id, runId));
+    return null;
   }
-
-  await deps.db.delete(worktreePins).where(eq(worktreePins.id, pin.id));
 }

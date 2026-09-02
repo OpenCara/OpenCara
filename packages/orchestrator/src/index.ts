@@ -34,7 +34,7 @@ import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
 import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
-import { pruneStaleWorktrees } from "./worktrees/cleanup.js";
+import { pruneStaleWorktrees, sweepDeviceWorktrees } from "./worktrees/cleanup.js";
 import { runSchedulerTick } from "./flows/scheduler.js";
 
 // Resilience backstop. opencara.com runs as a bare `nohup` process with no
@@ -196,13 +196,16 @@ const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
 setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
 
-// Reclaim per-attempt worktrees that outlived the retention window (see
-// worktrees/cleanup.ts). Every attempt clones afresh, so nothing depends on
-// an old checkout surviving. Best-effort; a failure never blocks startup.
+// Worktrees are torn down when their attempt finishes; this reclaims the
+// leftovers (orchestrator crash, device offline at teardown) and asks every
+// device to gc checkouts it has no pin for (see worktrees/cleanup.ts).
+// Best-effort; a failure never blocks startup.
 const runWorktreePrune = () => {
   pruneStaleWorktrees({ db, pg, dispatcher })
     .then((n) => {
-      if (n > 0) console.log(`[orchestrator] pruned ${n} stale worktree(s)`);
+      if (n > 0) console.log(`[orchestrator] pruned ${n} stale worktree pin(s)`);
+      // Then let each device sweep what the pin table never knew about.
+      return sweepDeviceWorktrees({ db, pg, dispatcher });
     })
     .catch((err: unknown) => console.error("[orchestrator] worktree prune failed", err));
 };
