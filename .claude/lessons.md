@@ -95,7 +95,7 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ### [hits: 1] `session/load` replay lands in the captured run output (cursor-agent), so a resumed re-review re-posts the whole prior review
 - ACP `session/load` requires the agent to replay the prior conversation as `session/update` notifications before it answers. `claude-acp` deliberately skips that; `cursor-agent acp` (2026.08.25) does replay it. `runAcpJob` registers `client.onSessionUpdate` before calling `loadSession`, so every replayed `agent_message_chunk` is logged to stdout and becomes the step's captured output.
-- Flow agent nodes resume whatever `agent-session.json` the worktree holds when the agent *kind* matches — the pr-review `single_reviewer` (cursor) resumed the previous `review_synthesizer`'s (also cursor) session on ParadiseEngine#214, so review 5087773518 = old review text + new re-review, and `parseReviewVerdict` (first match wins) picked the OLD `verdict: request_changes` line.
+- (Removed 2026-09-02: flow runs no longer resume sessions at all.) Flow agent nodes used to resume whatever `agent-session.json` the worktree held when the agent *kind* matched — the pr-review `single_reviewer` (cursor) resumed the previous `review_synthesizer`'s (also cursor) session on ParadiseEngine#214, so review 5087773518 = old review text + new re-review, and `parseReviewVerdict` (first match wins) picked the OLD `verdict: request_changes` line.
 - Diagnose from `agent_runs.spec->'acp'->>'priorSessionId'` (rewritten in place to the resulting session id after the run) — identical ids across two runs mean a resume happened. Cursor's transcript lives in `~/.cursor/acp-sessions/<id>/store.db`.
 
 ## API access
