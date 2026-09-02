@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#223](https://github.com/OpenCara/OpenCara/pull/223) - feat(flows): review grace period, event-driven pre-emption, and four stage flows
 - **2026-09-02**: Merged [#222](https://github.com/OpenCara/OpenCara/pull/222) - feat(flows): projects inherit the account-scope flow by default, override per node
 - **2026-09-02**: Merged [#221](https://github.com/OpenCara/OpenCara/pull/221) - feat(web): one ordered agent list per node, drop reviewer +/-, prompt + agents on graph nodes
 - **2026-09-02**: Merged [#220](https://github.com/OpenCara/OpenCara/pull/220) - feat(flows): agent pools with failover, parallel slots and quorum
