@@ -140,16 +140,27 @@ export interface ActivityRunPayload {
   finishedAt: string | null;
   cancelReason: string | null;
 }
+export interface ActivityFlowRunPayload {
+  status: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  cancelReason: string | null;
+  /** Originating platform event type ("pull_request", "schedule", …). */
+  triggerType: string | null;
+}
 export interface ActivityItem {
-  kind: "event" | "run";
+  /** `flow_run` = one execution of a flow, as on the project Flow runs tab. */
+  kind: "event" | "run" | "flow_run";
   id: string;
   ts: string;
   type: string;
   project_id: string | null;
-  /** Events: the raw webhook payload. Runs: an ActivityRunPayload. */
+  /** Events: the raw webhook payload. Runs: an ActivityRunPayload. Flow
+   *  runs: an ActivityFlowRunPayload. */
   payload: unknown;
   project: ActivityProjectRef | null;
-  /** Runs only: the owning flow (null for chat / agent-test runs). */
+  /** Runs / flow runs: the owning flow (null for chat / agent-test runs). */
   flow: ActivityFlowRef | null;
   flowRunId: string | null;
   nodeId: string | null;

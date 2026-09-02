@@ -6,10 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   activityQuery,
+  type ActivityFlowRunPayload,
   type ActivityItem,
   type ActivityRunPayload,
   type ActivitySubject,
 } from "@/lib/queries";
+import { triggerTypeLabel } from "@/lib/triggerLabel";
 import { formatRelative, formatAbsolute, formatDayHeader } from "@/lib/format";
 import { summarizeEvent } from "@/lib/eventSummary";
 
@@ -69,17 +71,25 @@ function Timeline({ items }: { items: ActivityItem[] }) {
 
 function TimelineRow({ item }: { item: ActivityItem }) {
   const isRun = item.kind === "run";
+  const isFlowRun = item.kind === "flow_run";
   const run = isRun ? (item.payload as ActivityRunPayload) : null;
+  const flowRun = isFlowRun ? (item.payload as ActivityFlowRunPayload) : null;
   const projectId = item.project?.id ?? item.project_id;
   // The subject link already carries "PR #12 · Title", so drop the same
   // "PR #12 " / "Issue #12 " prefix from the event summary to avoid
   // printing the number twice on one line.
   const headline = isRun
     ? `${item.agentKind ?? "agent"} run ${item.type}`
-    : item.subject
-      ? summarizeEvent(item.type, item.payload).replace(/^(PR|Issue) #\d+ /, "")
-      : summarizeEvent(item.type, item.payload);
-  const duration = run ? formatDuration(run.startedAt, run.finishedAt) : "";
+    : isFlowRun
+      ? `flow run ${item.type}`
+      : item.subject
+        ? summarizeEvent(item.type, item.payload).replace(/^(PR|Issue) #\d+ /, "")
+        : summarizeEvent(item.type, item.payload);
+  const duration = run
+    ? formatDuration(run.startedAt, run.finishedAt)
+    : flowRun
+      ? formatDuration(flowRun.startedAt, flowRun.finishedAt)
+      : "";
 
   return (
     <li className="flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-secondary/40">
@@ -89,12 +99,29 @@ function TimelineRow({ item }: { item: ActivityItem }) {
       >
         {formatRelative(item.ts)}
       </span>
-      <Badge variant={isRun ? statusVariant(item.type) : "secondary"} className="shrink-0">
+      <Badge
+        variant={isRun || isFlowRun ? statusVariant(item.type) : "secondary"}
+        className="shrink-0"
+      >
         {item.type}
       </Badge>
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <span>{headline}</span>
+          {isFlowRun && item.flow && item.flowRunId && projectId ? (
+            <Link
+              to={`/projects/${projectId}/flow-runs/${item.flowRunId}`}
+              className="font-medium hover:underline"
+            >
+              {item.flow.name}
+            </Link>
+          ) : (
+            <span>{headline}</span>
+          )}
+          {flowRun && (
+            <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-normal">
+              {triggerTypeLabel(flowRun.triggerType)}
+            </Badge>
+          )}
           {item.subject && <SubjectLink subject={item.subject} projectId={projectId} />}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -111,7 +138,7 @@ function TimelineRow({ item }: { item: ActivityItem }) {
               flow: {item.flow.name}
             </Link>
           )}
-          {item.flowRunId && projectId && (
+          {item.flowRunId && projectId && !isFlowRun && (
             <Link
               to={`/projects/${projectId}/flow-runs/${item.flowRunId}`}
               className="hover:underline"
@@ -124,7 +151,16 @@ function TimelineRow({ item }: { item: ActivityItem }) {
           {run && run.exitCode != null && <span>exit {run.exitCode}</span>}
           {duration && <span>{duration}</span>}
           {run?.cancelReason && <span>cancelled: {run.cancelReason}</span>}
+          {flowRun?.cancelReason && <span>cancelled: {flowRun.cancelReason}</span>}
         </div>
+        {flowRun?.error && (
+          <div
+            className="max-w-xl truncate text-xs text-destructive"
+            title={flowRun.error}
+          >
+            {flowRun.error}
+          </div>
+        )}
         {item.triggeredRuns.length > 0 && projectId && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span>triggered:</span>
