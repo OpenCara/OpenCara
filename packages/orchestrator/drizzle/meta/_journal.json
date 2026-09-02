@@ -379,6 +379,13 @@
       "when": 1797684400000,
       "tag": "0053_worktree_pins_per_attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1807684400000,
+      "tag": "0054_activity_feed_indexes",
+      "breakpoints": true
     }
   ]
 }
