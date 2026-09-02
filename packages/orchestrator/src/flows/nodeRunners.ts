@@ -14,7 +14,6 @@ import {
   agentRunLogs,
   agentRuns,
   agents,
-  flowNodeSettings,
   flowRunSteps as flowRunStepsTable,
   projects,
   prompts,
@@ -52,7 +51,7 @@ import {
   clampRetrySame,
   orderPoolCandidates,
 } from "./agentPool.js";
-import { loadEffectiveNodeSetting } from "./nodeSettings.js";
+import { loadEffectiveNodeSetting, type EffectiveNodeSetting } from "./nodeSettings.js";
 export { SkipFlowError };
 
 /**
@@ -95,6 +94,12 @@ export interface NodeRunCtx {
   flowRunId: string;
   flowRunStepId: string;
   projectId: string;
+  /**
+   * Effective node settings for the whole flow, resolved once per run by the
+   * engine (flows/nodeSettings.ts). Runners read their node from here and
+   * only fall back to a fresh lookup when absent (tests, ad-hoc callers).
+   */
+  nodeSettings?: readonly EffectiveNodeSetting[];
   /** Platform-specific identity + credentials for this run. */
   scm: PlatformRunCtx;
   project: {
@@ -656,7 +661,9 @@ export async function resolveAgentPool(
   // `kind` via `buildAcpSpec` in runAgentAttempt.
   // Effective = project override row, else the account-scope template row
   // (flows/nodeSettings.ts).
-  const setting = await loadEffectiveNodeSetting(ctx.db, ctx.flowId, node.id);
+  const setting =
+    ctx.nodeSettings?.find((s) => s.nodeId === node.id) ??
+    (await loadEffectiveNodeSetting(ctx.db, ctx.flowId, node.id));
 
   // Project row carries the #158 implement defaults (agent + prompt) used as
   // the middle fallback tier. Both columns are null for legacy projects, so

@@ -823,7 +823,8 @@ export const promptsQuery = () => ({
 });
 
 export interface FlowNodeSetting {
-  id: string;
+  /** Project override row id; null when the row is inherited from the template. */
+  id: string | null;
   flowId: string;
   nodeId: string;
   promptId: string | null;

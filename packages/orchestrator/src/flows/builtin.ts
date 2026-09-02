@@ -7,6 +7,7 @@ import {
   foldLegacyReviewerSettings,
   graphHasPoolReviewer,
 } from "./legacyReviewerPool.js";
+import { loadEffectiveNodeSetting } from "./nodeSettings.js";
 import {
   flowNodeSettings,
   flows,
@@ -102,18 +103,14 @@ export async function foldLegacyReviewerPoolForFlow(
   nodes: ReadonlyArray<{ id: string; kind: string }>,
 ): Promise<boolean> {
   if (!graphHasPoolReviewer(nodes)) return false;
+  // Inheritance-aware: an EFFECTIVE reviewer setting (project override OR the
+  // account template's row) means the pool is already configured — folding
+  // would only turn an inheriting project into an override.
+  const effective = await loadEffectiveNodeSetting(db, flowId, POOL_REVIEWER_NODE_ID);
+  if (effective) return false;
   const rows = await db.select().from(flowNodeSettings).where(eq(flowNodeSettings.flowId, flowId));
-  if (rows.some((r) => r.nodeId === POOL_REVIEWER_NODE_ID)) return false;
   const folded = foldLegacyReviewerSettings(rows);
   if (!folded) return false;
-  if (!projectId) {
-    const flow = await db.query.flows.findFirst({
-      where: eq(flows.id, flowId),
-      columns: { projectId: true },
-    });
-    if (!flow) return false;
-    projectId = flow.projectId;
-  }
   await db.insert(flowNodeSettings).values({
     id: ulid(),
     projectId,
@@ -191,7 +188,10 @@ async function resolveSeedGraph(
 /**
  * Push a saved account-scope template graph to every project flow of that
  * slug (owned by the user) that still inherits it — i.e. has no
- * `customizedAt`. Customized flows keep their own graph until reset.
+ * `customizedAt`. Customized flows keep their own graph until reset. Graph
+ * sync is NOT a settings migration: it never touches flow_node_settings (a
+ * fold here would resurrect a project override from leftover reviewer_*
+ * rows on a project that inherits its reviewer pool).
  */
 export async function syncInheritedFlowGraphs(
   db: Db,
@@ -211,7 +211,6 @@ export async function syncInheritedFlowGraphs(
       .update(flows)
       .set({ graphJson: graph, updatedAt: new Date() })
       .where(eq(flows.id, f.id));
-    await foldLegacyReviewerPoolForFlow(db, "", f.id, graph.nodes);
   }
   return owned.length;
 }

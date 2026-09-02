@@ -12,7 +12,6 @@ import {
   agentRunLogs,
   agentRuns,
   agents,
-  flowNodeSettings,
   flowRuns,
   flowRunSteps,
   flows,
@@ -49,7 +48,7 @@ import {
   type ResolvedAgentPool,
 } from "./nodeRunners.js";
 import { runWithAgentPool } from "./agentPool.js";
-import { loadEffectiveNodeSettings } from "./nodeSettings.js";
+import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
 import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
@@ -696,7 +695,7 @@ export class FlowEngine {
             prContext,
             issueContext,
             scheduleContext,
-            opts,
+            { ...opts, nodeSettings: settingsRows },
           ),
         ),
       );
@@ -813,7 +812,7 @@ export class FlowEngine {
               prContext,
               issueContext,
               scheduleContext,
-              opts,
+              { ...opts, nodeSettings: settingsRows },
             ),
           ),
         );
@@ -987,7 +986,7 @@ export class FlowEngine {
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
     scheduleContext: ScheduleContext | undefined,
-    opts: { rerun?: boolean },
+    opts: { rerun?: boolean; nodeSettings?: readonly EffectiveNodeSetting[] },
   ): Promise<StepOutcome> {
     const { flowRunId, flowId, project, scm } = prepared;
     const { node, idx, previousOutput } = job;
@@ -1032,6 +1031,7 @@ export class FlowEngine {
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,
       rerun: opts.rerun ?? false,
+      nodeSettings: opts.nodeSettings,
     };
     const meta = { node, idx, previousOutput, event };
 

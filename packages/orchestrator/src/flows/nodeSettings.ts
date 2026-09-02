@@ -8,7 +8,7 @@
  * (engine, runner, chat, API, skills) resolves through here so the two
  * never disagree.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { flowNodeSettings, flows, projects, templateNodeSettings } from "../db/schema.js";
 
@@ -152,18 +152,27 @@ export async function listTemplateOverrides(
     .from(flows)
     .innerJoin(projects, eq(projects.id, flows.projectId))
     .where(and(eq(projects.addedByUserId, userId), eq(flows.slug, slug)));
+  const overrideRows =
+    rows.length > 0
+      ? await db
+          .select({ flowId: flowNodeSettings.flowId, nodeId: flowNodeSettings.nodeId })
+          .from(flowNodeSettings)
+          .where(inArray(flowNodeSettings.flowId, rows.map((r) => r.flowId)))
+      : [];
+  const overridesByFlow = new Map<string, string[]>();
+  for (const o of overrideRows) {
+    const list = overridesByFlow.get(o.flowId) ?? [];
+    list.push(o.nodeId);
+    overridesByFlow.set(o.flowId, list);
+  }
   const out: TemplateOverrideSummary[] = [];
   for (const r of rows) {
-    const overrides = await db
-      .select({ nodeId: flowNodeSettings.nodeId })
-      .from(flowNodeSettings)
-      .where(eq(flowNodeSettings.flowId, r.flowId));
     const graphNodeIds = new Set(
       ((r.graphJson as { nodes?: Array<{ id: string }> })?.nodes ?? []).map((n) => n.id),
     );
     // Orphaned rows (nodes removed from the graph, e.g. legacy reviewer_*)
     // are inert and would only confuse the listing.
-    const nodeOverrides = overrides.map((o) => o.nodeId).filter((id) => graphNodeIds.has(id));
+    const nodeOverrides = (overridesByFlow.get(r.flowId) ?? []).filter((id) => graphNodeIds.has(id));
     const graphCustomized = r.customizedAt !== null;
     if (!graphCustomized && nodeOverrides.length === 0) continue;
     out.push({

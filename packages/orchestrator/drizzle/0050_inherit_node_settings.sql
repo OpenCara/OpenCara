@@ -19,3 +19,22 @@ WHERE f."id" = s."flow_id"
   AND s."concurrency" = t."concurrency"
   AND s."quorum" = t."quorum"
   AND s."label" IS NOT DISTINCT FROM t."label";
+--> statement-breakpoint
+-- Leftover sibling-reviewer rows (`reviewer_correctness`, `reviewer_<rand>`)
+-- from before the reviewer pool are inert once the graph carries the pool
+-- `reviewer` node, but the boot-time fold would rebuild a project override
+-- from them if the project's own reviewer row was just dropped above. Remove
+-- them wherever the pool node is already in the graph; graphs still on the
+-- old shape keep theirs for the fold.
+DELETE FROM "flow_node_settings" s
+USING "flows" f
+WHERE f."id" = s."flow_id"
+  AND s."node_id" LIKE 'reviewer\_%'
+  AND EXISTS (SELECT 1 FROM jsonb_array_elements(f."graph_json"->'nodes') n WHERE n->>'id' = 'reviewer')
+  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(f."graph_json"->'nodes') n WHERE n->>'id' = s."node_id");--> statement-breakpoint
+DELETE FROM "template_node_settings" t
+USING "template_drafts" d
+WHERE d."user_id" = t."user_id" AND d."template_slug" = t."template_slug"
+  AND t."node_id" LIKE 'reviewer\_%'
+  AND EXISTS (SELECT 1 FROM jsonb_array_elements(d."graph_json"->'nodes') n WHERE n->>'id' = 'reviewer')
+  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(d."graph_json"->'nodes') n WHERE n->>'id' = t."node_id");

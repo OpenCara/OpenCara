@@ -35,7 +35,6 @@ import {
   chatSessions,
   flowRunSteps,
   flowRuns,
-  flowNodeSettings,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
