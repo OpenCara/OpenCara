@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#234](https://github.com/OpenCara/OpenCara/pull/234) - perf(activity): two-phase feed query, partial indexes, prune stale rows
 - **2026-09-02**: Merged [#231](https://github.com/OpenCara/OpenCara/pull/231) - fix(activity): link Azure DevOps PRs / work items from the Activity timeline
 - **2026-09-02**: Merged [#233](https://github.com/OpenCara/OpenCara/pull/233) - feat(activity): list flow runs on the Activity timeline
 - **2026-09-02**: Merged [#232](https://github.com/OpenCara/OpenCara/pull/232) - feat(flows): one worktree per agent attempt; derive branch from trigger
@@ -57,6 +58,7 @@
 - [x] feat(flows): one worktree per agent attempt; derive branch from trigger ([#232](https://github.com/OpenCara/OpenCara/pull/232))
 - [x] feat(activity): list flow runs on the Activity timeline ([#233](https://github.com/OpenCara/OpenCara/pull/233))
 - [x] fix(activity): link Azure DevOps PRs / work items from the Activity timeline ([#231](https://github.com/OpenCara/OpenCara/pull/231))
+- [x] perf(activity): two-phase feed query, partial indexes, prune stale rows ([#234](https://github.com/OpenCara/OpenCara/pull/234))
 
 ## In Progress
 
