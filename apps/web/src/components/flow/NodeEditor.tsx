@@ -283,10 +283,12 @@ function AgentNodePanel({
           <div className="text-sm font-medium">Display name</div>
           {linkedAgent ? (
             <p className="text-xs text-muted-foreground">
-              Shown on the graph and used as the section heading when this node
-              feeds a synthesizer. Taken from the pool's first agent —{" "}
+              On the graph this node is titled by its prompt (or the label below when
+              none is linked) with the pool listed underneath. The section heading a
+              synthesizer sees still comes from the agent that ran — for the primary
+              that is{" "}
               <span className="font-medium text-foreground">{linkedAgent.name}</span>
-              . Rename it on the{" "}
+              . Rename agents on the{" "}
               <Link to="/agents" className="text-foreground underline">
                 agents page
               </Link>
@@ -308,9 +310,9 @@ function AgentNodePanel({
                 className="max-w-md"
               />
               <p className="text-xs text-muted-foreground">
-                Shown on the graph + used as a section heading when feeding a
-                synthesizer. Empty resets to "{defaultLabel}". Once you add an
-                agent below, its name is used instead.
+                Graph title when no prompt is linked, and the section heading a
+                synthesizer sees until an agent is added (the agent's name takes
+                over). Empty resets to "{defaultLabel}".
               </p>
             </>
           )}

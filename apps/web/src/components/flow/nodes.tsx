@@ -5,6 +5,13 @@ import { cn } from "@/lib/utils";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
 
+/**
+ * Cap on pool rows per card. Template layouts stack agent nodes 160–200px
+ * apart; a title plus this many rows stays inside that, and the API allows
+ * up to nine agents per node.
+ */
+const MAX_LINES = 4;
+
 const statusRing: Record<StepStatus | "idle", string> = {
   idle: "ring-1 ring-border",
   pending: "ring-1 ring-border",
@@ -46,11 +53,14 @@ function BaseNode({ data, icon: Icon, hasIn = true, hasOut = true }: BaseProps) 
         <div className="truncate text-sm font-medium">{data.label}</div>
         {data.lines && data.lines.length > 0 && (
           <ul className="mt-0.5 space-y-0.5 text-xs leading-tight text-muted-foreground">
-            {data.lines.map((line, i) => (
+            {data.lines.slice(0, MAX_LINES).map((line, i) => (
               <li key={`${i}-${line}`} className="truncate">
                 {line}
               </li>
             ))}
+            {data.lines.length > MAX_LINES && (
+              <li className="truncate italic">+{data.lines.length - MAX_LINES} more</li>
+            )}
           </ul>
         )}
         {data.subtitle && (

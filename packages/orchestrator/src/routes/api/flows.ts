@@ -6,7 +6,6 @@ import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
-  flowNodeSettings,
   flowRuns,
   flowRunSteps,
   flows,
