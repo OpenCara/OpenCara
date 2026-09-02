@@ -48,8 +48,7 @@ import { extractScopedLabelValues } from "./labelRouting.js";
 
 import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
 import {
-  clampConcurrency,
-  clampQuorum,
+  effectivePoolShape,
   clampRetrySame,
   orderPoolCandidates,
 } from "./agentPool.js";
@@ -812,24 +811,36 @@ export async function resolveAgentPool(
     }
   }
 
-  // A worktree node runs its agents in ONE shared checkout (per repo+branch
-  // pin), so parallel candidates would trample each other's working tree and
-  // race the allocation. Pin such nodes to one slot; failover still applies.
-  let concurrency = clampConcurrency(setting?.concurrency ?? 1);
-  if (node.config.worktree && concurrency > 1) {
+  // Persist the shape the pool will actually run with (see
+  // effectivePoolShape) — the run page reads quorum back from the attempt's
+  // pool meta to decide whether the node succeeded.
+  const shape = effectivePoolShape({
+    concurrency: setting?.concurrency ?? 1,
+    quorum: setting?.quorum ?? 1,
+    candidateCount: candidates.length,
+    worktree: !!node.config.worktree,
+  });
+  if (shape.forcedSingleSlot) {
     console.warn("[flows] agent pool: worktree node forced to concurrency 1", {
       flowId: ctx.flowId,
       nodeId: node.id,
-      requested: concurrency,
+      requested: setting?.concurrency,
     });
-    concurrency = 1;
   }
-
+  if (shape.quorumCapped) {
+    console.warn("[flows] agent pool: quorum capped to the slot count", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      requested: setting?.quorum,
+      effective: shape.quorum,
+      concurrency: shape.concurrency,
+    });
+  }
   return {
     candidates,
     retrySame: clampRetrySame(setting?.retrySame ?? 0),
-    concurrency,
-    quorum: clampQuorum(setting?.quorum ?? 1),
+    concurrency: shape.concurrency,
+    quorum: shape.quorum,
     promptBody,
   };
 }
