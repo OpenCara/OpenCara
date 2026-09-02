@@ -71,9 +71,15 @@ function TimelineRow({ item }: { item: ActivityItem }) {
   const isRun = item.kind === "run";
   const run = isRun ? (item.payload as ActivityRunPayload) : null;
   const projectId = item.project?.id ?? item.project_id;
+  // The subject link already carries "PR #12 · Title", so drop the same
+  // "PR #12 " / "Issue #12 " prefix from the event summary to avoid
+  // printing the number twice on one line.
   const headline = isRun
     ? `${item.agentKind ?? "agent"} run ${item.type}`
-    : summarizeEvent(item.type, item.payload);
+    : item.subject
+      ? summarizeEvent(item.type, item.payload).replace(/^(PR|Issue) #\d+ /, "")
+      : summarizeEvent(item.type, item.payload);
+  const duration = run ? formatDuration(run.startedAt, run.finishedAt) : "";
 
   return (
     <li className="flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-secondary/40">
@@ -116,9 +122,7 @@ function TimelineRow({ item }: { item: ActivityItem }) {
           {item.nodeId && <span>node: {item.nodeId}</span>}
           {run?.hostId && <span>host: {run.hostId}</span>}
           {run && run.exitCode != null && <span>exit {run.exitCode}</span>}
-          {run && formatDuration(run.startedAt, run.finishedAt) && (
-            <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
-          )}
+          {duration && <span>{duration}</span>}
           {run?.cancelReason && <span>cancelled: {run.cancelReason}</span>}
         </div>
         {item.triggeredRuns.length > 0 && projectId && (
@@ -145,9 +149,9 @@ function TimelineRow({ item }: { item: ActivityItem }) {
 }
 
 /**
- * Issues and work items have an in-app detail page, so they link there with
- * an extra external icon for the platform page. PRs and pushes only exist
- * on the platform.
+ * GitHub issues have an in-app detail page, so they link there with an
+ * extra external icon for the platform page. PRs, pushes and Azure DevOps
+ * work items (the issues table is GitHub-only) link to the platform.
  */
 function SubjectLink({
   subject,
@@ -158,9 +162,7 @@ function SubjectLink({
 }) {
   const text = subject.title ? `${subject.label} · ${subject.title}` : subject.label;
   const internal =
-    (subject.kind === "issue" || subject.kind === "work_item") &&
-    projectId &&
-    subject.number != null
+    subject.kind === "issue" && projectId && subject.number != null
       ? `/projects/${projectId}/issues/${subject.number}`
       : null;
   const cls = "inline-flex max-w-md items-center gap-1 truncate font-medium hover:underline";

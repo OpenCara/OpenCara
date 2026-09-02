@@ -158,8 +158,9 @@ export function activityRoutes(deps: ActivityRouteDeps) {
         WHERE r.project_id IN (
           SELECT id FROM projects WHERE added_by_user_id = ${user.id}
         )
-        -- Housekeeping runs (worktree allocate/remove/write-session) are
-        -- plumbing, not user-visible work; keep them out of the feed.
+        -- Housekeeping runs (spec.kind 'internal:*', e.g. the worktree
+        -- cleanup's 'internal:worktree-remove') are plumbing, not
+        -- user-visible work; keep them out of the feed.
         AND COALESCE(r.spec->>'kind', '') NOT LIKE 'internal:%'
       ) u
       WHERE TRUE ${beforeFilter}
@@ -176,7 +177,8 @@ export function activityRoutes(deps: ActivityRouteDeps) {
         : deps.db.execute<ProjectRow>(sql`
             SELECT id, owner, name, platform::text as platform, web_url
             FROM projects
-            WHERE id IN ${sql`(${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})`}
+            WHERE added_by_user_id = ${user.id}
+              AND id IN ${sql`(${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})`}
           `),
       eventIds.length === 0
         ? Promise.resolve([] as TriggeredRunRow[])
