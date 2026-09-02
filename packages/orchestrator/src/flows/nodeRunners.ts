@@ -305,13 +305,12 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   }
 
   if (cfg.paths.length > 0 || cfg.pathsIgnore.length > 0) {
-    const diff = ctx.prContext?.stdin.diff ?? "";
-    const changed = parseChangedFiles(diff);
-    // Fail closed when EITHER include or ignore filter is set but the diff
-    // is unavailable — running anyway would let unscoped PRs through a
+    const changed = changedFilesFor(ctx.prContext);
+    // Fail closed when EITHER include or ignore filter is set but the file
+    // list is unavailable — running anyway would let unscoped PRs through a
     // docs-only-skip just as easily as a src-only-include.
     if (changed.length === 0) {
-      throw new SkipFlowError("path filter requested but PR diff is unavailable");
+      throw new SkipFlowError("path filter requested but PR file list is unavailable");
     } else {
       if (cfg.pathsIgnore.length > 0) {
         const allIgnored = changed.every((f) => matchesAnyGlob(f, cfg.pathsIgnore));
@@ -622,7 +621,34 @@ async function projectsV2ItemTrigger(
 }
 
 // Non-greedy capture preserves filenames with spaces (`a/my file.ts b/my file.ts`).
-function parseChangedFiles(diff: string): string[] {
+/**
+ * Changed paths for the trigger's `paths` / `pathsIgnore` filters. Prefers
+ * the pulls/files list (fetched when the flow has such a filter, immune to
+ * GitHub's diff size cap); falls back to parsing an inline diff for
+ * contexts built without it.
+ */
+export function changedFilesFor(prContext: PullRequestContext | undefined): string[] {
+  if (!prContext) return [];
+  if (prContext.stdin.changedFiles) return prContext.stdin.changedFiles;
+  return parseChangedFiles(prContext.stdin.diff);
+}
+
+/**
+ * PR page-context for one agent node. Worktree nodes get everything except
+ * the inline diff (and the file list, which only exists for triggers);
+ * diff-less nodes get the context as built.
+ */
+export function prStdinForNode(
+  prContext: PullRequestContext | undefined,
+  hasWorktree: boolean,
+): PullRequestContext["stdin"] | undefined {
+  if (!prContext) return undefined;
+  if (!hasWorktree) return prContext.stdin;
+  const { diff: _diff, changedFiles: _files, ...rest } = prContext.stdin;
+  return { ...rest, diff: "" };
+}
+
+export function parseChangedFiles(diff: string): string[] {
   if (!diff) return [];
   const out = new Set<string>();
   const re = /^diff --git a\/(.+?) b\/(.+)$/gm;
@@ -1116,9 +1142,13 @@ export async function runAgentAttempt(
       env["OPENCARA_ISSUE_NUMBER"] = String(ctx.issueContext.stdin.issue.number);
     }
 
+    // A worktree agent reads the PR via `git diff` in its checkout; the
+    // inline diff (when one was fetched at all — see prContextNeeds) would
+    // only duplicate it into the prompt at up to 20k lines.
+    const prStdin = prStdinForNode(ctx.prContext, Boolean(node.config.worktree));
     const stdinJson = node.config.contextInjection.stdinJson
       ? {
-          ...(ctx.prContext?.stdin ?? {}),
+          ...(prStdin ?? {}),
           ...(ctx.issueContext?.stdin ?? {}),
           ...(ctx.scheduleContext?.stdin ?? {}),
           previousOutput: ctx.previousOutput,
@@ -1241,7 +1271,7 @@ export async function runAgentAttempt(
     // it just lives inside the prompt content block instead of an
     // out-of-band stdin envelope.
     const pageContext: Record<string, unknown> = {};
-    if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
+    if (prStdin) Object.assign(pageContext, prStdin);
     if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
 
     // Validate the project-level instructions file setting and forward the

@@ -31,6 +31,7 @@ import {
   buildManualIssueContext,
   buildAzurePullRequestContext,
   buildPullRequestContext,
+  prContextNeeds,
   buildScheduleContext,
   type IssueStatusContext,
   type PullRequestContext,
@@ -482,8 +483,10 @@ export class FlowEngine {
   ): Promise<void> {
     const { flowRunId, flowId, project, scm } = prepared;
 
-    // Pre-build PR context once if it's a pull_request event (cheap optimization;
-    // avoids re-fetching the diff for every agent node in the chain).
+    // Pre-build PR context once if it's a pull_request event, so every agent
+    // node in the chain shares one fetch. A failure here (GitHub API down)
+    // is logged and the run proceeds without context; the worktree branch
+    // guard then fails the agent steps with a pointer to this log line.
     // pull_request_review events use the same context shape — both carry a
     // `pull_request` field and the buildPullRequestContext helper extracts
     // review.state / review.body into envExtras when present.
@@ -510,6 +513,9 @@ export class FlowEngine {
                 scm.installation,
                 project,
                 event.payload as never,
+                // Skip the diff / file-list fetches when no node in this
+                // flow reads them (worktree agents `git diff` instead).
+                prContextNeeds(def),
               )
             : // PR events carry the pull request inline; the COMMENT event does
               // not carry one at all, so a fetcher is supplied for that case.

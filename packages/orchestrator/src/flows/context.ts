@@ -3,12 +3,25 @@ import type { Db } from "../db/client.js";
 import { issues } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { resolveReviewStateFromBody } from "../agents/verdict.js";
+import type { FlowDefinition } from "@opencara/flows";
 
 export interface PullRequestContext {
   envExtras: Record<string, string>;
   stdin: {
     pr: unknown;
+    /**
+     * Unified diff, or "" when it was not fetched (no node needs it) or
+     * could not be fetched (GitHub caps the diff endpoint at 20k lines /
+     * 300 files). `envExtras.OPENCARA_PR_DIFF_INLINE` tells prompts which.
+     */
     diff: string;
+    /**
+     * Repo-relative paths the PR touches (renames contribute both names),
+     * from the pulls/files endpoint. Only fetched when a trigger has a
+     * `paths` / `pathsIgnore` filter; undefined when not fetched or when
+     * the fetch failed (the filter then fails closed).
+     */
+    changedFiles?: string[];
     previousOutput?: string;
     /** Set on `pull_request_review` events — the reviewer's verdict.
      *  Surfaced to the agent so the review-fix flow can read it as
@@ -150,11 +163,46 @@ interface PullRequestPayload {
   };
 }
 
+/**
+ * Which optional, GitHub-fetched parts of the PR context a flow will read.
+ *
+ * Both are per-flow-run fetches that used to be unconditional. The diff is
+ * only worth inlining for an agent node WITHOUT a worktree — one with a
+ * checkout reads the real thing via `git diff`, cheaper and never truncated.
+ * The changed-file list only serves `scm.pull_request` triggers with a
+ * `paths` / `pathsIgnore` filter. On an instance where every agent node has
+ * a worktree and no trigger filters on paths (the builtin flows), the PR
+ * context costs zero extra API calls.
+ */
+export interface PullRequestContextNeeds {
+  diff: boolean;
+  changedFiles: boolean;
+}
+
+export function prContextNeeds(def: Pick<FlowDefinition, "nodes">): PullRequestContextNeeds {
+  let diff = false;
+  let changedFiles = false;
+  for (const node of def.nodes) {
+    if (node.kind === "agent" && !node.config.worktree) diff = true;
+    if (
+      node.kind === "scm.pull_request" &&
+      (node.config.paths.length > 0 || node.config.pathsIgnore.length > 0)
+    ) {
+      changedFiles = true;
+    }
+  }
+  return { diff, changedFiles };
+}
+
+/** Everything fetched — the historical behaviour, for callers with no flow def. */
+export const ALL_PR_CONTEXT_NEEDS: PullRequestContextNeeds = { diff: true, changedFiles: true };
+
 export async function buildPullRequestContext(
   app: GithubAppClient,
   installation: GithubInstallationLike,
   project: ProjectLike,
   payload: PullRequestPayload,
+  needs: PullRequestContextNeeds = ALL_PR_CONTEXT_NEEDS,
 ): Promise<PullRequestContext> {
   const oct = await app.forInstallation(installation.githubInstallationId);
 
@@ -182,19 +230,51 @@ export async function buildPullRequestContext(
 
   const prNumber = prObject.number;
 
-  const diffRes = await oct.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
-    owner: project.owner,
-    repo: project.name,
-    pull_number: prNumber,
-    mediaType: { format: "diff" },
-  });
-  const diff = String(diffRes.data);
+  // Both fetches below are best-effort. Everything a run NEEDS to start —
+  // head ref / shas / PR number — is already in `prObject`; a failed diff
+  // must never take those down with it. GitHub answers 406 `too_large` for
+  // diffs over 20k lines or 300 files, which is exactly the kind of PR a
+  // reviewer with a worktree should still get to look at.
+  let diff = "";
+  let diffInline = false;
+  if (needs.diff) {
+    try {
+      const diffRes = await oct.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: project.owner,
+        repo: project.name,
+        pull_number: prNumber,
+        mediaType: { format: "diff" },
+      });
+      diff = String(diffRes.data);
+      diffInline = true;
+    } catch (err) {
+      console.warn(
+        `[flow-engine] PR #${prNumber} diff unavailable; agents without a worktree get no inline diff:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  let changedFiles: string[] | undefined;
+  if (needs.changedFiles) {
+    try {
+      changedFiles = await fetchChangedFiles(oct, project, prNumber);
+    } catch (err) {
+      console.warn(
+        `[flow-engine] PR #${prNumber} file list unavailable; path filters will skip this run:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   const envExtras: Record<string, string> = {
     OPENCARA_REPO: payload.repository.full_name,
     OPENCARA_PR_NUMBER: String(prNumber),
     OPENCARA_PR_HEAD_SHA: prObject.head.sha,
     OPENCARA_PR_BASE_SHA: prObject.base.sha,
+    // "1" when the unified diff rides along in the page context, "0" when
+    // the agent must read the worktree instead (same contract as Azure).
+    OPENCARA_PR_DIFF_INLINE: diffInline ? "1" : "0",
   };
   if (prObject.head.ref) {
     envExtras["OPENCARA_PR_HEAD_REF"] = prObject.head.ref;
@@ -241,10 +321,35 @@ export async function buildPullRequestContext(
     stdin: {
       pr: prObject,
       diff,
+      ...(changedFiles ? { changedFiles } : {}),
       review: effectiveReview,
       comment: payload.comment,
     },
   };
+}
+
+/**
+ * Paths a PR touches, via the paginated pulls/files endpoint (100 per page,
+ * hard-capped by GitHub at 3,000 files). Renames report both the old and
+ * new name so `pathsIgnore` on either side behaves like the diff parser did.
+ */
+async function fetchChangedFiles(
+  oct: Awaited<ReturnType<GithubAppClient["forInstallation"]>>,
+  project: ProjectLike,
+  prNumber: number,
+): Promise<string[]> {
+  const files = await oct.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+    owner: project.owner,
+    repo: project.name,
+    pull_number: prNumber,
+    per_page: 100,
+  });
+  const out = new Set<string>();
+  for (const f of files) {
+    out.add(f.filename);
+    if (f.previous_filename) out.add(f.previous_filename);
+  }
+  return [...out];
 }
 
 /**
