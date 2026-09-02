@@ -138,7 +138,7 @@ function TimelineRow({ item }: { item: ActivityItem }) {
               flow: {item.flow.name}
             </Link>
           )}
-          {item.flowRunId && projectId && (
+          {item.flowRunId && projectId && !isFlowRun && (
             <Link
               to={`/projects/${projectId}/flow-runs/${item.flowRunId}`}
               className="hover:underline"
