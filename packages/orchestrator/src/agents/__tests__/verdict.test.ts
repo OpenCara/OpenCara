@@ -123,7 +123,28 @@ describe("parseReviewVerdict", () => {
   it("accepts a marker followed by punctuation or more prose on the same line", () => {
     const r = parseReviewVerdict("Overall fine. verdict: approve. Nice work on the tests.");
     assert.equal(r?.verdict, "APPROVE");
-    assert.equal(r?.bodyWithoutVerdict, "Overall fine. . Nice work on the tests.");
+    assert.equal(r?.bodyWithoutVerdict, "Overall fine. Nice work on the tests.");
+  });
+
+  it("a standalone marker line outranks an inline mention earlier in the body", () => {
+    // Agents quote the skill prompt's marker list; the real verdict follows.
+    const r = parseReviewVerdict("I'll emit `verdict: approve` when clean.\n\nverdict: request_changes");
+    assert.equal(r?.verdict, "REQUEST_CHANGES");
+    assert.equal(r?.bodyWithoutVerdict, "I'll emit `verdict: approve` when clean.");
+    const list = parseReviewVerdict(
+      "- `verdict: approve` — good\n- `verdict: request_changes` — blocking\n\nverdict: comment",
+    );
+    assert.equal(list?.verdict, "COMMENT");
+    const quoted = parseReviewVerdict("> verdict: approve\n\nverdict: request_changes");
+    assert.equal(quoted?.verdict, "REQUEST_CHANGES");
+    assert.equal(quoted?.bodyWithoutVerdict, "> verdict: approve");
+  });
+
+  it("does not backtrack quadratically on a long run of whitespace after the label", () => {
+    const body = "verdict:" + " ".repeat(40_000) + "x";
+    const t0 = performance.now();
+    assert.equal(parseReviewVerdict(body), null);
+    assert.ok(performance.now() - t0 < 200, "parser took too long");
   });
 
   it("does not match a label embedded in a longer word or a longer token", () => {

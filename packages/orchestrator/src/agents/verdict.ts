@@ -25,22 +25,34 @@
 // the position rule is relaxed; we still want malformed tokens to be
 // operator-visible rather than silently coerced.
 //
-// Line rule (relaxed 2026-09): the marker no longer has to be alone on its
-// line. Streaming adapters concatenate an agent's text segments around tool
+// Line rule (relaxed 2026-09): a marker alone on its line still wins, but
+// when no such line exists the parser falls back to an inline scan.
+// Streaming adapters concatenate an agent's text segments around tool
 // calls without newlines, so a posted review read
 // "…before writing the verdict.verdict: request_changes" — the strict
 // line-anchored match missed it, the review fell back to GitHub's raw
 // `commented` state, and the review→fix trigger fired on the wrong intent
 // (flow_run_id=01M1GWKV0F4AGJRGP93RBSK5SW). Markdown emphasis around the
 // label or token (`**verdict:** approve`, `` `verdict: comment` ``) is
-// tolerated for the same reason. Only the matched marker is stripped; the
-// rest of its line is kept.
+// tolerated on both passes.
+//
+// Why two passes and not one inline scan: the reviewer skill prompt lists
+// the three markers in backticks, and agents quote it ("emit `verdict:
+// approve` when clean"). A single first-match inline scan would let that
+// quote outrank the real standalone verdict further down.
 export type ReviewVerdict = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 
+// Between label and token: one character class, never two adjacent
+// unbounded quantifiers — `\s*[*_`]*\s*` backtracks quadratically on a
+// long run of spaces, and this runs on raw webhook review bodies.
+const TOKEN = "(approve|request_changes|comment)";
+const STANDALONE_RE = new RegExp(`^[*_\`]*verdict[*_\`]*:[\\s*_\`]*${TOKEN}[*_\`]*$`, "i");
 // (^|non-word) keeps `myverdict:` from matching; the lookahead keeps
 // `approved` / `commentary` from matching the strict token.
-const VERDICT_RE =
-  /(^|[^A-Za-z0-9_])([*_`]*verdict[*_`]*:\s*[*_`]*\s*(approve|request_changes|comment)[*_`]*)(?=$|[\s.,;:!?)\]])/i;
+const INLINE_RE = new RegExp(
+  `(^|[^A-Za-z0-9_])([*_\`]*verdict[*_\`]*:[\\s*_\`]*${TOKEN}[*_\`]*)(?=$|[\\s.,;:!?)\\]])`,
+  "i",
+);
 
 export interface ParsedReviewVerdict {
   verdict: ReviewVerdict;
@@ -54,43 +66,53 @@ export function parseReviewVerdict(body: string): ParsedReviewVerdict | null {
   const normalized = body.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
 
-  // Scan every line for the marker. First match wins — a reviewer that
-  // quotes another verdict mid-paragraph would tag the wrong event, but
-  // that's been observed exactly never; the common case is a single
-  // contract line, preceded or not by preamble.
-  let verdictIdx = -1;
-  let token: ReviewVerdict | null = null;
-  let stripped = "";
+  // Pass 1: a line that is nothing but the marker. First one wins — a
+  // reviewer that writes two standalone verdicts is a contract violation
+  // we've observed exactly never. The whole line is dropped.
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const m = VERDICT_RE.exec(line);
+    const m = STANDALONE_RE.exec(lines[i]!.trim());
     if (m) {
-      verdictIdx = i;
-      // The regex group is constrained to the three canonical tokens;
-      // the cast stays exhaustive as long as the alternation matches
-      // the ReviewVerdict union.
-      token = m[3]!.toUpperCase() as ReviewVerdict;
-      // Remove just the marker (keep the leading delimiter char, which
-      // belongs to the surrounding prose), then tidy the seam.
-      const start = m.index + m[1]!.length;
-      stripped = (line.slice(0, start) + line.slice(start + m[2]!.length)).trim();
-      break;
+      return {
+        // The regex group is constrained to the three canonical tokens;
+        // the cast stays exhaustive as long as the alternation matches
+        // the ReviewVerdict union.
+        verdict: m[1]!.toUpperCase() as ReviewVerdict,
+        bodyWithoutVerdict: [...lines.slice(0, i), ...lines.slice(i + 1)].join("\n").trim(),
+      };
     }
   }
-  if (verdictIdx === -1 || !token) return null;
 
-  // Strip only the marker. Preamble and post-amble both stay in the body
-  // so the operator sees what the agent actually wrote, minus the contract
-  // marker that GitHub's UI already renders as a badge. A line that held
-  // nothing but the marker disappears entirely.
-  const remainingLines = [
-    ...lines.slice(0, verdictIdx),
-    ...(stripped.length > 0 ? [stripped] : []),
-    ...lines.slice(verdictIdx + 1),
-  ];
-  const bodyWithoutVerdict = remainingLines.join("\n").trim();
+  // Pass 2: the marker glued into a line of prose. Only the marker (plus a
+  // single trailing punctuation mark it was attached to) is removed; the
+  // rest of the line stays so the operator sees what the agent wrote.
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const m = INLINE_RE.exec(line);
+    if (!m) continue;
+    const start = m.index + m[1]!.length;
+    const end = start + m[2]!.length;
+    const stripped = tidySeam(line.slice(0, start), line.slice(end));
+    return {
+      verdict: m[3]!.toUpperCase() as ReviewVerdict,
+      bodyWithoutVerdict: [
+        ...lines.slice(0, i),
+        ...(stripped.length > 0 ? [stripped] : []),
+        ...lines.slice(i + 1),
+      ]
+        .join("\n")
+        .trim(),
+    };
+  }
+  return null;
+}
 
-  return { verdict: token, bodyWithoutVerdict };
+/** Join the text either side of a removed inline marker without leaving
+ *  doubled spaces or a dangling ". ." behind. */
+function tidySeam(before: string, after: string): string {
+  const rest = after.replace(/^[.,;:!?]/, "");
+  return `${before.replace(/\s+$/, "")} ${rest.replace(/^\s+/, "")}`
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 // Maps an agent's verdict token onto the value GitHub's
