@@ -93,6 +93,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Don't prefix per chunk in `translateUpdate`-style code; the device concatenates chunks into a stream buffer and you get `[think] I[think]  need[think]  to…` ("opencode replies with a lot of [think]" symptom).
 - Pattern: stateful translator that fences boundaries (`createUpdateTranslator` in `packages/cli/src/runner/acpRunner.ts`) — `\n[think]\n` on entering a thought run, `\n[/think]\n` on leaving (or on `flush()` at run end so cancel/error paths still close cleanly).
 
+### [hits: 1] `session/load` replay lands in the captured run output (cursor-agent), so a resumed re-review re-posts the whole prior review
+- ACP `session/load` requires the agent to replay the prior conversation as `session/update` notifications before it answers. `claude-acp` deliberately skips that; `cursor-agent acp` (2026.08.25) does replay it. `runAcpJob` registers `client.onSessionUpdate` before calling `loadSession`, so every replayed `agent_message_chunk` is logged to stdout and becomes the step's captured output.
+- Flow agent nodes resume whatever `agent-session.json` the worktree holds when the agent *kind* matches — the pr-review `single_reviewer` (cursor) resumed the previous `review_synthesizer`'s (also cursor) session on ParadiseEngine#214, so review 5087773518 = old review text + new re-review, and `parseReviewVerdict` (first match wins) picked the OLD `verdict: request_changes` line.
+- Diagnose from `agent_runs.spec->'acp'->>'priorSessionId'` (rewritten in place to the resulting session id after the run) — identical ids across two runs mean a resume happened. Cursor's transcript lives in `~/.cursor/acp-sessions/<id>/store.db`.
+
 ## API access
 
 ### [hits: 1] Session cookie name is ocara_sid
@@ -127,7 +132,7 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - **Recurred 2026-08-17, exactly as written above** — orphan from Aug 12 (PPID 1) survived `kill <launcher>` + `pkill -P <launcher>`, then flapped against the new 0.115.5 device for ~90s with the version alternating 0.114.0/0.115.5. Nothing was in flight so no run died this time. The failure was NOT the technique — it was not reading this file before starting. **Review this file BEFORE any device restart / deploy / kill sequence, not after it goes wrong**; the whole procedure was already here, including the correct check and the exact symptom.
 - Confirm it settled afterwards: `sg docker -c 'docker logs opencara_server --since 30s' | grep device-ws` should be SILENT. Any hello in a quiet window means two processes are still fighting.
 
-### [hits: 2] `grep` silently skips `flows/nodeRunners.ts` — the file has literal NUL bytes and is "binary"
+### [hits: 3] `grep` silently skips `flows/nodeRunners.ts` — the file has literal NUL bytes and is "binary"
 - The shell's `grep` is ugrep run with `-I` (skip binary files). `globToRegex` in `packages/orchestrator/src/flows/nodeRunners.ts` uses literal `"\x00ANYPATH\x00"` sentinels (8 NUL bytes total), so grep classifies the whole 76KB file as binary and reports NO MATCHES rather than an error.
 - Cost on 2026-08-28: searches for `agentRunner`, `agentName`, `inputJson` across `src/` all came back empty, which read as "this code doesn't exist" instead of "one file was skipped". `agentRunner` is defined at line 600 of exactly that file.
 - Tell: a symbol that is *imported* somewhere (`engine.ts` imports `agentRunner` from `./nodeRunners.js`) but whose definition greps to zero hits. Also `command grep -n <pat> <file>` prints `binary file matches`.

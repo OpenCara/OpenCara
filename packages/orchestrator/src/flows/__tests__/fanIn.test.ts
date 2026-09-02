@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildFanInInput } from "../engine.js";
+import { buildFanInInput, upstreamAgentName } from "../engine.js";
 import type { FlowNode, NodeOutput } from "../engine.js";
 
 const REVIEW = "verdict: comment\n\nSolid, well-scoped diff.";
@@ -154,6 +154,65 @@ describe("buildFanInInput", () => {
       out,
       "## From Claude Opus (reviewer)\n\npool review\n\n---\n\n" +
         "## From Claude Opus (extra)\n\nextra review",
+    );
+  });
+});
+
+describe("upstreamAgentName", () => {
+  const def = (edges: ReturnType<typeof edge>[], nodes = [agentNode(), actionNode()]) => ({
+    nodes,
+    edges,
+  });
+
+  it("names the single upstream agent node from the run labels", () => {
+    const name = upstreamAgentName(
+      actionNode(),
+      def([edge("synth", "post")]),
+      new Map<string, NodeOutput>([["synth", REVIEW]]),
+      new Map([["synth", "codex"]]),
+    );
+    assert.equal(name, "codex");
+  });
+
+  it("names the agent of a single-attempt pool output", () => {
+    const name = upstreamAgentName(
+      actionNode(),
+      def([edge("synth", "post")]),
+      new Map<string, NodeOutput>([["synth", [{ agentName: "gemini", text: REVIEW }]]]),
+      new Map([["synth", "pool"]]),
+    );
+    assert.equal(name, "gemini");
+  });
+
+  it("is undefined for fan-in, multi-part pools and non-agent upstreams", () => {
+    assert.equal(
+      upstreamAgentName(
+        actionNode(),
+        def([edge("a", "post"), edge("b", "post")], [agentNode("a"), agentNode("b"), actionNode()]),
+        new Map<string, NodeOutput>([["a", REVIEW], ["b", REVIEW]]),
+        new Map([["a", "codex"], ["b", "gemini"]]),
+      ),
+      undefined,
+    );
+    assert.equal(
+      upstreamAgentName(
+        actionNode(),
+        def([edge("synth", "post")]),
+        new Map<string, NodeOutput>([
+          ["synth", [{ agentName: "a", text: REVIEW }, { agentName: "b", text: REVIEW }]],
+        ]),
+        new Map(),
+      ),
+      undefined,
+    );
+    assert.equal(
+      upstreamAgentName(
+        actionNode(),
+        def([edge("trig", "post")], [{ id: "trig", kind: "scm.pull_request", position: { x: 0, y: 0 }, config: {} } as unknown as FlowNode, actionNode()]),
+        new Map(),
+        new Map([["trig", "PR opened"]]),
+      ),
+      undefined,
     );
   });
 });

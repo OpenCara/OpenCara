@@ -19,7 +19,10 @@ interface RecordedRequest {
   params: Record<string, unknown>;
 }
 
-function ctxForPostReview(previousOutput: string): {
+function ctxForPostReview(
+  previousOutput: string,
+  previousAgentName?: string,
+): {
   ctx: NodeRunCtx;
   requests: RecordedRequest[];
 } {
@@ -59,6 +62,7 @@ function ctxForPostReview(previousOutput: string): {
       },
     },
     previousOutput,
+    previousAgentName,
     publicBaseUrl: "https://opencara.example",
     hasDownstreamPostReview: false,
     rerun: false,
@@ -88,6 +92,20 @@ describe("actionRunner scm.post_review stub guard", () => {
       reviewId: 42,
       htmlUrl: "https://github.com/o/r/pull/25#r42",
     });
+  });
+
+  it("stamps the upstream agent's name on the posted body", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nShip it — clean diff.",
+      "codex",
+    );
+    await actionRunner(ctx, postReviewNode);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]!.params.event, "APPROVE");
+    assert.equal(
+      requests[0]!.params.body,
+      "_Reviewed by **codex**_\n\nShip it — clean diff.",
+    );
   });
 
   it("still posts a substantial verdict-less body via the config-event fallback", async () => {
