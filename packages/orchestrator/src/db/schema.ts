@@ -519,6 +519,11 @@ export const flowRuns = pgTable(
       t.status,
       t.createdAt.desc(),
     ),
+    // Serves the Activity feed's "which flow runs did this event trigger"
+    // lookup (WHERE trigger_event_id IN (...)). The FK alone creates no
+    // index in Postgres, and flow_runs is the table that accumulates
+    // thousands of trigger_skip rows — without this every feed load seq-scans it.
+    triggerEventIdx: index("flow_runs_trigger_event_id_idx").on(t.triggerEventId),
     // Per-flow content idempotency. Partial (dedupe_key IS NOT NULL) so the
     // many runs that don't set a key — manual triggers, reruns, event types
     // without a stable identity — never collide with each other.

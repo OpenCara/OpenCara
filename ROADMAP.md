@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#227](https://github.com/OpenCara/OpenCara/pull/227) - feat(web): add detail and links to Activity page entries
 - **2026-09-02**: Merged [#166](https://github.com/OpenCara/OpenCara/pull/166) - fix(cli): stop WS reconnect storm by gating backoff reset on connection stability
 - **2026-09-02**: Merged [#226](https://github.com/OpenCara/OpenCara/pull/226) - fix(flows): never resume a prior ACP session across flow runs
 - **2026-09-02**: Merged [#225](https://github.com/OpenCara/OpenCara/pull/225) - fix(flows): persist the effective pool quorum, capped to the slot count
