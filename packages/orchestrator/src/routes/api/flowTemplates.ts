@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
+import { KEEP as POOL_KEEP, parseAgentPoolPatch } from "./agentPoolBody.js";
+import { foldLegacyReviewerPoolForTemplate } from "../../flows/builtin.js";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   builtinFlows,
   FlowDefinitionSchema,
@@ -54,6 +56,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const graph = draft
       ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
       : codeGraph(def);
+    await foldLegacyReviewerPoolForTemplate(deps.db, user.id, slug, graph.nodes);
     const settings = await deps.db
       .select()
       .from(templateNodeSettings)
@@ -78,7 +81,13 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
   r.get("/flow-templates/:slug/node-settings", auth, async (c) => {
     const user = c.get("user")!;
     const slug = c.req.param("slug");
-    if (!builtinFlows[slug]) return c.json({ error: "not found" }, 404);
+    const def = builtinFlows[slug];
+    if (!def) return c.json({ error: "not found" }, 404);
+    const draft = await loadDraft(deps.db, user.id, slug);
+    const graph = draft
+      ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
+      : codeGraph(def);
+    await foldLegacyReviewerPoolForTemplate(deps.db, user.id, slug, graph.nodes);
     const rows = await deps.db
       .select()
       .from(templateNodeSettings)
@@ -127,6 +136,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const promptId = parseKeepable(body.promptId);
     const agentId = parseKeepable(body.agentId);
     const label = parseKeepable(body.label);
+    const pool = parseAgentPoolPatch(body);
+    if ("error" in pool) return c.json({ error: pool.error }, 400);
 
     if (promptId !== KEEP && promptId !== null) {
       const p = await deps.db.query.prompts.findFirst({
@@ -139,6 +150,15 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
       });
       if (!a) return c.json({ error: "agent not found" }, 404);
+    }
+    if (pool.fallbackAgentIds !== POOL_KEEP && pool.fallbackAgentIds.length > 0) {
+      const owned = await deps.db.query.agents.findMany({
+        where: and(inArray(agents.id, pool.fallbackAgentIds), eq(agents.userId, user.id)),
+        columns: { id: true },
+      });
+      if (owned.length !== pool.fallbackAgentIds.length) {
+        return c.json({ error: "agent not found" }, 404);
+      }
     }
 
     const existing = await deps.db.query.templateNodeSettings.findFirst({
@@ -156,6 +176,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       if (promptId !== KEEP) patch.promptId = promptId;
       if (agentId !== KEEP) patch.agentId = agentId;
       if (label !== KEEP) patch.label = label;
+      if (pool.fallbackAgentIds !== POOL_KEEP) patch.fallbackAgentIds = pool.fallbackAgentIds;
+      if (pool.retrySame !== POOL_KEEP) patch.retrySame = pool.retrySame;
+        if (pool.concurrency !== POOL_KEEP) patch.concurrency = pool.concurrency;
+        if (pool.quorum !== POOL_KEEP) patch.quorum = pool.quorum;
       await deps.db
         .update(templateNodeSettings)
         .set(patch)
@@ -165,6 +189,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ...(promptId !== KEEP ? { promptId } : {}),
         ...(agentId !== KEEP ? { agentId } : {}),
         ...(label !== KEEP ? { label } : {}),
+        ...(pool.fallbackAgentIds !== POOL_KEEP ? { fallbackAgentIds: pool.fallbackAgentIds } : {}),
+        ...(pool.retrySame !== POOL_KEEP ? { retrySame: pool.retrySame } : {}),
+          ...(pool.concurrency !== POOL_KEEP ? { concurrency: pool.concurrency } : {}),
+          ...(pool.quorum !== POOL_KEEP ? { quorum: pool.quorum } : {}),
         updatedAt: now.toISOString(),
       };
       return c.json({ setting: merged });
@@ -179,6 +207,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       promptId: promptId === KEEP ? null : promptId,
       agentId: agentId === KEEP ? null : agentId,
       label: label === KEEP ? null : label,
+      fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
+      retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
+        concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
       updatedAt: now,
     });
     return c.json(
@@ -191,6 +223,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
           promptId: promptId === KEEP ? null : promptId,
           agentId: agentId === KEEP ? null : agentId,
           label: label === KEEP ? null : label,
+          fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
+          retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
+        concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
           updatedAt: now.toISOString(),
         },
       },

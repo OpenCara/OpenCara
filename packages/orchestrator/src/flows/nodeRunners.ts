@@ -45,11 +45,14 @@ import { worktreePins } from "../db/schema.js";
 import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
 import { extractScopedLabelValues } from "./labelRouting.js";
 
-export class SkipFlowError extends Error {
-  constructor(reason: string) {
-    super(reason);
-  }
-}
+import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
+import {
+  clampConcurrency,
+  clampQuorum,
+  clampRetrySame,
+  orderPoolCandidates,
+} from "./agentPool.js";
+export { SkipFlowError };
 
 /**
  * Everything platform-specific about the project a run belongs to, as a
@@ -150,6 +153,14 @@ export interface NodeRunResult {
   output?: unknown;
   /** stdout captured from an agent node, used as the next step's input. */
   stdoutCaptured?: string;
+  /**
+   * Name of the agent an agent node actually resolved and dispatched. The
+   * engine stamps it onto the run's node-label map so downstream fan-in
+   * headings name the agent that really ran — which is not always the
+   * flow-node's linked agent (an `agent:<name>` label on the issue/PR and the
+   * project default implement agent both outrank it).
+   */
+  agentName?: string;
 }
 
 export type NodeRunner<N extends FlowNode = FlowNode> = (
@@ -597,13 +608,51 @@ function globToRegex(glob: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
-export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
-  await enforceMaxIterations(ctx, node);
+/**
+ * Pool resolution runs BEFORE any step row exists, so it takes the runner ctx
+ * minus the step id.
+ */
+export type AgentPoolCtx = Omit<NodeRunCtx, "flowRunStepId">;
 
-  // Resolve the linked agent — required because agent flow nodes carry
-  // no in-graph subprocess spec. The dispatched AgentSpec (command,
-  // args, env, cwd) is built from the linked agent's `kind` via
-  // `buildAcpSpec` below.
+/** Everything the engine needs to drive an agent node's pool of candidates. */
+export interface ResolvedAgentPool {
+  /** Candidate agents in priority order (pinned → primary → fallbacks). */
+  candidates: Array<typeof agents.$inferSelect>;
+  /** Extra attempts on the same agent before failing over to the next. */
+  retrySame: number;
+  /** Parallel slots == target successes (see agentPool.ts). */
+  concurrency: number;
+  /** Minimum successes for the node to succeed. */
+  quorum: number;
+  /** The ONE prompt every candidate in the pool runs with (null = none). */
+  promptBody: string | null;
+}
+
+/**
+ * Resolve the agent pool + shared prompt for an agent node. Runs ONCE per
+ * node; the engine then calls {@link runAgentAttempt} per candidate/retry.
+ *
+ * Agent precedence (highest first) is unchanged from the single-agent days,
+ * the pool just extends the tail:
+ *   1. per-issue `agent:<name>` label — user picks a dispatcher from the
+ *      kanban card / GitHub without re-editing the flow.
+ *   2. project default implement agent — the project-settings pick the card
+ *      dropdowns pre-populate with (#158).
+ *   3. flow-node linked agent (`flow_node_settings.agent_id`) — the primary.
+ *   4. flow-node fallback agents (`fallback_agent_ids`), in stored order.
+ * Tiers 1 and 2 are mutually exclusive (a label replaces the project default,
+ * as before); whichever applies is pinned to the front of the pool. A label
+ * that names a missing agent is a hard error (masking a typo would silently
+ * run the wrong dispatcher); a fallback id whose agent row was deleted is
+ * skipped with a warning.
+ */
+export async function resolveAgentPool(
+  ctx: AgentPoolCtx,
+  node: AgentNode,
+): Promise<ResolvedAgentPool> {
+  // Agent flow nodes carry no in-graph subprocess spec; the dispatched
+  // AgentSpec (command, args, env, cwd) is built from the linked agent's
+  // `kind` via `buildAcpSpec` in runAgentAttempt.
   const setting = await ctx.db.query.flowNodeSettings.findFirst({
     where: and(
       eq(flowNodeSettings.flowId, ctx.flowId),
@@ -612,38 +661,99 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   });
 
   // Project row carries the #158 implement defaults (agent + prompt) used as
-  // the middle fallback tier below. Both columns are null for legacy
-  // projects, so their presence never changes prior behaviour.
+  // the middle fallback tier. Both columns are null for legacy projects, so
+  // their presence never changes prior behaviour.
   const project = await ctx.db.query.projects.findFirst({
     where: eq(projects.id, ctx.projectId),
   });
 
-  // Agent resolution precedence (highest first):
-  //   1. per-issue `agent:<name>` label  — user picks a dispatcher from the
-  //      kanban card / GitHub without re-editing the flow.
-  //   2. project default implement agent — the project-settings pick the card
-  //      dropdowns pre-populate with (#158).
-  //   3. flow-node linked agent          — the advanced per-node default set
-  //      on the flow detail page.
-  // A label that names a missing agent is a hard error (masking a typo would
-  // silently run the wrong dispatcher).
-  let agent: typeof agents.$inferSelect | null = await resolveLabelRoutedAgent(ctx);
-  if (!agent) {
-    const fallbackAgentId =
-      project?.defaultImplementAgentId ?? setting?.agentId ?? null;
-    if (!fallbackAgentId) {
-      throw new Error(
-        `agent node '${node.id}' has no agent to run: no agent:<name> label on the issue/PR, no project default implement agent, and no linked agent on the flow node — set a default in project settings, label the issue/PR, or link one from the flow detail page`,
-      );
-    }
-    agent =
-      (await ctx.db.query.agents.findFirst({
-        where: eq(agents.id, fallbackAgentId),
-      })) ?? null;
-    if (!agent) {
-      throw new Error(`implement agent ${fallbackAgentId} not found (revoked or deleted)`);
+  const labelAgent = await resolveLabelRoutedAgent(ctx);
+  const candidateIds = orderPoolCandidates({
+    pinned: labelAgent?.id ?? project?.defaultImplementAgentId ?? null,
+    primary: setting?.agentId ?? null,
+    fallbacks: setting?.fallbackAgentIds ?? [],
+  });
+  if (candidateIds.length === 0) {
+    throw new Error(
+      `agent node '${node.id}' has no agent to run: no agent:<name> label on the issue/PR, no project default implement agent, and no linked agent on the flow node — set a default in project settings, label the issue/PR, or link one from the flow detail page`,
+    );
+  }
+
+  const rows = await ctx.db.query.agents.findMany({
+    where: inArray(agents.id, candidateIds),
+  });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const candidates: Array<typeof agents.$inferSelect> = [];
+  const missing: string[] = [];
+  for (const id of candidateIds) {
+    const row = byId.get(id);
+    if (row) candidates.push(row);
+    else missing.push(id);
+  }
+  if (candidates.length === 0) {
+    throw new Error(`implement agent ${candidateIds[0]} not found (revoked or deleted)`);
+  }
+  if (missing.length > 0) {
+    console.warn("[flows] agent pool: skipping deleted agents", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      missing,
+    });
+  }
+
+  // Prompt resolution mirrors the agent precedence (#158):
+  //   1. per-issue `prompt:<name>` label
+  //   2. project default implement prompt
+  //   3. flow-node linked prompt
+  // The prompt is optional at every tier — when none resolve the agents run
+  // without OPENCARA_PROMPT. It is resolved once and shared by the whole
+  // pool: failover swaps the agent, never the task. A label naming a missing
+  // prompt is a hard error, same rationale as the agent label.
+  let promptBody: string | null = await resolveLabelRoutedPrompt(ctx);
+  if (promptBody === null) {
+    const fallbackPromptId =
+      project?.defaultImplementPromptId ?? setting?.promptId ?? null;
+    if (fallbackPromptId) {
+      promptBody =
+        (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, fallbackPromptId) }))
+          ?.body ?? null;
     }
   }
+
+  // A worktree node runs its agents in ONE shared checkout (per repo+branch
+  // pin), so parallel candidates would trample each other's working tree and
+  // race the allocation. Pin such nodes to one slot; failover still applies.
+  let concurrency = clampConcurrency(setting?.concurrency ?? 1);
+  if (node.config.worktree && concurrency > 1) {
+    console.warn("[flows] agent pool: worktree node forced to concurrency 1", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      requested: concurrency,
+    });
+    concurrency = 1;
+  }
+
+  return {
+    candidates,
+    retrySame: clampRetrySame(setting?.retrySame ?? 0),
+    concurrency,
+    quorum: clampQuorum(setting?.quorum ?? 1),
+    promptBody,
+  };
+}
+
+/**
+ * Run ONE attempt of an agent node on a concrete candidate agent. The engine
+ * owns the surrounding step row (one per attempt) and the pool loop; this
+ * function is the old single-agent runner body from "agent resolved" onward.
+ */
+export async function runAgentAttempt(
+  ctx: NodeRunCtx,
+  node: AgentNode,
+  agent: typeof agents.$inferSelect,
+  promptBody: string | null,
+): Promise<NodeRunResult> {
+  await enforceMaxIterations(ctx, node);
 
   const env: Record<string, string> = { ...agent.env };
   if (ctx.rerun) {
@@ -665,24 +775,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     for (const key of node.config.contextInjection.env) {
       const v = ctx.scheduleContext.envExtras[key];
       if (v !== undefined) env[key] = v;
-    }
-  }
-
-  // Prompt resolution mirrors the agent precedence (#158):
-  //   1. per-issue `prompt:<name>` label
-  //   2. project default implement prompt
-  //   3. flow-node linked prompt
-  // The prompt is optional at every tier — when none resolve the agent runs
-  // without OPENCARA_PROMPT. A label naming a missing prompt is a hard error,
-  // same rationale as the agent label.
-  let promptBody: string | null = await resolveLabelRoutedPrompt(ctx);
-  if (promptBody === null) {
-    const fallbackPromptId =
-      project?.defaultImplementPromptId ?? setting?.promptId ?? null;
-    if (fallbackPromptId) {
-      promptBody =
-        (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, fallbackPromptId) }))
-          ?.body ?? null;
     }
   }
   if (promptBody !== null) {
@@ -717,7 +809,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       "agent.worktree.branchName",
     );
     if (branchName.length === 0) {
-      throw new Error(
+      throw new FlowConfigError(
         `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
       );
     }
@@ -964,7 +1056,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   //   - PR / issue context-injection; surfaced via pageContextJson.
   const eligibility = checkAcpEligibility(agent.kind);
   if (eligibility.refuseReason) {
-    throw new Error(eligibility.refuseReason);
+    throw new AgentUnusableError(eligibility.refuseReason);
   }
 
   const systemPromptParts: string[] = [];
@@ -1241,8 +1333,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   return {
     output: { exitCode: result.exitCode, ...(autoMergeOutput ? { autoMerge: autoMergeOutput } : {}) },
     stdoutCaptured: result.stdoutCaptured,
+    agentName: agent.name,
   };
-};
+}
 
 async function enforceMaxIterations(ctx: NodeRunCtx, node: AgentNode): Promise<void> {
   const cfg = node.config.maxIterations;
@@ -1436,7 +1529,7 @@ async function maybeAutoMergeAfterFix(
 // reading PR labels would silently route them away from the operator's
 // linked reviewers.
 async function resolveLabelRoutedAgent(
-  ctx: NodeRunCtx,
+  ctx: AgentPoolCtx,
 ): Promise<typeof agents.$inferSelect | null> {
   const sources: string[] = [];
   for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
@@ -1486,7 +1579,7 @@ async function resolveLabelRoutedAgent(
  * defaults). Throws on multiple labels or a label naming a non-existent
  * prompt — same fail-loud rationale as the agent path (#158).
  */
-async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null> {
+async function resolveLabelRoutedPrompt(ctx: AgentPoolCtx): Promise<string | null> {
   const sources: string[] = [];
   for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
     if (typeof l.name === "string") sources.push(l.name);
@@ -1935,7 +2028,7 @@ function renderTemplate(tmpl: string, vars: Record<string, string>, where: strin
       // Fail loud rather than silently producing "opencara/issue-" or
       // "WIP: implement issue #". Operators will see this in
       // flow_runs.error and know which env var is missing.
-      throw new Error(
+      throw new FlowConfigError(
         `${where}: template variable {{${name}}} not in run env (available: ${
           Object.keys(vars).sort().join(", ") || "(none)"
         })`,

@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#220](https://github.com/OpenCara/OpenCara/pull/220) - feat(flows): agent pools with failover, parallel slots and quorum
 - **2026-08-12**: Merged [#205](https://github.com/OpenCara/OpenCara/pull/205) - fix(azure-devops): stop INNER JOINs hiding Azure projects
 - **2026-08-12**: Merged [#204](https://github.com/OpenCara/OpenCara/pull/204) - feat(azure-devops): support Personal Access Token connections
 - **2026-08-12**: Merged [#203](https://github.com/OpenCara/OpenCara/pull/203) - feat(auth): link Azure DevOps to an existing account

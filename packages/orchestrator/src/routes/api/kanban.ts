@@ -206,7 +206,7 @@ async function loadImplementStatuses(
       })
       .from(flowRunSteps)
       .where(inArray(flowRunSteps.flowRunId, runningIds))
-      .orderBy(desc(flowRunSteps.idx));
+      .orderBy(desc(flowRunSteps.idx), desc(flowRunSteps.attempt));
     // Pick the first running step we encounter per run; fall back to the
     // highest-idx step otherwise. Iteration is desc by idx so first hit is
     // the most advanced step.

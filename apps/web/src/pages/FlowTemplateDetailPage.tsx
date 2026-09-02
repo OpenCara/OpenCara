@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
+import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
 import {
   NodeEditor,
   deriveReviewerIds,
@@ -48,9 +49,7 @@ export function FlowTemplateDetailPage() {
     ? t.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = Object.fromEntries(
-    settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
-  );
+  const labelOverrides = buildFlowNodeLabels(t.graphJson.nodes, settings, agents);
 
   // Structural shape check, not slug — see ProjectFlowDetailPage.
   const reviewerIds = deriveReviewerIds(t.graphJson);

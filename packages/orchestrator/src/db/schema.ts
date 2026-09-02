@@ -634,6 +634,17 @@ export const flowNodeSettings = pgTable(
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    // Agent pool (failover): ordered ids tried AFTER `agentId` when an
+    // attempt fails. Plain jsonb (no FK) — a deleted agent is skipped at
+    // resolve time rather than blocking the row. `retrySame` = extra
+    // attempts on the SAME agent before moving to the next candidate.
+    fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
+    retrySame: integer("retry_same").notNull().default(0),
+    // Parallel slots (== target successes) and the minimum successes needed.
+    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
+    // finishes". See flows/agentPool.ts.
+    concurrency: integer("concurrency").notNull().default(1),
+    quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -713,6 +724,17 @@ export const templateNodeSettings = pgTable(
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    // Agent pool (failover): ordered ids tried AFTER `agentId` when an
+    // attempt fails. Plain jsonb (no FK) — a deleted agent is skipped at
+    // resolve time rather than blocking the row. `retrySame` = extra
+    // attempts on the SAME agent before moving to the next candidate.
+    fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
+    retrySame: integer("retry_same").notNull().default(0),
+    // Parallel slots (== target successes) and the minimum successes needed.
+    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
+    // finishes". See flows/agentPool.ts.
+    concurrency: integer("concurrency").notNull().default(1),
+    quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -735,6 +757,12 @@ export const flowRunSteps = pgTable(
     nodeId: text("node_id").notNull(),
     nodeKind: text("node_kind").notNull(),
     idx: integer("idx").notNull(),
+    // Agent-pool attempt ordinal. Every attempt of a node (retry on the same
+    // agent, or failover to the next candidate) gets its OWN step row sharing
+    // `nodeId`/`idx`. The node's outcome is aggregated over all its attempts
+    // (quorum met = succeeded) — with parallel slots the highest `attempt`
+    // is just the last one STARTED, not the one that decided the node.
+    attempt: integer("attempt").notNull().default(0),
     status: flowStepStatusEnum("status").notNull().default("pending"),
     inputJson: jsonb("input_json"),
     outputJson: jsonb("output_json"),

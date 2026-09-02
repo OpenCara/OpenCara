@@ -36,6 +36,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
+import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
 import {
   NodeEditor,
   deriveReviewerIds,
@@ -84,9 +85,7 @@ export function ProjectFlowDetailPage() {
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = Object.fromEntries(
-    settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
-  );
+  const labelOverrides = buildFlowNodeLabels(flow.graphJson.nodes, settings, agents);
 
   // Structural, not slug-based: any flow whose graph has the
   // trigger → reviewers → synthesizer shape gets the add/remove-reviewer

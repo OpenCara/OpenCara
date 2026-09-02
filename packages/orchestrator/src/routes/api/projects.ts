@@ -776,7 +776,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         })
         .from(flowRunSteps)
         .where(inArray(flowRunSteps.flowRunId, activeRunIds))
-        .orderBy(desc(flowRunSteps.idx));
+        .orderBy(desc(flowRunSteps.idx), desc(flowRunSteps.attempt));
       // Group by run, then prefer a currently-running step; otherwise fall
       // back to the latest (highest-idx) step so the panel can still say
       // "Working (…)" while the engine is between steps.

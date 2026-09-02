@@ -856,7 +856,8 @@ async function loadFlowRunSnapshot(db: Db, id: string) {
   if (!run) return null;
   const steps = await db.query.flowRunSteps.findMany({
     where: eq(flowRunSteps.flowRunId, id),
-    orderBy: [flowRunSteps.idx],
+    // Agent-pool attempts share a node's idx; attempt orders them within it.
+    orderBy: [flowRunSteps.idx, flowRunSteps.attempt],
   });
   const stepIds = steps.map((s) => s.id);
   // Project only the fields the snapshot consumer needs. Excluding `spec`
