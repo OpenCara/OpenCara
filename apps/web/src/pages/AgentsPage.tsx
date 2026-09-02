@@ -132,6 +132,70 @@ const KIND_HINTS: Record<
 // no-op for them.
 const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor"]);
 
+// Reasoning-effort vocabularies per adapter, for the placeholder / hint of
+// the "Thinking level" field. Advisory: the value is free text and the
+// device validates it against what the adapter actually advertises.
+const THOUGHT_LEVEL_HINTS: Partial<Record<AgentKind, string>> = {
+  claude: "low, medium, high, xhigh, max",
+  codex: "minimal, low, medium, high, xhigh",
+  pi: "off, minimal, low, medium, high, xhigh",
+  omp: "off, minimal, low, medium, high, xhigh",
+};
+
+function ThoughtLevelField({
+  id,
+  kind,
+  value,
+  onChange,
+}: {
+  id: string;
+  kind: AgentKind;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const levels = THOUGHT_LEVEL_HINTS[kind];
+  return (
+    <div>
+      <Label htmlFor={id}>Thinking level</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="default"
+        className="font-mono text-xs"
+        list={`${id}-levels`}
+      />
+      {levels && (
+        <datalist id={`${id}-levels`}>
+          {levels.split(", ").map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
+      )}
+      <p className="mt-1 text-xs text-muted-foreground">
+        {levels ? (
+          <>
+            Reasoning effort selected over ACP on every run. <code>{kind}</code>{" "}
+            accepts {levels}. Empty = the adapter&apos;s default.
+            {kind === "claude" && (
+              <>
+                {" "}
+                Needs a <code>claude</code> CLI with <code>--effort</code>; an older
+                CLI on the device fails the turn instead of ignoring it.
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            Sent over ACP as the <code>thought_level</code> option when the adapter
+            advertises one; otherwise ignored with a note in the run log.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 const COMMAND_OVERRIDE_HINT =
   "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
@@ -282,6 +346,7 @@ function NewAgentCard() {
   // pi). Hidden for custom (extras are part of the Command field).
   const [extraArgs, setExtraArgs] = useState("");
   const [envText, setEnvText] = useState("");
+  const [thoughtLevel, setThoughtLevel] = useState("");
   const [hostId, setHostId] = useState<string>(ANY_DEVICE);
   const devicesQ = useQuery(devicesQuery());
   const create = useCreateAgent();
@@ -384,6 +449,14 @@ function NewAgentCard() {
           />
           <p className="mt-1 text-xs text-muted-foreground">{hint.envHint}</p>
         </div>
+        {!isCustom && (
+          <ThoughtLevelField
+            id="new-agent-thought-level"
+            kind={kind}
+            value={thoughtLevel}
+            onChange={setThoughtLevel}
+          />
+        )}
         {error !== null && error !== undefined && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {extractErr(error)}
@@ -407,6 +480,7 @@ function NewAgentCard() {
                         extraArgs: extraArgs.trim(),
                       }),
                   env,
+                  thoughtLevel: thoughtLevel.trim() || null,
                   hostId: hostId === ANY_DEVICE ? null : hostId,
                 },
                 {
@@ -416,6 +490,7 @@ function NewAgentCard() {
                     setCommand("");
                     setExtraArgs("");
                     setEnvText("");
+                    setThoughtLevel("");
                     setHostId(ANY_DEVICE);
                   },
                 },
@@ -458,6 +533,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   );
   const [hostId, setHostId] = useState<string>(agent.hostId ?? ANY_DEVICE);
   const [captureThinking, setCaptureThinking] = useState(agent.captureThinking);
+  const [thoughtLevel, setThoughtLevel] = useState(agent.thoughtLevel ?? "");
   const devicesQ = useQuery(devicesQuery());
   const update = useUpdateAgent();
   const remove = useDeleteAgent();
@@ -478,6 +554,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
     setCaptureThinking(agent.captureThinking);
+    setThoughtLevel(agent.thoughtLevel ?? "");
   };
 
   return (
@@ -543,6 +620,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                             : { acpArgs }),
                           env: parseEnv(envText),
                           captureThinking,
+                          thoughtLevel: thoughtLevel.trim() || null,
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
@@ -671,6 +749,14 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               />
               <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].envHint}</p>
             </div>
+            {kind !== "custom" && (
+              <ThoughtLevelField
+                id={`agent-thought-level-${agent.id}`}
+                kind={kind}
+                value={thoughtLevel}
+                onChange={setThoughtLevel}
+              />
+            )}
             <div>
               <label className="flex items-center gap-2 text-sm font-medium">
                 <input
@@ -712,6 +798,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 const effArgs = agent.acpArgs ?? agent.defaultAcpArgs;
                 return `$ ${agent.acpCommand}${effArgs.length ? " " : ""}${effArgs.join(" ")}`;
               })(),
+              ...(agent.thoughtLevel ? [`  thinking level: ${agent.thoughtLevel}`] : []),
             ]
               .concat(
                 Object.entries(agent.env).length > 0

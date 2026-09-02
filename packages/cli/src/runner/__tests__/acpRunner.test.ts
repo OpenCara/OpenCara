@@ -13,6 +13,8 @@ import {
   flattenToolTitle,
   matchModelValue,
   selectAcpModel,
+  selectAcpThoughtLevel,
+  findThoughtLevelOption,
 } from "../acpRunner.js";
 import type { AcpClient } from "../../acp/client.js";
 import type { AcpConfigOption } from "../../acp/types.js";
@@ -109,6 +111,90 @@ describe("selectAcpModel", () => {
     await selectAcpModel(client, "s1", "claude-sonnet-5", undefined, sink);
     assert.equal(calls.length, 0);
     assert.ok(lines.some((l) => l.includes("advertised no model option")));
+  });
+});
+
+describe("selectAcpThoughtLevel", () => {
+  const levelOption = (
+    values: string[],
+    current?: string,
+    id = "thought_level",
+    category: string | undefined = "thought_level",
+  ): AcpConfigOption[] => [
+    { type: "select", id, category, currentValue: current, options: values.map((value) => ({ value })) },
+  ];
+  const fakeClient = (impl: (req: unknown) => Promise<unknown>) => {
+    const calls: unknown[] = [];
+    const client = {
+      setConfigOption: (req: unknown) => {
+        calls.push(req);
+        return impl(req);
+      },
+    } as unknown as AcpClient;
+    return { client, calls };
+  };
+  const collectLogs = () => {
+    const lines: string[] = [];
+    return { lines, sink: (_s: string, chunk: string) => void lines.push(chunk) };
+  };
+
+  it("finds the option by category or by a known id", () => {
+    assert.ok(findThoughtLevelOption(levelOption(["low"])));
+    assert.ok(findThoughtLevelOption(levelOption(["low"], undefined, "reasoning_effort", undefined)));
+    assert.ok(findThoughtLevelOption(levelOption(["low"], undefined, "Thinking", undefined)));
+    assert.equal(findThoughtLevelOption(levelOption(["low"], undefined, "model", "model")), undefined);
+    assert.equal(findThoughtLevelOption(undefined), undefined);
+  });
+
+  it("prefers the thought_level category over an earlier heuristic id match", () => {
+    const opts: AcpConfigOption[] = [
+      { type: "toggle", id: "thinking", options: [{ value: "on" }, { value: "off" }] },
+      ...levelOption(["low", "high"]),
+    ];
+    assert.equal(findThoughtLevelOption(opts)?.id, "thought_level");
+  });
+
+  it("logs a plain rejection when the option advertises no values", async () => {
+    const { client } = fakeClient(async () => {
+      throw new Error("nope");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "high", levelOption([]), sink);
+    assert.ok(lines.some((l) => l.includes('thought level "high" rejected by the agent')));
+  });
+
+  it("selects a case-insensitive match and logs it", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "HIGH", levelOption(["low", "high"], "low"), sink);
+    assert.deepEqual(calls, [{ sessionId: "s1", configId: "thought_level", value: "high" }]);
+    assert.ok(lines.some((l) => l.includes("selected thought level high")));
+  });
+
+  it("stays silent when currentValue already matches", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "high", levelOption(["low", "high"], "high"), sink);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(lines, []);
+  });
+
+  it("tries freeform on a miss and degrades to the default when rejected", async () => {
+    const { client, calls } = fakeClient(async () => {
+      throw new Error("unknown thought_level");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "ultra", levelOption(["low", "high"]), sink);
+    assert.equal(calls.length, 1);
+    assert.ok(lines.some((l) => l.includes("not among available levels [low, high]")));
+  });
+
+  it("logs and skips when the agent advertises no thought-level option", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpThoughtLevel(client, "s1", "high", undefined, sink);
+    assert.equal(calls.length, 0);
+    assert.ok(lines.some((l) => l.includes("advertised no thought-level option")));
   });
 });
 

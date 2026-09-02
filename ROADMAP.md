@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#228](https://github.com/OpenCara/OpenCara/pull/228) - feat(agents): per-agent ACP thinking/effort level
 - **2026-09-02**: Merged [#227](https://github.com/OpenCara/OpenCara/pull/227) - feat(web): add detail and links to Activity page entries
 - **2026-09-02**: Merged [#166](https://github.com/OpenCara/OpenCara/pull/166) - fix(cli): stop WS reconnect storm by gating backoff reset on connection stability
 - **2026-09-02**: Merged [#226](https://github.com/OpenCara/OpenCara/pull/226) - fix(flows): never resume a prior ACP session across flow runs

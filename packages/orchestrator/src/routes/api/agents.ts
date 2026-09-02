@@ -77,6 +77,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : null;
     // Absent → the column default (capture). Only an explicit `false` opts out.
     const captureThinking = body.captureThinking !== false;
+    const thoughtLevel = parseThoughtLevel(body.thoughtLevel) ?? null;
 
     const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
     if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
@@ -94,6 +95,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         env,
         cwd,
         captureThinking,
+        thoughtLevel,
         hostId: hostIdRes.hostId,
       });
     } catch (err) {
@@ -116,6 +118,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           env,
           cwd,
           captureThinking,
+          thoughtLevel,
           hostId: hostIdRes.hostId,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -179,6 +182,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     // the field (every pre-existing client) can't silently flip the switch.
     if (typeof body.captureThinking === "boolean") {
       updates.captureThinking = body.captureThinking;
+    }
+    // Absent → unchanged; "" / null → clear (adapter default); else set.
+    if (body.thoughtLevel !== undefined) {
+      updates.thoughtLevel = parseThoughtLevel(body.thoughtLevel) ?? null;
     }
     if (body.hostId !== undefined) {
       const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
@@ -415,6 +422,18 @@ function parseExtraArgs(body: Record<string, unknown>): string[] {
  * - `null` to reset to the kind default (explicit null, or an empty value),
  * - `string[]` for an override (array as-is, or a shell string tokenized).
  */
+/**
+ * Normalise the reasoning-effort input: a trimmed non-empty string, or
+ * undefined for "not set" (null / "" / non-string). Values are free text —
+ * each adapter has its own vocabulary and the device validates against what
+ * the adapter actually advertises, so nothing is rejected here.
+ */
+export function parseThoughtLevel(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  return t.length > 0 ? t : undefined;
+}
+
 function parseAcpArgs(body: Record<string, unknown>): string[] | null | undefined {
   if (!("acpArgs" in body)) return undefined;
   const raw = body.acpArgs;

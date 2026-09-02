@@ -1246,14 +1246,7 @@ export async function runAgentAttempt(
   }
 
   const acpSpec = buildAcpSpec({
-    agent: {
-      kind: agent.kind,
-      name: agent.name,
-      cwd: worktree?.workdir ?? agent.cwd ?? null,
-      args: agent.args,
-      acpArgs: agent.acpArgs,
-      captureThinking: agent.captureThinking,
-    },
+    agent: flowAgentSpecInput(agent, worktree?.workdir ?? null),
     env,
     systemPromptMd,
     userPromptMd,
@@ -2064,4 +2057,35 @@ function renderTemplate(tmpl: string, vars: Record<string, string>, where: strin
     }
     return vars[name]!;
   });
+}
+
+/**
+ * The agent-row fields a flow run hands to `buildAcpSpec`. Kept as one
+ * exported helper (rather than an inline literal at the call site) so a
+ * per-agent setting added to the row — captureThinking, thoughtLevel, … —
+ * has exactly one place to be forwarded from, and a unit test can pin that
+ * every such setting reaches the spec (a dropped field here is a silent
+ * no-op for the product's main execution path).
+ */
+export function flowAgentSpecInput(
+  agent: {
+    kind: string;
+    name: string;
+    cwd: string | null;
+    args: string[];
+    acpArgs?: string[] | null;
+    captureThinking?: boolean;
+    thoughtLevel?: string | null;
+  },
+  workdir: string | null,
+): Parameters<typeof buildAcpSpec>[0]["agent"] {
+  return {
+    kind: agent.kind,
+    name: agent.name,
+    cwd: workdir ?? agent.cwd ?? null,
+    args: agent.args,
+    acpArgs: agent.acpArgs,
+    captureThinking: agent.captureThinking,
+    thoughtLevel: agent.thoughtLevel,
+  };
 }

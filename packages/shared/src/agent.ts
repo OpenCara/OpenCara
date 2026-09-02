@@ -115,6 +115,13 @@ export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
  *   older orchestrators (and every non-reasoning adapter) on today's
  *   behaviour. Suppression is at the source: nothing is stored, so it
  *   can't be recovered for a run after the fact.
+ * - `thoughtLevel` (optional) is the agent row's reasoning-effort setting
+ *   (`thought_level` column), e.g. `low` / `high` / `max`. The device
+ *   selects it over ACP `session/set_config_option` when the adapter
+ *   advertises a `thought_level`-category option (claude-acp maps it to
+ *   `claude --effort`; codex-acp / pi / omp expose their own reasoning
+ *   levels). Adapters that advertise no such option ignore it with a log
+ *   line, never failing the run. Unset = the adapter's default.
  */
 export const AcpSpecSchema = z.object({
   systemPromptMd: z.string(),
@@ -127,6 +134,7 @@ export const AcpSpecSchema = z.object({
   images: z.array(AcpImageInputSchema).default([]),
   model: z.string().optional(),
   captureThinking: z.boolean().optional(),
+  thoughtLevel: z.string().optional(),
 });
 export type AcpSpec = z.infer<typeof AcpSpecSchema>;
 

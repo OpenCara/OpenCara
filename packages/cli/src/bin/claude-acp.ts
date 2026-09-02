@@ -139,6 +139,11 @@ interface SessionState {
    *  over an argv `--model` (claude CLI is last-flag-wins). Absent → the
    *  argv model (or claude's own default) applies. */
   modelOverride?: string;
+  /** Effort level selected via ACP `session/set_config_option` (configId
+   *  "thought_level"). Passed to claude as `--effort <level>` on every
+   *  turn. Absent or "default" → the flag is omitted and claude's own
+   *  default applies. */
+  thoughtLevel?: string;
 }
 
 /** ACP `session/new` `mcpServers` array element. Mirrors the shape the
@@ -267,8 +272,37 @@ export function modelConfigOptions(
   ];
 }
 
+/** Values `claude --effort <level>` accepts, plus "default" = omit the flag. */
+export const CLAUDE_EFFORT_LEVELS = ["default", "low", "medium", "high", "xhigh", "max"] as const;
+
 /**
- * ACP `session/set_config_option` for configId "model". Claude accepts
+ * ACP `thought_level` config option (standard ACP category). Always
+ * advertised so the device runner knows claude can take an effort level;
+ * `currentValue` reflects the session's selection so a repeat select is a
+ * no-op on the runner side.
+ */
+export function thoughtLevelConfigOption(
+  state: Pick<SessionState, "thoughtLevel">,
+): AcpConfigOption {
+  return {
+    type: "select",
+    id: "thought_level",
+    category: "thought_level",
+    name: "Effort",
+    currentValue: state.thoughtLevel ?? "default",
+    options: CLAUDE_EFFORT_LEVELS.map((value) => ({ value })),
+  };
+}
+
+/** All config options advertised on session/new and session/load. */
+export function sessionConfigOptions(
+  state: Pick<SessionState, "modelOverride" | "thoughtLevel">,
+): AcpConfigOption[] {
+  return [...(modelConfigOptions(state) ?? []), thoughtLevelConfigOption(state)];
+}
+
+/**
+ * ACP `session/set_config_option` for configId "model" and "thought_level". Claude accepts
  * freeform model ids (there is no enumerable list to validate against),
  * so any non-empty string is stored; the next `claude` turn appends
  * `--model <value>` after the argv extras, which wins last-flag-wins.
@@ -283,7 +317,7 @@ export function handleSetConfigOption(params: {
   if (!state) {
     throw new Error(`session/set_config_option: unknown session '${sessionId}'`);
   }
-  if (params.configId !== "model") {
+  if (params.configId !== "model" && params.configId !== "thought_level") {
     throw new Error(
       `session/set_config_option: unknown configId '${String(params.configId)}'`,
     );
@@ -291,6 +325,20 @@ export function handleSetConfigOption(params: {
   const value = typeof params.value === "string" ? params.value.trim() : "";
   if (!value) {
     throw new Error("session/set_config_option: value must be a non-empty string");
+  }
+  if (params.configId === "thought_level") {
+    // Unlike model ids, claude enumerates its effort levels and exits on an
+    // unknown one — validate up front so the runner degrades to the default
+    // instead of the whole turn failing at spawn.
+    const level = value.toLowerCase();
+    if (!(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(level)) {
+      throw new Error(
+        `session/set_config_option: unknown thought_level '${value}' (expected one of ${CLAUDE_EFFORT_LEVELS.join(", ")})`,
+      );
+    }
+    if (level === "default") delete state.thoughtLevel;
+    else state.thoughtLevel = level;
+    return {};
   }
   state.modelOverride = value;
   return {};
@@ -587,6 +635,10 @@ async function runClaudeTurn(
     // it beats an argv `--model` under claude's last-flag-wins parsing.
     if (state.modelOverride) {
       args.push("--model", state.modelOverride);
+    }
+    // ACP-selected effort level (session/set_config_option "thought_level").
+    if (state.thoughtLevel) {
+      args.push("--effort", state.thoughtLevel);
     }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
@@ -928,8 +980,7 @@ export function handleNewSession(params: NewSessionParams): unknown {
     ...(instructionsFile ? { instructionsFile } : {}),
   };
   sessions.set(sessionId, state);
-  const configOptions = modelConfigOptions(state);
-  return { sessionId, ...(configOptions ? { configOptions } : {}) };
+  return { sessionId, configOptions: sessionConfigOptions(state) };
 }
 
 interface LoadSessionParams {
@@ -960,8 +1011,7 @@ export function handleLoadSession(params: LoadSessionParams): unknown {
     ...(instructionsFile ? { instructionsFile } : {}),
   };
   sessions.set(params.sessionId, state);
-  const configOptions = modelConfigOptions(state);
-  return configOptions ? { configOptions } : {};
+  return { configOptions: sessionConfigOptions(state) };
 }
 
 /** Coerce the opencara session-extension field into a clean string or
