@@ -52,6 +52,7 @@ import {
   clampRetrySame,
   orderPoolCandidates,
 } from "./agentPool.js";
+import { loadEffectiveNodeSetting } from "./nodeSettings.js";
 export { SkipFlowError };
 
 /**
@@ -653,12 +654,9 @@ export async function resolveAgentPool(
   // Agent flow nodes carry no in-graph subprocess spec; the dispatched
   // AgentSpec (command, args, env, cwd) is built from the linked agent's
   // `kind` via `buildAcpSpec` in runAgentAttempt.
-  const setting = await ctx.db.query.flowNodeSettings.findFirst({
-    where: and(
-      eq(flowNodeSettings.flowId, ctx.flowId),
-      eq(flowNodeSettings.nodeId, node.id),
-    ),
-  });
+  // Effective = project override row, else the account-scope template row
+  // (flows/nodeSettings.ts).
+  const setting = await loadEffectiveNodeSetting(ctx.db, ctx.flowId, node.id);
 
   // Project row carries the #158 implement defaults (agent + prompt) used as
   // the middle fallback tier. Both columns are null for legacy projects, so

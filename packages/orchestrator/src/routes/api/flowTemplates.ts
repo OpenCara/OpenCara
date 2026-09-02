@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { KEEP as POOL_KEEP, parseAgentPoolPatch } from "./agentPoolBody.js";
-import { foldLegacyReviewerPoolForTemplate } from "../../flows/builtin.js";
+import { foldLegacyReviewerPoolForTemplate, syncInheritedFlowGraphs } from "../../flows/builtin.js";
+import { listTemplateOverrides } from "../../flows/nodeSettings.js";
 import { and, eq, inArray } from "drizzle-orm";
 import {
   builtinFlows,
@@ -67,6 +68,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ),
       );
 
+    const overrides = await listTemplateOverrides(deps.db, user.id, slug);
+
     return c.json({
       template: {
         ...toSummary(def),
@@ -75,6 +78,9 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       hasDraft: !!draft,
       customizedAt: draft?.customizedAt ?? null,
       settings,
+      // Projects that diverge from this account-scope template (own graph
+      // and/or per-node overrides). Fully inheriting projects are omitted.
+      overrides,
     });
   });
 
@@ -120,6 +126,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     if (!validation.ok) return c.json({ error: validation.error }, 400);
 
     await persistDraft(deps.db, user.id, def.slug, graph);
+    // Projects that inherit this template pick the change up right away.
+    await syncInheritedFlowGraphs(deps.db, user.id, def.slug, graph);
     return c.json({
       template: { ...toSummary(def), graphJson: graph },
       hasDraft: true,

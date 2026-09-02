@@ -162,6 +162,20 @@ function useSetNodeConfig(scope: EditorScope) {
   });
 }
 
+/** Project scope only: drop the node's override so it inherits the template again. */
+function useRevertOverride(scope: EditorScope) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { nodeId: string }) => {
+      if (scope.kind !== "project") return Promise.resolve(null);
+      return api.delete(
+        `/api/projects/${scope.projectId}/flows/${scope.flowId}/nodes/${vars.nodeId}/settings`,
+      );
+    },
+    onSuccess: () => invalidateScope(qc, scope, ["settings"]),
+  });
+}
+
 function invalidateScope(
   qc: ReturnType<typeof useQueryClient>,
   scope: EditorScope,
@@ -239,6 +253,10 @@ function AgentNodePanel({
     ? agents.find((a) => a.id === linkedAgentId) ?? null
     : null;
   const set = useSetSettings(scope);
+  const revert = useRevertOverride(scope);
+  // Project flows inherit the account-scope template's row for this node
+  // until they override it; the server tags each effective row.
+  const inherited = scope.kind === "project" && setting?.source !== "project";
 
   const cfg = (node.config ?? {}) as { label?: string };
   const defaultLabel = cfg.label ?? "Agent";
@@ -279,6 +297,43 @@ function AgentNodePanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        {scope.kind === "project" && (
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs",
+              inherited ? "bg-muted/30 text-muted-foreground" : "border-primary/40 bg-primary/5",
+            )}
+          >
+            {inherited ? (
+              <span>
+                Inherits your{" "}
+                <Link to={`/flows/${scope.slug}`} className="text-foreground underline">
+                  account-scope flow
+                </Link>{" "}
+                settings for this node. Any change below becomes a project override.
+              </span>
+            ) : (
+              <>
+                <span>
+                  <span className="font-medium text-foreground">Project override.</span> This
+                  project no longer follows your{" "}
+                  <Link to={`/flows/${scope.slug}`} className="text-foreground underline">
+                    account-scope flow
+                  </Link>{" "}
+                  for this node.
+                </span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={revert.isPending}
+                  onClick={() => revert.mutate({ nodeId: node.id })}
+                >
+                  {revert.isPending ? "Reverting…" : "Revert to account default"}
+                </Button>
+              </>
+            )}
+          </div>
+        )}
         <div className="space-y-2">
           <div className="text-sm font-medium">Display name</div>
           {linkedAgent ? (

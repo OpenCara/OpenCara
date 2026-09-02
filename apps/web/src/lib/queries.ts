@@ -134,6 +134,8 @@ export interface FlowSummary {
   name: string;
   graphJson: FlowGraph;
   enabled: boolean;
+  /** Set once the project edits its graph; null = inherits the account template. */
+  customizedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -613,6 +615,8 @@ export interface TemplateNodeSetting {
   quorum: number;
   label: string | null;
   updatedAt: string;
+  /** Never set on template rows; present so the union with FlowNodeSetting narrows cleanly. */
+  source?: "project" | "template";
 }
 
 export const flowTemplatesQuery = () => ({
@@ -629,6 +633,7 @@ export const flowTemplateDetailQuery = (slug: string) => ({
       hasDraft: boolean;
       customizedAt: string | null;
       settings: TemplateNodeSetting[];
+      overrides?: TemplateOverrideSummary[];
     }>(`/api/flow-templates/${slug}`),
 });
 
@@ -833,6 +838,21 @@ export interface FlowNodeSetting {
   quorum: number;
   label: string | null;
   updatedAt: string;
+  /**
+   * "project" = this project overrides the node; "template" = inherited from
+   * the account-scope template (no project row; `id` is null then).
+   */
+  source?: "project" | "template";
+}
+
+/** A project that diverges from an account-scope flow template. */
+export interface TemplateOverrideSummary {
+  projectId: string;
+  owner: string;
+  name: string;
+  flowId: string;
+  graphCustomized: boolean;
+  nodeOverrides: string[];
 }
 
 export type AgentKind =

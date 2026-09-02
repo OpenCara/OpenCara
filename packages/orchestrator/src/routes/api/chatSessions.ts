@@ -39,6 +39,7 @@ import {
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { loadEffectiveNodeSetting } from "../../flows/nodeSettings.js";
 
 interface ChatSessionsRoutesDeps {
   db: Db;
@@ -169,15 +170,7 @@ export async function hydrateFromFlowRunStep(
     orderBy: [desc(agentRuns.createdAt)],
     columns: { id: true, hostId: true, spec: true },
   });
-  const setting = run
-    ? await db.query.flowNodeSettings.findFirst({
-        where: and(
-          eq(flowNodeSettings.flowId, run.flowId),
-          eq(flowNodeSettings.nodeId, step.nodeId),
-        ),
-        columns: { agentId: true },
-      })
-    : undefined;
+  const setting = run ? await loadEffectiveNodeSetting(db, run.flowId, step.nodeId) : null;
   const spec = (lastRun?.spec ?? null) as
     | { acp?: { priorSessionId?: string | null } | null }
     | null;
