@@ -147,6 +147,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
         labelsIgnore: [],
         ignoreDrafts: false,
         commentPhrase: "@opencara mreview",
+        delaySeconds: 0,
       },
     },
     {
@@ -264,6 +265,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
         labelsIgnore: [],
         ignoreDrafts: false,
         commentPhrase: "@opencara review",
+        delaySeconds: 0,
       },
     },
     {

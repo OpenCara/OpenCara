@@ -1167,6 +1167,8 @@ interface TriggerCfg {
   labelsIgnore: string[];
   ignoreDrafts: boolean;
   commentPhrase: string;
+  /** Grace period (seconds) before the review starts; 0 = start at once. */
+  delaySeconds: number;
 }
 
 function readStringArray(o: Record<string, unknown>, key: string): string[] {
@@ -1192,6 +1194,10 @@ function readTriggerConfig(raw: unknown): TriggerCfg {
     ignoreDrafts: o.ignoreDrafts === true,
     commentPhrase:
       typeof o.commentPhrase === "string" ? o.commentPhrase : DEFAULT_COMMENT_PHRASE,
+    delaySeconds:
+      typeof o.delaySeconds === "number" && Number.isFinite(o.delaySeconds)
+        ? Math.max(0, Math.trunc(o.delaySeconds))
+        : 0,
   };
 }
 
@@ -1206,6 +1212,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   const [labelsIgnore, setLabelsIgnore] = useState(initial.labelsIgnore.join(", "));
   const [ignoreDrafts, setIgnoreDrafts] = useState(initial.ignoreDrafts);
   const [commentPhrase, setCommentPhrase] = useState(initial.commentPhrase);
+  const [delaySeconds, setDelaySeconds] = useState(String(initial.delaySeconds));
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
@@ -1218,6 +1225,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
     setLabelsIgnore(initial.labelsIgnore.join(", "));
     setIgnoreDrafts(initial.ignoreDrafts);
     setCommentPhrase(initial.commentPhrase);
+    setDelaySeconds(String(initial.delaySeconds));
   }, [initial]);
 
   const toggleAction = (action: TriggerAction) => {
@@ -1240,6 +1248,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
         labelsIgnore: parseList(labelsIgnore),
         ignoreDrafts,
         commentPhrase: commentPhrase.trim() || DEFAULT_COMMENT_PHRASE,
+        delaySeconds: Math.min(86400, Math.max(0, Math.trunc(Number(delaySeconds) || 0))),
       },
     });
   };
@@ -1361,6 +1370,32 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
             value={labelsIgnore}
             onChange={setLabelsIgnore}
           />
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <Label htmlFor={`delay-${node.id}`} className="text-sm font-medium">
+              Grace period before review
+            </Label>
+            <Input
+              id={`delay-${node.id}`}
+              type="number"
+              min={0}
+              max={86400}
+              step={1}
+              className="w-28"
+              value={delaySeconds}
+              onChange={(e) => setDelaySeconds(e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">seconds (0 = off)</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            After a pull-request event matches, wait this long before reviewing, then
+            re-read the PR: the review is cancelled if the PR was merged or closed, or
+            picked up one of the <span className="font-medium">labels ignore</span>{" "}
+            labels meanwhile. A run cancelled from the run page stops waiting too.
+            Comment-triggered reviews start at once.
+          </p>
         </div>
 
         {set.error && (

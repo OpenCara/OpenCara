@@ -46,6 +46,7 @@ const twoTriggerFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
+        delaySeconds: 0,
         commentPhrase: "",
       },
     },

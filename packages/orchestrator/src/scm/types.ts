@@ -62,6 +62,15 @@ export interface AddLabelResult {
   labels: string[];
 }
 
+/** Point-in-time state of a pull request, as re-read from the platform. */
+export interface PullRequestState {
+  /** "open" while reviewable; "closed" covers merged AND abandoned/closed. */
+  state: "open" | "closed";
+  merged: boolean;
+  /** Label names currently on the PR. */
+  labels: string[];
+}
+
 /**
  * A provider instance is bound to one repository and one set of credentials —
  * construct it per flow-run step via the registry, do not cache it across
@@ -86,4 +95,7 @@ export interface ScmProvider {
 
   /** Add labels to a pull request or issue. Additive — never removes. */
   addLabel(issueNumber: number, labels: string[]): Promise<AddLabelResult>;
+
+  /** Re-read a pull request's open/merged state and labels. */
+  getPullRequestState(prNumber: number): Promise<PullRequestState>;
 }

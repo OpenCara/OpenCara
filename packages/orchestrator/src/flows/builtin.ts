@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
-import { eq, and, isNull } from "drizzle-orm";
-import { builtinFlows, type FlowDefinition } from "@opencara/flows";
+import { eq, and, inArray, isNull } from "drizzle-orm";
+import { builtinFlows, developmentLifecycleFlow, type FlowDefinition } from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
   POOL_REVIEWER_NODE_ID,
@@ -35,9 +35,15 @@ interface BuiltinGraph {
 export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): Promise<void> {
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
-    columns: { id: true, addedByUserId: true },
+    columns: { id: true, addedByUserId: true, defaultImplementFlowId: true },
   });
   const ownerUserId = project?.addedByUserId ?? null;
+  // One-time split of the legacy unified template into the four stage
+  // templates — drafts + node settings by node id — before seeding from them.
+  if (ownerUserId) await splitLegacyLifecycleTemplates(db, ownerUserId);
+  // Retire the project's legacy unified flow BEFORE the loop so the stage rows
+  // it re-enables are back on the inheritance path when their graph refreshes.
+  const retiredLegacyFlowId = await retireLegacyLifecycleFlow(db, projectId);
 
   for (const slug of Object.keys(builtinFlows)) {
     const def = builtinFlows[slug]!;
@@ -87,6 +93,171 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
       existing?.customizedAt ? (existing.graphJson as BuiltinGraph).nodes : seed.nodes;
     await foldLegacyReviewerPoolForFlow(db, projectId, flowId, liveNodes);
   }
+
+  // Kanban "Start" dispatches the project's default implement flow; if that
+  // was the retired unified flow, point it at `issue-implement` (which now
+  // exists — the loop above inserted it if needed).
+  if (retiredLegacyFlowId && project?.defaultImplementFlowId === retiredLegacyFlowId) {
+    const implement = await db.query.flows.findFirst({
+      where: and(eq(flows.projectId, projectId), eq(flows.slug, "issue-implement")),
+      columns: { id: true },
+    });
+    if (implement) {
+      await db
+        .update(projects)
+        .set({ defaultImplementFlowId: implement.id })
+        .where(eq(projects.id, projectId));
+    }
+  }
+}
+
+const LEGACY_LIFECYCLE_SLUG = developmentLifecycleFlow.slug;
+
+/**
+ * Split the owner's `development-lifecycle` template draft + node settings
+ * into the four stage templates. Each stage template reuses the unified
+ * graph's node ids, so a draft is carved out by node membership (edges among
+ * those nodes) and settings copy 1:1 by node id. Only fills gaps: an existing
+ * draft / settings row on a stage template wins. Idempotent.
+ */
+export async function splitLegacyLifecycleTemplates(db: Db, ownerUserId: string): Promise<void> {
+  const legacyDraft = await db.query.templateDrafts.findFirst({
+    where: and(
+      eq(templateDrafts.userId, ownerUserId),
+      eq(templateDrafts.templateSlug, LEGACY_LIFECYCLE_SLUG),
+    ),
+  });
+  const legacySettings = await db
+    .select()
+    .from(templateNodeSettings)
+    .where(
+      and(
+        eq(templateNodeSettings.userId, ownerUserId),
+        eq(templateNodeSettings.templateSlug, LEGACY_LIFECYCLE_SLUG),
+      ),
+    );
+  if (!legacyDraft && legacySettings.length === 0) return;
+
+  for (const def of Object.values(builtinFlows)) {
+    const stageNodeIds = new Set(def.nodes.map((n) => n.id));
+
+    if (legacyDraft) {
+      const existing = await db.query.templateDrafts.findFirst({
+        where: and(eq(templateDrafts.userId, ownerUserId), eq(templateDrafts.templateSlug, def.slug)),
+        columns: { id: true, graphJson: true },
+      });
+      // A stage draft that pre-dates the unified flow (old node ids such as
+      // `a1` / `reviewer_correctness`) is stale: the unified draft is the
+      // newer intent, so it gets replaced. A stage draft that already uses
+      // the current node ids was made after the split and wins.
+      const existingIds = new Set(
+        ((existing?.graphJson as BuiltinGraph | undefined)?.nodes ?? []).map((n) => n.id),
+      );
+      const existingIsCurrent =
+        !!existing &&
+        existingIds.size === stageNodeIds.size &&
+        [...stageNodeIds].every((id) => existingIds.has(id));
+      const g = legacyDraft.graphJson as BuiltinGraph;
+      const nodes = (g.nodes ?? []).filter((n) => stageNodeIds.has(n.id));
+      // Carve only when the legacy draft still has this whole stage; a draft
+      // that pre-dates the pooled reviewer (three sibling reviewers) falls
+      // back to the code template for that stage.
+      if (!existingIsCurrent && nodes.length === stageNodeIds.size) {
+        const edges = (g.edges ?? []).filter(
+          (e) => stageNodeIds.has(e.source) && stageNodeIds.has(e.target),
+        );
+        const graphJson = { nodes, edges, description: def.description };
+        if (existing) {
+          await db
+            .update(templateDrafts)
+            .set({ graphJson, customizedAt: legacyDraft.customizedAt, updatedAt: new Date() })
+            .where(eq(templateDrafts.id, existing.id));
+        } else {
+          await db.insert(templateDrafts).values({
+            id: ulid(),
+            userId: ownerUserId,
+            templateSlug: def.slug,
+            graphJson,
+            customizedAt: legacyDraft.customizedAt,
+            updatedAt: new Date(),
+          });
+        }
+      } else if (existing && !existingIsCurrent) {
+        // Stale stage draft but nothing to carve (legacy draft lacks the
+        // stage): drop it so the code template applies.
+        await db.delete(templateDrafts).where(eq(templateDrafts.id, existing.id));
+      }
+    }
+
+    // Stage-template rows that reference node ids the stage no longer has
+    // (`a1`, `reviewer_correctness`, …) date from before the unified flow and
+    // can never apply again; drop them so the template page and the pool
+    // fold see only live rows.
+    const stale = await db
+      .select({ id: templateNodeSettings.id, nodeId: templateNodeSettings.nodeId })
+      .from(templateNodeSettings)
+      .where(
+        and(
+          eq(templateNodeSettings.userId, ownerUserId),
+          eq(templateNodeSettings.templateSlug, def.slug),
+        ),
+      );
+    const staleIds = stale.filter((r) => !stageNodeIds.has(r.nodeId)).map((r) => r.id);
+    if (staleIds.length > 0) {
+      await db.delete(templateNodeSettings).where(inArray(templateNodeSettings.id, staleIds));
+    }
+
+    for (const row of legacySettings) {
+      if (!stageNodeIds.has(row.nodeId)) continue;
+      const exists = await db.query.templateNodeSettings.findFirst({
+        where: and(
+          eq(templateNodeSettings.userId, ownerUserId),
+          eq(templateNodeSettings.templateSlug, def.slug),
+          eq(templateNodeSettings.nodeId, row.nodeId),
+        ),
+        columns: { id: true },
+      });
+      if (exists) continue;
+      await db.insert(templateNodeSettings).values({
+        id: ulid(),
+        userId: ownerUserId,
+        templateSlug: def.slug,
+        nodeId: row.nodeId,
+        promptId: row.promptId,
+        agentId: row.agentId,
+        fallbackAgentIds: row.fallbackAgentIds,
+        retrySame: row.retrySame,
+        concurrency: row.concurrency,
+        quorum: row.quorum,
+        label: row.label,
+      });
+    }
+  }
+}
+
+/**
+ * Retire a project's `development-lifecycle` row once the split ships:
+ * disable it (run history stays) and put any pre-existing stage-flow rows
+ * back to enabled + inheriting, so the seeding loop refreshes their graph
+ * from the (split) template. Returns the retired flow id, or null when there
+ * was nothing (left) to retire — a disabled legacy row is left alone.
+ */
+async function retireLegacyLifecycleFlow(db: Db, projectId: string): Promise<string | null> {
+  const legacy = await db.query.flows.findFirst({
+    where: and(eq(flows.projectId, projectId), eq(flows.slug, LEGACY_LIFECYCLE_SLUG)),
+    columns: { id: true, enabled: true },
+  });
+  if (!legacy || !legacy.enabled) return null;
+  await db
+    .update(flows)
+    .set({ enabled: false, updatedAt: new Date() })
+    .where(eq(flows.id, legacy.id));
+  await db
+    .update(flows)
+    .set({ enabled: true, customizedAt: null, updatedAt: new Date() })
+    .where(and(eq(flows.projectId, projectId), inArray(flows.slug, Object.keys(builtinFlows))));
+  console.log("[flows] retired legacy development-lifecycle flow", { projectId, flowId: legacy.id });
+  return legacy.id;
 }
 
 /**

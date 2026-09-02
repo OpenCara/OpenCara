@@ -14,6 +14,7 @@ import {
   agentRunLogs,
   agentRuns,
   agents,
+  flowRuns,
   flowRunSteps as flowRunStepsTable,
   projects,
   prompts,
@@ -36,6 +37,7 @@ import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import { providerFor } from "../scm/registry.js";
+import type { PullRequestState } from "../scm/types.js";
 import { AGENT_KINDS, type AgentKind } from "../agents/kinds.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
@@ -323,8 +325,74 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
     }
   }
 
+  // Grace period: hold the run, then re-read the PR and bail if it was
+  // merged/closed or picked up an ignored label while we waited.
+  const delaySeconds = cfg.delaySeconds ?? 0;
+  const prNumber = (payload.pull_request as { number?: unknown } | undefined)?.number;
+  if (delaySeconds > 0 && typeof prNumber === "number") {
+    const recheck = await waitReviewGracePeriod(ctx, delaySeconds, prNumber, cfg.labelsIgnore);
+    return { output: { matched: true, delayedSeconds: delaySeconds, recheck } };
+  }
+
   return { output: { matched: true } };
 };
+
+/** Pure: why a re-read PR should no longer be reviewed, or null to proceed. */
+export function gracePeriodSkipReason(
+  state: PullRequestState,
+  labelsIgnore: readonly string[],
+): string | null {
+  if (state.merged) return "PR was merged during the review grace period";
+  if (state.state !== "open") return "PR was closed during the review grace period";
+  const hit = labelsIgnore.find((l) => state.labels.includes(l));
+  if (hit) return `PR received labels-ignore '${hit}' during the review grace period`;
+  return null;
+}
+
+/** How long to sleep between run-status checks while waiting out a grace period. */
+const GRACE_POLL_MS = 15_000;
+
+async function waitReviewGracePeriod(
+  ctx: NodeRunCtx,
+  delaySeconds: number,
+  prNumber: number,
+  labelsIgnore: readonly string[],
+): Promise<PullRequestState> {
+  const deadline = Date.now() + delaySeconds * 1000;
+  // Sleep in slices so a run cancelled from the UI (or by the reaper) stops
+  // waiting instead of dispatching reviewers minutes after the cancel.
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(GRACE_POLL_MS, deadline - Date.now())));
+    const run = await ctx.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, ctx.flowRunId),
+      columns: { status: true },
+    });
+    if (run && run.status !== "running" && run.status !== "pending") {
+      throw new SkipFlowError(`run ${run.status} during the review grace period`);
+    }
+  }
+  const provider = await providerFor(
+    {
+      platform: ctx.scm.platform,
+      owner: ctx.project.owner,
+      name: ctx.project.name,
+      ...(ctx.scm.platform === "azure_devops"
+        ? { externalRepoId: ctx.scm.externalRepoId, azdoConnectionId: ctx.scm.connectionId }
+        : {}),
+    },
+    {
+      app: ctx.app,
+      ...(ctx.scm.platform === "github"
+        ? { githubInstallationId: ctx.scm.installation.githubInstallationId }
+        : {}),
+      azure: ctx.azure,
+    },
+  );
+  const state = await provider.getPullRequestState(prNumber);
+  const reason = gracePeriodSkipReason(state, labelsIgnore);
+  if (reason) throw new SkipFlowError(reason);
+  return state;
+}
 
 // Match a Projects v2 status-field change. Webhook payload reference:
 //   https://docs.github.com/en/webhooks/webhook-events-and-payloads#projects_v2_item

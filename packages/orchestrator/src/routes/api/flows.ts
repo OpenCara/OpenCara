@@ -11,7 +11,7 @@ import {
   flows,
   platformEvents,
 } from "../../db/schema.js";
-import { FlowDefinitionSchema, cloneAndNormalizeGraph } from "@opencara/flows";
+import { FlowDefinitionSchema, cloneAndNormalizeGraph, LEGACY_BUILTIN_FLOW_SLUGS } from "@opencara/flows";
 import {
   validateCron,
   nextCronOccurrences,
@@ -20,7 +20,7 @@ import {
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
-import { cancelFlowRunAgents } from "../../flows/cancelAgents.js";
+import { cancelFlowRun } from "../../flows/cancelRun.js";
 import type { FlowEngine } from "../../flows/engine.js";
 import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
 import {
@@ -51,7 +51,13 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const rows = await deps.db.query.flows.findMany({
       where: eq(flows.projectId, projectId),
     });
-    return c.json({ flows: rows });
+    // A retired built-in (the unified development-lifecycle flow, disabled by
+    // the split migration) keeps its row for run history but is not offered
+    // as a flow any more. Re-enabling it is not a supported path.
+    const visible = rows.filter(
+      (f) => f.enabled || !LEGACY_BUILTIN_FLOW_SLUGS.includes(f.slug),
+    );
+    return c.json({ flows: visible });
   });
 
   // Single flow detail with recent runs
@@ -526,48 +532,15 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     if (run.status !== "pending" && run.status !== "running") {
       return c.json({ error: "already terminal" }, 409);
     }
-    // The status predicate races against the engine's own terminal write
-    // (the run could finish between the SELECT above and this UPDATE).
-    // `.returning()` lets us tell honestly whether we actually cancelled,
-    // so a no-op UPDATE returns 409 instead of pretending we stopped a
-    // run that just finished.
-    const updated = await deps.db
-      .update(flowRuns)
-      .set({
-        status: "cancelled",
-        cancelReason: "user_stopped",
-        finishedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(flowRuns.id, id),
-          inArray(flowRuns.status, ["pending", "running"]),
-        ),
-      )
-      .returning({ id: flowRuns.id });
-    if (updated.length === 0) {
+    const result = await cancelFlowRun(
+      { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
+      { id, projectId: run.projectId },
+      "user_stopped",
+    );
+    if (!result.cancelled) {
       return c.json({ error: "already terminal" }, 409);
     }
-    // Flip the in-flight agent_runs rows and signal the device to actually
-    // kill the process. Without the WS frame, "cancelled" here was purely
-    // cosmetic — the agent kept executing on the device (and could still
-    // push commits / open PRs) until it finished naturally.
-    let signalled = 0;
-    if (deps.dispatcher) {
-      ({ signalled } = await cancelFlowRunAgents(
-        deps.db,
-        deps.dispatcher,
-        id,
-        "user_stopped",
-      ));
-    }
-    // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
-    // board, which LISTENs on `flow_runs` to refresh implement statuses).
-    void deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId: id, projectId: run.projectId }),
-    );
-    return c.json({ ok: true, signalled });
+    return c.json({ ok: true, signalled: result.signalled });
   });
 
   r.get("/flow-runs/:id", auth, async (c) => {

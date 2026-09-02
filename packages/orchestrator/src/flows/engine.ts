@@ -49,6 +49,8 @@ import {
 } from "./nodeRunners.js";
 import { runWithAgentPool } from "./agentPool.js";
 import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
+import { cancelPreemptedReviewRuns } from "./preempt.js";
+import { flowMayMatchEvent } from "./eventMatch.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
 import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
@@ -86,9 +88,16 @@ export class FlowEngine {
   onPlatformEvent(event: PlatformEventInput): void {
     if (!event.projectId) return;
     setImmediate(() => {
-      this.dispatchEvent(event).catch((err) => {
-        console.error("[flow-engine] dispatch error", { eventId: event.id, err });
-      });
+      // Pre-empt first: a merge / close / ignored label must stop an in-flight
+      // review before this same event gets a chance to start anything new.
+      cancelPreemptedReviewRuns(this.deps, event)
+        .catch((err) => {
+          console.error("[flow-engine] review pre-emption error", { eventId: event.id, err });
+        })
+        .then(() => this.dispatchEvent(event))
+        .catch((err) => {
+          console.error("[flow-engine] dispatch error", { eventId: event.id, err });
+        });
     });
   }
 
@@ -317,6 +326,12 @@ export class FlowEngine {
       if (triggers.length > 0 && triggers.every((t) => t.kind === "schedule.cron")) {
         continue;
       }
+      // Same idea for the stage flows: an event whose type / action / comment
+      // phrase can't satisfy ANY trigger of this flow gets no run at all,
+      // instead of a cancelled `trigger_skip` one. Filters that need PR
+      // context (branches, paths, labels, drafts) still run — and record
+      // their skip — inside the trigger step.
+      if (!flowMayMatchEvent(def, event)) continue;
 
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
