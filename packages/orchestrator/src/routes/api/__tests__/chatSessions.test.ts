@@ -45,6 +45,9 @@ interface FakeRows {
   >;
   /** projects keyed by id; ownership tested via addedByUserId. */
   projects: Record<string, { id: string; addedByUserId: string }>;
+  /** flows keyed by id — hydrateFromFlowRunStep resolves effective node
+   *  settings through the flow's slug + owner (flows/nodeSettings.ts). */
+  flows: Record<string, { id: string; projectId: string; slug: string }>;
   /** agent_runs grouped by flowRunStepId so the most-recent lookup is
    *  cheap and we can test multi-iteration cases. */
   agentRunsByStep: Record<
@@ -194,6 +197,20 @@ function makeFakeDb(rows: FakeRows): Db {
           }
           return undefined;
         },
+        findMany: ({ where: w }: { where: unknown }) => {
+          const params = collectStringParams(w);
+          return Object.values(rows.flowNodeSettings).filter((s) => params.includes(s.flowId));
+        },
+      },
+      // No template rows in these tests: every node setting is a project row.
+      templateNodeSettings: {
+        findMany: () => [],
+      },
+      flows: {
+        findFirst: ({ where: w }: { where: unknown }) => {
+          const params = collectStringParams(w);
+          return Object.values(rows.flows).find((f) => params.includes(f.id));
+        },
       },
       chatSessions: {
         // Serves both shapes resolveAgentWriteTarget issues:
@@ -237,6 +254,7 @@ function emptyFakeRows(): FakeRows {
     steps: {},
     runs: {},
     projects: {},
+    flows: {},
     agentRunsByStep: {},
     flowNodeSettings: {},
     activeRuns: [],
@@ -258,6 +276,7 @@ describe("loadFlowRunStepProject", () => {
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
     seed.runs["run1"] = { id: "run1", flowId: "flow1", projectId: "proj1" };
+    seed.flows["flow1"] = { id: "flow1", projectId: "proj1", slug: "development-lifecycle" };
     seed.projects["proj1"] = { id: "proj1", addedByUserId: "user1" };
     const got = await loadFlowRunStepProject(makeFakeDb(seed), "step1", "user1");
     assert.equal(got, "proj1");
@@ -279,6 +298,7 @@ describe("loadFlowRunStepProject", () => {
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
     seed.runs["run1"] = { id: "run1", flowId: "flow1", projectId: "proj1" };
+    seed.flows["flow1"] = { id: "flow1", projectId: "proj1", slug: "development-lifecycle" };
     seed.projects["proj1"] = { id: "proj1", addedByUserId: "user1" };
     const got = await loadFlowRunStepProject(makeFakeDb(seed), "step1", "user2");
     assert.equal(got, undefined);
@@ -290,6 +310,7 @@ describe("hydrateFromFlowRunStep", () => {
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
     seed.runs["run1"] = { id: "run1", flowId: "flow1", projectId: "proj1" };
+    seed.flows["flow1"] = { id: "flow1", projectId: "proj1", slug: "development-lifecycle" };
     seed.agentRunsByStep["step1"] = [
       {
         id: "ar1",
@@ -336,6 +357,7 @@ describe("hydrateFromFlowRunStep", () => {
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
     seed.runs["run1"] = { id: "run1", flowId: "flow1", projectId: "proj1" };
+    seed.flows["flow1"] = { id: "flow1", projectId: "proj1", slug: "development-lifecycle" };
     seed.agentRunsByStep["step1"] = [
       {
         id: "ar1",

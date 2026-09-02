@@ -100,6 +100,17 @@ export function ProjectFlowDetailPage() {
                 disabled
               </Badge>
             )}
+            <Badge
+              variant={flow.customizedAt ? "secondary" : "outline"}
+              className="ml-2 align-middle"
+              title={
+                flow.customizedAt
+                  ? "This project keeps its own graph; reset to follow your account-scope flow again"
+                  : "Graph follows your account-scope flow"
+              }
+            >
+              {flow.customizedAt ? "own graph" : "inherits account flow"}
+            </Badge>
           </h2>
           <p className="text-sm text-muted-foreground">
             {flow.graphJson.description ?? "—"}
@@ -123,10 +134,9 @@ export function ProjectFlowDetailPage() {
                   <DialogTitle>Reset “{flow.name}” to the template?</DialogTitle>
                   <DialogDescription>
                     Replaces this project's flow graph (nodes, edges, layout, trigger
-                    config) with the global template. Any reviewer add/remove or node
-                    edits made in this project are discarded, and the flow will track
-                    future template changes again. Agent/prompt assignments on nodes are
-                    kept.
+                    config) with your account-scope flow, and the graph follows future
+                    changes to it again. Per-node agent pool / prompt overrides made in
+                    this project are kept — revert those from each node's panel.
                   </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>

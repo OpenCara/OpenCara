@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { builtinFlows, type FlowDefinition } from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
@@ -7,6 +7,7 @@ import {
   foldLegacyReviewerSettings,
   graphHasPoolReviewer,
 } from "./legacyReviewerPool.js";
+import { loadEffectiveNodeSetting } from "./nodeSettings.js";
 import {
   flowNodeSettings,
   flows,
@@ -27,9 +28,9 @@ interface BuiltinGraph {
  * If the project owner has a `template_drafts` row for a given template, that
  * draft's graphJson is used as the seed instead of the code template — so the
  * project starts off matching whatever the user configured on the template
- * page. The same is true for `template_node_settings`: rows there are copied
- * into `flow_node_settings` (only when a project flow row is freshly inserted,
- * never overwriting existing per-project edits).
+ * page, and keeps tracking it until the project customizes its graph. Node
+ * settings are never copied: the owner's `template_node_settings` apply live
+ * unless the project overrides a node (flows/nodeSettings.ts).
  */
 export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): Promise<void> {
   const project = await db.query.projects.findFirst({
@@ -76,9 +77,10 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
       });
     }
 
-    if (didInsert && ownerUserId) {
-      await seedNodeSettingsFromTemplate(db, projectId, flowId, slug, ownerUserId, seed);
-    }
+    // Node settings are NOT copied: a fresh project inherits the owner's
+    // template_node_settings live (flows/nodeSettings.ts) until it overrides
+    // a node. `didInsert` is kept for the fold below.
+    void didInsert;
     // A customized flow keeps its own graph, so judge the fold on what the
     // flow actually runs, not on the seed it no longer tracks.
     const liveNodes =
@@ -101,8 +103,12 @@ export async function foldLegacyReviewerPoolForFlow(
   nodes: ReadonlyArray<{ id: string; kind: string }>,
 ): Promise<boolean> {
   if (!graphHasPoolReviewer(nodes)) return false;
+  // Inheritance-aware: an EFFECTIVE reviewer setting (project override OR the
+  // account template's row) means the pool is already configured — folding
+  // would only turn an inheriting project into an override.
+  const effective = await loadEffectiveNodeSetting(db, flowId, POOL_REVIEWER_NODE_ID);
+  if (effective) return false;
   const rows = await db.select().from(flowNodeSettings).where(eq(flowNodeSettings.flowId, flowId));
-  if (rows.some((r) => r.nodeId === POOL_REVIEWER_NODE_ID)) return false;
   const folded = foldLegacyReviewerSettings(rows);
   if (!folded) return false;
   await db.insert(flowNodeSettings).values({
@@ -179,49 +185,34 @@ async function resolveSeedGraph(
   return { nodes: def.nodes, edges: def.edges, description: def.description };
 }
 
-async function seedNodeSettingsFromTemplate(
+/**
+ * Push a saved account-scope template graph to every project flow of that
+ * slug (owned by the user) that still inherits it — i.e. has no
+ * `customizedAt`. Customized flows keep their own graph until reset. Graph
+ * sync is NOT a settings migration: it never touches flow_node_settings (a
+ * fold here would resurrect a project override from leftover reviewer_*
+ * rows on a project that inherits its reviewer pool).
+ */
+export async function syncInheritedFlowGraphs(
   db: Db,
-  projectId: string,
-  flowId: string,
-  slug: string,
   ownerUserId: string,
-  seed: BuiltinGraph,
-): Promise<void> {
-  const settings = await db
-    .select()
-    .from(templateNodeSettings)
+  slug: string,
+  graph: { nodes: ReadonlyArray<{ id: string; kind: string }>; edges: unknown; description?: string },
+): Promise<number> {
+  const owned = await db
+    .select({ id: flows.id })
+    .from(flows)
+    .innerJoin(projects, eq(projects.id, flows.projectId))
     .where(
-      and(
-        eq(templateNodeSettings.userId, ownerUserId),
-        eq(templateNodeSettings.templateSlug, slug),
-      ),
+      and(eq(projects.addedByUserId, ownerUserId), eq(flows.slug, slug), isNull(flows.customizedAt)),
     );
-  if (settings.length === 0) return;
-  const knownNodeIds = new Set(seed.nodes.map((n) => n.id));
-  for (const s of settings) {
-    if (!knownNodeIds.has(s.nodeId)) continue;
-    const exists = await db.query.flowNodeSettings.findFirst({
-      where: and(
-        eq(flowNodeSettings.flowId, flowId),
-        eq(flowNodeSettings.nodeId, s.nodeId),
-      ),
-      columns: { id: true },
-    });
-    if (exists) continue;
-    await db.insert(flowNodeSettings).values({
-      id: ulid(),
-      projectId,
-      flowId,
-      nodeId: s.nodeId,
-      promptId: s.promptId,
-      agentId: s.agentId,
-      fallbackAgentIds: s.fallbackAgentIds,
-      retrySame: s.retrySame,
-      concurrency: s.concurrency,
-      quorum: s.quorum,
-      label: s.label,
-    });
+  for (const f of owned) {
+    await db
+      .update(flows)
+      .set({ graphJson: graph, updatedAt: new Date() })
+      .where(eq(flows.id, f.id));
   }
+  return owned.length;
 }
 
 export async function seedBuiltinFlowsForAllProjects(db: Db): Promise<void> {

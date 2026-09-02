@@ -11,6 +11,7 @@ import {
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { loadEffectiveNodeSetting, loadEffectiveNodeSettings } from "../../flows/nodeSettings.js";
 
 interface PromptRoutesDeps {
   db: Db;
@@ -139,12 +140,35 @@ export function promptRoutes(deps: PromptRoutesDeps) {
       where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
     });
     if (!flow) return c.json({ error: "flow not found in project" }, 404);
-    const rows = await deps.db
-      .select()
-      .from(flowNodeSettings)
-      .where(eq(flowNodeSettings.flowId, flowId));
+    // Effective rows: the project's overrides plus the account template's
+    // defaults for every node it doesn't override (`source` tells which).
+    const rows = await loadEffectiveNodeSettings(deps.db, flowId);
     return c.json({ settings: rows });
   });
+
+  // Drop a project's override for one node so it inherits the account-scope
+  // template row again. Idempotent — no override, nothing to do.
+  r.delete(
+    "/projects/:projectId/flows/:flowId/nodes/:nodeId/settings",
+    auth,
+    async (c) => {
+      const user = c.get("user")!;
+      const projectId = c.req.param("projectId");
+      const flowId = c.req.param("flowId");
+      const nodeId = c.req.param("nodeId");
+      const owned = await loadOwnedProject(deps.db, projectId, user.id);
+      if (!owned) return c.json({ error: "flow not found in project" }, 404);
+      const flow = await deps.db.query.flows.findFirst({
+        where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
+      });
+      if (!flow) return c.json({ error: "flow not found in project" }, 404);
+      await deps.db
+        .delete(flowNodeSettings)
+        .where(and(eq(flowNodeSettings.flowId, flowId), eq(flowNodeSettings.nodeId, nodeId)));
+      const setting = await loadEffectiveNodeSetting(deps.db, flowId, nodeId);
+      return c.json({ setting });
+    },
+  );
 
   r.put(
     "/projects/:projectId/flows/:flowId/nodes/:nodeId/settings",
@@ -241,41 +265,31 @@ export function promptRoutes(deps: PromptRoutesDeps) {
           ...(pool.concurrency !== KEEP ? { concurrency: pool.concurrency } : {}),
           ...(pool.quorum !== KEEP ? { quorum: pool.quorum } : {}),
           updatedAt: new Date().toISOString(),
+          source: "project" as const,
         };
         return c.json({ setting: merged });
       }
+      // First edit on an inherited node: the override row starts from the
+      // template's values and applies just the fields sent, so a partial
+      // PUT (say, only `retrySame`) doesn't silently blank the agent pool.
+      const inherited = await loadEffectiveNodeSetting(deps.db, flowId, nodeId);
       const id = ulid();
       await deps.db.insert(flowNodeSettings).values({
         id,
         projectId,
         flowId,
         nodeId,
-        promptId: promptId === "__keep__" ? null : promptId,
-        agentId: agentId === "__keep__" ? null : agentId,
-        label: label === "__keep__" ? null : label,
-        fallbackAgentIds: pool.fallbackAgentIds === KEEP ? [] : pool.fallbackAgentIds,
-        retrySame: pool.retrySame === KEEP ? 0 : pool.retrySame,
-        concurrency: pool.concurrency === KEEP ? 1 : pool.concurrency,
-        quorum: pool.quorum === KEEP ? 1 : pool.quorum,
+        promptId: promptId === "__keep__" ? (inherited?.promptId ?? null) : promptId,
+        agentId: agentId === "__keep__" ? (inherited?.agentId ?? null) : agentId,
+        label: label === "__keep__" ? (inherited?.label ?? null) : label,
+        fallbackAgentIds:
+          pool.fallbackAgentIds === KEEP ? (inherited?.fallbackAgentIds ?? []) : pool.fallbackAgentIds,
+        retrySame: pool.retrySame === KEEP ? (inherited?.retrySame ?? 0) : pool.retrySame,
+        concurrency: pool.concurrency === KEEP ? (inherited?.concurrency ?? 1) : pool.concurrency,
+        quorum: pool.quorum === KEEP ? (inherited?.quorum ?? 1) : pool.quorum,
       });
-      return c.json(
-        {
-          setting: {
-            id,
-            projectId,
-            flowId,
-            nodeId,
-            promptId: promptId === "__keep__" ? null : promptId,
-            agentId: agentId === "__keep__" ? null : agentId,
-            label: label === "__keep__" ? null : label,
-            fallbackAgentIds: pool.fallbackAgentIds === KEEP ? [] : pool.fallbackAgentIds,
-            retrySame: pool.retrySame === KEEP ? 0 : pool.retrySame,
-        concurrency: pool.concurrency === KEEP ? 1 : pool.concurrency,
-        quorum: pool.quorum === KEEP ? 1 : pool.quorum,
-          },
-        },
-        201,
-      );
+      const created = await loadEffectiveNodeSetting(deps.db, flowId, nodeId);
+      return c.json({ setting: created }, 201);
     },
   );
 

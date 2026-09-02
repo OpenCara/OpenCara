@@ -33,6 +33,7 @@ export function FlowTemplateDetailPage() {
   const hasDraft = q.data.hasDraft ?? false;
   const prompts = promptsQ.data?.prompts ?? [];
   const agents = agentsQ.data?.agents ?? [];
+  const overrides = q.data.overrides ?? [];
 
   const selectedNode = selectedNodeId
     ? t.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
@@ -78,6 +79,46 @@ export function FlowTemplateDetailPage() {
         prompts={prompts}
         onClose={() => setSelectedNodeId(null)}
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-medium">
+            Project overrides
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {overrides.length === 0
+                ? "every project follows this flow"
+                : `${overrides.length} project${overrides.length === 1 ? "" : "s"} diverge`}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Projects use this account-scope flow by default — graph and per-node agent
+            pools / prompts alike. A project listed here has chosen to override part of
+            it; open it to see or revert the override.
+          </p>
+          {overrides.length > 0 && (
+            <ul className="divide-y rounded-md border">
+              {overrides.map((o) => (
+                <li key={o.projectId} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <Link
+                    to={`/projects/${o.projectId}/flows/${t.slug}`}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {o.owner}/{o.name}
+                  </Link>
+                  {o.graphCustomized && <Badge variant="secondary">own graph</Badge>}
+                  {o.nodeOverrides.map((n) => (
+                    <Badge key={n} variant="outline">
+                      {n}
+                    </Badge>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
