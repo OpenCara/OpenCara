@@ -4,16 +4,9 @@ import { Link, useParams } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
-import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
-import {
-  NodeEditor,
-  deriveReviewerIds,
-  hasMultiReviewShape,
-  useAddReviewer,
-  useRemoveReviewer,
-  type EditorScope,
-} from "@/components/flow/NodeEditor";
+import { FlowGraph } from "@/components/flow/FlowGraph";
+import { buildFlowNodeDisplays } from "@/lib/flowNodeLabels";
+import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
 import {
   agentsQuery,
   flowTemplateDetailQuery,
@@ -25,11 +18,7 @@ export function FlowTemplateDetailPage() {
   const q = useQuery(flowTemplateDetailQuery(slug!));
   const promptsQ = useQuery(promptsQuery());
   const agentsQ = useQuery(agentsQuery());
-  // Scope + reviewer mutation hooks before the early returns so they're called
-  // unconditionally; the template slug comes from the route param, not loaded data.
   const scope: EditorScope = { kind: "template", slug: slug! };
-  const addReviewer = useAddReviewer(scope);
-  const removeReviewer = useRemoveReviewer(scope);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -49,27 +38,7 @@ export function FlowTemplateDetailPage() {
     ? t.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = buildFlowNodeLabels(t.graphJson.nodes, settings, agents);
-
-  // Structural shape check, not slug — see ProjectFlowDetailPage.
-  const reviewerIds = deriveReviewerIds(t.graphJson);
-  const reviewerControls: FlowReviewerControls | undefined = hasMultiReviewShape(t.graphJson)
-    ? {
-        reviewerIds,
-        canDelete: reviewerIds.size > 1,
-        pending: addReviewer.isPending || removeReviewer.isPending,
-        onAdd: () => addReviewer.mutate(),
-        onDelete: (nodeId) =>
-          removeReviewer.mutate(
-            { nodeId },
-            {
-              onSuccess: () => {
-                if (selectedNodeId === nodeId) setSelectedNodeId(null);
-              },
-            },
-          ),
-      }
-    : undefined;
+  const nodeDisplays = buildFlowNodeDisplays(t.graphJson.nodes, settings, agents, prompts);
 
   return (
     <div className="space-y-6">
@@ -97,8 +66,7 @@ export function FlowTemplateDetailPage() {
       <FlowGraph
         nodes={t.graphJson.nodes}
         edges={t.graphJson.edges}
-        labelOverrides={labelOverrides}
-        reviewerControls={reviewerControls}
+        nodeDisplays={nodeDisplays}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
 

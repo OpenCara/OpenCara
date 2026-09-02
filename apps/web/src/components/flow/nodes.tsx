@@ -1,7 +1,6 @@
-import type { ReactNode } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
-import { Webhook, Bot, Send, Tag, MessageCircle, Plus, X, type LucideIcon } from "lucide-react";
+import { Webhook, Bot, Send, Tag, MessageCircle, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
@@ -18,14 +17,9 @@ const statusRing: Record<StepStatus | "idle", string> = {
 interface NodeData extends Record<string, unknown> {
   label: string;
   subtitle?: string;
+  /** Extra rows under the label — an agent node lists its pool agents here. */
+  lines?: string[];
   status?: StepStatus | "idle";
-  // Reviewer-management extras, set by FlowGraph only on the editable flow
-  // canvas (absent in the read-only run view, so no controls render there).
-  isReviewer?: boolean;
-  canDelete?: boolean;
-  pending?: boolean;
-  onDeleteReviewer?: (id: string) => void;
-  onAddReviewer?: () => void;
 }
 
 interface BaseProps {
@@ -33,11 +27,9 @@ interface BaseProps {
   icon: LucideIcon;
   hasIn?: boolean;
   hasOut?: boolean;
-  /** Optional overlay (e.g. a delete button), positioned by the caller. */
-  action?: ReactNode;
 }
 
-function BaseNode({ data, icon: Icon, hasIn = true, hasOut = true, action }: BaseProps) {
+function BaseNode({ data, icon: Icon, hasIn = true, hasOut = true }: BaseProps) {
   const status: StepStatus | "idle" = data.status ?? "idle";
   return (
     <div
@@ -52,12 +44,20 @@ function BaseNode({ data, icon: Icon, hasIn = true, hasOut = true, action }: Bas
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{data.label}</div>
+        {data.lines && data.lines.length > 0 && (
+          <ul className="mt-0.5 space-y-0.5 text-xs leading-tight text-muted-foreground">
+            {data.lines.map((line, i) => (
+              <li key={`${i}-${line}`} className="truncate">
+                {line}
+              </li>
+            ))}
+          </ul>
+        )}
         {data.subtitle && (
           <div className="truncate text-xs text-muted-foreground">{data.subtitle}</div>
         )}
       </div>
       {hasOut && <Handle type="source" position={Position.Right} />}
-      {action}
     </div>
   );
 }
@@ -65,31 +65,8 @@ function BaseNode({ data, icon: Icon, hasIn = true, hasOut = true, action }: Bas
 export function TriggerNode({ data }: NodeProps) {
   return <BaseNode data={data as NodeData} icon={Webhook} hasIn={false} />;
 }
-export function AgentNode({ id, data }: NodeProps) {
-  const d = data as NodeData;
-  const deletable = d.isReviewer && d.canDelete;
-  return (
-    <BaseNode
-      data={d}
-      icon={Bot}
-      action={
-        deletable ? (
-          <button
-            type="button"
-            className="nodrag nopan absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:border-destructive hover:bg-destructive hover:text-destructive-foreground disabled:pointer-events-none disabled:opacity-40"
-            disabled={d.pending}
-            title="Remove this reviewer"
-            onClick={(e) => {
-              e.stopPropagation();
-              d.onDeleteReviewer?.(id);
-            }}
-          >
-            <X className="size-3" />
-          </button>
-        ) : undefined
-      }
-    />
-  );
+export function AgentNode({ data }: NodeProps) {
+  return <BaseNode data={data as NodeData} icon={Bot} />;
 }
 export function PostReviewNode({ data }: NodeProps) {
   return <BaseNode data={data as NodeData} icon={Send} hasOut={false} />;
@@ -101,35 +78,10 @@ export function AddLabelNode({ data }: NodeProps) {
   return <BaseNode data={data as NodeData} icon={Tag} hasOut={false} />;
 }
 
-/**
- * A synthetic "+" node placed in the gap between the PR trigger and the
- * reviewer column on the editable flow canvas. Not a real graph node —
- * clicking it calls the add-reviewer mutation, which inserts a real reviewer
- * wired trigger → reviewer → synthesizer.
- */
-export function AddReviewerNode({ data }: NodeProps) {
-  const d = data as NodeData;
-  return (
-    <button
-      type="button"
-      className="nodrag nopan flex size-8 items-center justify-center rounded-full border border-dashed bg-card/40 text-muted-foreground shadow-sm transition-colors hover:border-primary hover:text-primary disabled:pointer-events-none disabled:opacity-50"
-      disabled={d.pending}
-      title="Add a reviewer to this review stage"
-      onClick={(e) => {
-        e.stopPropagation();
-        d.onAddReviewer?.();
-      }}
-    >
-      <Plus className="size-4" />
-    </button>
-  );
-}
-
 export const flowNodeTypes = {
   trigger: TriggerNode,
   agent: AgentNode,
   postReview: PostReviewNode,
   addComment: AddCommentNode,
   addLabel: AddLabelNode,
-  addReviewer: AddReviewerNode,
 };

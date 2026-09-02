@@ -12,6 +12,7 @@ import {
   flowNodeSettingsQuery,
   flowRunDetailQuery,
   projectFlowsQuery,
+  promptsQuery,
   useRerunFlow,
   type AgentRunRow,
   type FlowRunStep,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative, formatAbsolute } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
-import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
+import { buildFlowNodeDisplays } from "@/lib/flowNodeLabels";
 import {
   aggregateNodeStatus,
   groupAttemptsByNode,
@@ -64,23 +65,28 @@ export function FlowRunDetailPage() {
     enabled: !!flow,
   });
   const agentsQ = useQuery(agentsQuery());
-  // Node display names, agent-first (see buildFlowNodeLabels). On a run we can
-  // do better than the flow's linked agent: the step row records the agent the
-  // engine actually resolved (an `agent:<name>` issue/PR label or the project
-  // default implement agent both outrank the node link), so that wins once the
-  // step exists.
-  const labelOverrides = useMemo<Record<string, string>>(() => {
-    const m = buildFlowNodeLabels(
+  const promptsQ = useQuery(promptsQuery());
+  // Node displays (prompt name + pool agents, see buildFlowNodeDisplays). On a
+  // run we can do better than the configured pool: each attempt's step row
+  // records the agent the engine actually ran (an `agent:<name>` issue/PR
+  // label or the project default implement agent both outrank the node's
+  // list), so the agents that ran replace the list once steps exist.
+  const nodeDisplays = useMemo(() => {
+    const ran: Record<string, string[]> = {};
+    for (const step of data?.steps ?? []) {
+      const name = parseAgentPrompt(step.inputJson)?.agentName;
+      if (!name) continue;
+      const list = (ran[step.nodeId] ??= []);
+      if (!list.includes(name)) list.push(name);
+    }
+    return buildFlowNodeDisplays(
       flow?.graphJson.nodes ?? [],
       settingsQ.data?.settings ?? [],
       agentsQ.data?.agents ?? [],
+      promptsQ.data?.prompts ?? [],
+      ran,
     );
-    for (const step of data?.steps ?? []) {
-      const ran = parseAgentPrompt(step.inputJson)?.agentName;
-      if (ran) m[step.nodeId] = ran;
-    }
-    return m;
-  }, [flow, settingsQ.data, agentsQ.data, data?.steps]);
+  }, [flow, settingsQ.data, agentsQ.data, promptsQ.data, data?.steps]);
 
   // Agent-pool retries/failovers each add a step row sharing the nodeId. The
   // graph badge and the rerun control need the node's OUTCOME across all of
@@ -147,7 +153,7 @@ export function FlowRunDetailPage() {
         nodes={flow.graphJson.nodes}
         edges={flow.graphJson.edges}
         stepStatuses={stepStatuses}
-        labelOverrides={labelOverrides}
+        nodeDisplays={nodeDisplays}
         onNodeClick={(id) => {
           setSelectedNodeId(id);
           setSelectedStepId(null);

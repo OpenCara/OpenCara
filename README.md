@@ -35,7 +35,7 @@ Each incoming webhook activates only the matching stage's subgraph, so a single 
 
    First start prints a pairing code and opens `/devices/pair` in your browser; confirm there, and the daemon stays connected waiting for jobs. Keep it running (tmux, systemd, …). Pair as many devices as you like.
 5. **Create an agent** (`/agents`): pick a kind (`claude`, `codex`, `opencode`, `pi`, `omp`, or `cursor` — see [Agent kinds](#agent-kinds-acp)) and set the provider API key in the agent's env. The device must have the underlying tool available (e.g. the `claude` CLI for kind `claude`; the `npx`-based adapters fetch themselves).
-6. **Bind the agent to the flow**: open the project's flow, and assign your agent (and optionally a custom prompt) to the implement and reviewer nodes.
+6. **Bind agents to the flow**: open the project's flow and click a node — pick a prompt (optional) and add your agents in priority order. The first agent is the node's primary; the rest are fallbacks. On the reviewer node, set "Run in parallel" to the number of reviews you want per PR.
 7. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
 
 Self-hosting the orchestrator instead is just this repo + Postgres + your own GitHub App — see [Development](#development) and [Deployment](#deployment).

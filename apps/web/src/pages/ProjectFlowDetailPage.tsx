@@ -35,16 +35,9 @@ import {
   type FlowRunSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
-import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
-import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
-import {
-  NodeEditor,
-  deriveReviewerIds,
-  hasMultiReviewShape,
-  useAddReviewer,
-  useRemoveReviewer,
-  type EditorScope,
-} from "@/components/flow/NodeEditor";
+import { FlowGraph } from "@/components/flow/FlowGraph";
+import { buildFlowNodeDisplays } from "@/lib/flowNodeLabels";
+import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
 
 export function ProjectFlowDetailPage() {
   const { id, slug } = useParams();
@@ -61,17 +54,12 @@ export function ProjectFlowDetailPage() {
   const setEnabled = useSetFlowEnabled(projectId, slug!);
   const resetFlow = useResetFlow(projectId, slug!);
   const [resetOpen, setResetOpen] = useState(false);
-  // Scope built before the early returns so the reviewer mutation hooks below
-  // are called unconditionally (flowId is empty until the flow loads — fine,
-  // the mutations are only invoked on user action after load).
   const scope: EditorScope = {
     kind: "project",
     projectId,
     slug: slug!,
     flowId: q.data?.flow.id ?? "",
   };
-  const addReviewer = useAddReviewer(scope);
-  const removeReviewer = useRemoveReviewer(scope);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -85,29 +73,7 @@ export function ProjectFlowDetailPage() {
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = buildFlowNodeLabels(flow.graphJson.nodes, settings, agents);
-
-  // Structural, not slug-based: any flow whose graph has the
-  // trigger → reviewers → synthesizer shape gets the add/remove-reviewer
-  // controls — including the development-lifecycle review stage.
-  const reviewerIds = deriveReviewerIds(flow.graphJson);
-  const reviewerControls: FlowReviewerControls | undefined = hasMultiReviewShape(flow.graphJson)
-    ? {
-        reviewerIds,
-        canDelete: reviewerIds.size > 1,
-        pending: addReviewer.isPending || removeReviewer.isPending,
-        onAdd: () => addReviewer.mutate(),
-        onDelete: (nodeId) =>
-          removeReviewer.mutate(
-            { nodeId },
-            {
-              onSuccess: () => {
-                if (selectedNodeId === nodeId) setSelectedNodeId(null);
-              },
-            },
-          ),
-      }
-    : undefined;
+  const nodeDisplays = buildFlowNodeDisplays(flow.graphJson.nodes, settings, agents, prompts);
 
   const onRun = () => {
     trigger.mutate(flow.slug, {
@@ -232,8 +198,7 @@ export function ProjectFlowDetailPage() {
       <FlowGraph
         nodes={flow.graphJson.nodes}
         edges={flow.graphJson.edges}
-        labelOverrides={labelOverrides}
-        reviewerControls={reviewerControls}
+        nodeDisplays={nodeDisplays}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
 
