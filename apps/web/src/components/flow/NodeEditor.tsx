@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Bot, Cpu, ExternalLink, ListOrdered, Sparkles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Cpu, ExternalLink, Sparkles, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -162,34 +162,6 @@ function useSetNodeConfig(scope: EditorScope) {
   });
 }
 
-export function useAddReviewer(scope: EditorScope) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => {
-      const url =
-        scope.kind === "project"
-          ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/reviewers`
-          : `/api/flow-templates/${scope.slug}/reviewers`;
-      return api.post<{ addedNodeId: string }>(url);
-    },
-    onSuccess: () => invalidateScope(qc, scope, ["graph"]),
-  });
-}
-
-export function useRemoveReviewer(scope: EditorScope) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { nodeId: string }) => {
-      const url =
-        scope.kind === "project"
-          ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/reviewers/${vars.nodeId}`
-          : `/api/flow-templates/${scope.slug}/reviewers/${vars.nodeId}`;
-      return api.delete(url);
-    },
-    onSuccess: () => invalidateScope(qc, scope, ["graph", "settings"]),
-  });
-}
-
 function invalidateScope(
   qc: ReturnType<typeof useQueryClient>,
   scope: EditorScope,
@@ -236,27 +208,31 @@ function AgentNodePanel({
   const linkedPromptId = setting?.promptId ?? null;
   const linkedAgentId = setting?.agentId ?? null;
 
-  // Agent pool (failover): the linked agent is the primary; these run after
-  // it, in order, when an attempt fails. One prompt for the whole pool.
+  // Agent pool: ONE ordered list. The first entry is the node's primary
+  // (`agentId`), the rest are fallbacks (`fallbackAgentIds`) tried after it
+  // when an attempt fails. One prompt for the whole pool.
   const fallbackAgentIds = setting?.fallbackAgentIds ?? [];
+  const agentIds = [
+    ...(linkedAgentId ? [linkedAgentId] : []),
+    ...fallbackAgentIds.filter((id) => id !== linkedAgentId),
+  ];
   const retrySame = setting?.retrySame ?? 0;
   const concurrency = setting?.concurrency ?? 1;
   const quorum = setting?.quorum ?? 1;
-  const poolSize = (linkedAgentId ? 1 : 0) + fallbackAgentIds.length;
+  const poolSize = agentIds.length;
   const clampInt = (raw: string, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, Math.trunc(Number(raw) || lo)));
-  const addableFallbacks = agents.filter(
-    (a) => a.id !== linkedAgentId && !fallbackAgentIds.includes(a.id),
-  );
-  const saveFallbacks = (ids: string[]) =>
-    set.mutate({ nodeId: node.id, fallbackAgentIds: ids });
-  const moveFallback = (from: number, to: number) => {
-    if (to < 0 || to >= fallbackAgentIds.length) return;
-    const next = [...fallbackAgentIds];
+  const addableAgents = agents.filter((a) => !agentIds.includes(a.id));
+  const savePool = (ids: string[]) =>
+    set.mutate({ nodeId: node.id, agentId: ids[0] ?? null, fallbackAgentIds: ids.slice(1) });
+  const movePoolAgent = (from: number, to: number) => {
+    if (to < 0 || to >= agentIds.length) return;
+    const next = [...agentIds];
     const [item] = next.splice(from, 1);
     next.splice(to, 0, item!);
-    saveFallbacks(next);
-  };  const linkedPrompt = linkedPromptId
+    savePool(next);
+  };
+  const linkedPrompt = linkedPromptId
     ? prompts.find((p) => p.id === linkedPromptId) ?? null
     : null;
   const linkedAgent = linkedAgentId
@@ -307,10 +283,12 @@ function AgentNodePanel({
           <div className="text-sm font-medium">Display name</div>
           {linkedAgent ? (
             <p className="text-xs text-muted-foreground">
-              Shown on the graph and used as the section heading when this node
-              feeds a synthesizer. Taken from the linked agent —{" "}
+              On the graph this node is titled by its prompt (or the label below when
+              none is linked) with the pool listed underneath. The section heading a
+              synthesizer sees still comes from the agent that ran — for the primary
+              that is{" "}
               <span className="font-medium text-foreground">{linkedAgent.name}</span>
-              . Rename it on the{" "}
+              . Rename agents on the{" "}
               <Link to="/agents" className="text-foreground underline">
                 agents page
               </Link>
@@ -332,9 +310,9 @@ function AgentNodePanel({
                 className="max-w-md"
               />
               <p className="text-xs text-muted-foreground">
-                Shown on the graph + used as a section heading when feeding a
-                synthesizer. Empty resets to "{defaultLabel}". Once you link an
-                agent below, its name is used instead.
+                Graph title when no prompt is linked, and the section heading a
+                synthesizer sees until an agent is added (the agent's name takes
+                over). Empty resets to "{defaultLabel}".
               </p>
             </>
           )}
@@ -342,22 +320,124 @@ function AgentNodePanel({
 
         <div className="space-y-2">
           <div className="flex items-center gap-1 text-sm font-medium">
-            <Cpu className="size-3.5" />
-            Linked agent
-            <span className="text-xs font-normal text-muted-foreground">(required)</span>
+            <Sparkles className="size-3.5" />
+            Prompt
+            <span className="text-xs font-normal text-muted-foreground">
+              (optional · shared by every agent in the pool)
+            </span>
           </div>
           <Select
-            value={linkedAgentId ?? NONE}
+            value={linkedPromptId ?? NONE}
             onValueChange={(v) => {
-              set.mutate({ nodeId: node.id, agentId: v === NONE ? null : v });
+              set.mutate({ nodeId: node.id, promptId: v === NONE ? null : v });
             }}
           >
             <SelectTrigger className="w-full max-w-md">
-              <SelectValue placeholder="(none — runs will fail)" />
+              <SelectValue placeholder="(none)" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NONE}>(none — runs will fail)</SelectItem>
-              {agents.map((a) => (
+              <SelectItem value={NONE}>(none)</SelectItem>
+              {prompts.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {prompts.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No prompts yet.{" "}
+              <Link to="/prompts" className="text-foreground underline">
+                Create one
+              </Link>
+              .
+            </p>
+          )}
+          {linkedPrompt && (
+            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs">
+              {linkedPrompt.body}
+            </pre>
+          )}
+          {set.error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Save failed.
+            </div>
+          )}
+          <Link
+            to="/prompts"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Manage prompts <ExternalLink className="size-3" />
+          </Link>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center gap-1 text-sm font-medium">
+            <Cpu className="size-3.5" />
+            Agents
+            <span className="text-xs font-normal text-muted-foreground">
+              (priority order · the first is the node's primary)
+            </span>
+          </div>
+          {agentIds.length > 0 ? (
+            <ol className="max-w-md divide-y rounded-md border">
+              {agentIds.map((id, i) => {
+                const a = agents.find((x) => x.id === id);
+                return (
+                  <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                    <span className="w-5 text-xs text-muted-foreground">{i + 1}.</span>
+                    <span className={cn("flex-1 truncate", !a && "text-destructive")}>
+                      {a?.name ?? `(deleted agent …${id.slice(-6)})`}
+                    </span>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={i === 0 || set.isPending}
+                      onClick={() => movePoolAgent(i, i - 1)}
+                      title="Move up"
+                    >
+                      <ArrowUp />
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={i === agentIds.length - 1 || set.isPending}
+                      onClick={() => movePoolAgent(i, i + 1)}
+                      title="Move down"
+                    >
+                      <ArrowDown />
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={set.isPending}
+                      onClick={() => savePool(agentIds.filter((x) => x !== id))}
+                      title="Remove"
+                    >
+                      <X />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="text-xs text-destructive">
+              No agent yet — runs of this node will fail until one is added.
+            </p>
+          )}
+          <Select
+            value={NONE}
+            onValueChange={(v) => {
+              if (v !== NONE) savePool([...agentIds, v]);
+            }}
+            disabled={addableAgents.length === 0 || set.isPending}
+          >
+            <SelectTrigger className="w-full max-w-md">
+              <SelectValue placeholder="Add an agent…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Add an agent…</SelectItem>
+              {addableAgents.map((a) => (
                 <SelectItem key={a.id} value={a.id}>
                   {a.name}
                 </SelectItem>
@@ -375,8 +455,9 @@ function AgentNodePanel({
           )}
           {linkedAgent &&
             (() => {
-              // Show the effective ACP invocation: the kind-fixed command plus
-              // the agent's adapter-args override or the kind default.
+              // Show the primary's effective ACP invocation: the kind-fixed
+              // command plus the agent's adapter-args override or the kind
+              // default.
               const effArgs = linkedAgent.acpArgs ?? linkedAgent.defaultAcpArgs;
               return (
                 <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
@@ -391,75 +472,7 @@ function AgentNodePanel({
             })()}
 
           <div className="mt-3 space-y-2">
-            <div className="flex items-center gap-1 text-sm font-medium">
-              <ListOrdered className="size-3.5" />
-              Fallback agents
-              <span className="text-xs font-normal text-muted-foreground">
-                (optional · priority order)
-              </span>
-            </div>
-            {fallbackAgentIds.length > 0 && (
-              <ol className="max-w-md divide-y rounded-md border">
-                {fallbackAgentIds.map((id, i) => {
-                  const a = agents.find((x) => x.id === id);
-                  return (
-                    <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                      <span className="w-5 text-xs text-muted-foreground">{i + 2}.</span>
-                      <span className={cn("flex-1 truncate", !a && "text-destructive")}>
-                        {a?.name ?? `(deleted agent …${id.slice(-6)})`}
-                      </span>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        disabled={i === 0 || set.isPending}
-                        onClick={() => moveFallback(i, i - 1)}
-                        title="Move up"
-                      >
-                        <ArrowUp />
-                      </Button>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        disabled={i === fallbackAgentIds.length - 1 || set.isPending}
-                        onClick={() => moveFallback(i, i + 1)}
-                        title="Move down"
-                      >
-                        <ArrowDown />
-                      </Button>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        disabled={set.isPending}
-                        onClick={() => saveFallbacks(fallbackAgentIds.filter((x) => x !== id))}
-                        title="Remove"
-                      >
-                        <X />
-                      </Button>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-            <Select
-              value={NONE}
-              onValueChange={(v) => {
-                if (v !== NONE) saveFallbacks([...fallbackAgentIds, v]);
-              }}
-              disabled={addableFallbacks.length === 0 || set.isPending}
-            >
-              <SelectTrigger className="w-full max-w-md">
-                <SelectValue placeholder="Add a fallback agent…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>Add a fallback agent…</SelectItem>
-                {addableFallbacks.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex max-w-md items-center gap-3">
+            <div className="flex max-w-md flex-wrap items-center gap-3">
               <Label htmlFor={`retry-same-${node.id}`} className="shrink-0 text-sm">
                 Retries per agent
               </Label>
@@ -473,12 +486,10 @@ function AgentNodePanel({
                 defaultValue={retrySame}
                 key={`retry-same-${node.id}-${retrySame}`}
                 onBlur={(e) => {
-                  const n = Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0)));
+                  const n = clampInt(e.target.value, 0, 5);
                   if (n !== retrySame) set.mutate({ nodeId: node.id, retrySame: n });
                 }}
               />
-            </div>
-            <div className="flex max-w-md items-center gap-3">
               <Label htmlFor={`concurrency-${node.id}`} className="shrink-0 text-sm">
                 Run in parallel
               </Label>
@@ -534,57 +545,6 @@ function AgentNodePanel({
               )}
             </p>
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex items-center gap-1 text-sm font-medium">
-            <Sparkles className="size-3.5" />
-            Linked prompt
-            <span className="text-xs font-normal text-muted-foreground">(optional)</span>
-          </div>
-          <Select
-            value={linkedPromptId ?? NONE}
-            onValueChange={(v) => {
-              set.mutate({ nodeId: node.id, promptId: v === NONE ? null : v });
-            }}
-          >
-            <SelectTrigger className="w-full max-w-md">
-              <SelectValue placeholder="(none)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NONE}>(none)</SelectItem>
-              {prompts.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {prompts.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No prompts yet.{" "}
-              <Link to="/prompts" className="text-foreground underline">
-                Create one
-              </Link>
-              .
-            </p>
-          )}
-          {linkedPrompt && (
-            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs">
-              {linkedPrompt.body}
-            </pre>
-          )}
-          {set.error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              Save failed.
-            </div>
-          )}
-          <Link
-            to="/prompts"
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            Manage prompts <ExternalLink className="size-3" />
-          </Link>
         </div>
 
         <AgentDraftPrToggle scope={scope} node={node} />
@@ -1812,45 +1772,3 @@ function parseList(text: string): string[] {
     .filter(Boolean);
 }
 
-/* ─── Reviewer detection ────────────────────────────────────────── */
-
-/**
- * A "reviewer" node, in the multi-agent review flow, is any agent node that
- * feeds the synthesizer. Anchoring on the synthesizer (rather than "the PR
- * trigger") keeps detection correct when a graph has more than one PR trigger
- * — e.g. development-lifecycle's independent single-review component, whose
- * `single_reviewer` feeds its own post_review, NOT the synthesizer, so it is
- * correctly excluded. Purely structural, so added reviewers retain the role.
- */
-export function deriveReviewerIds(graph: {
-  nodes: Array<{ id: string; kind: string }>;
-  edges: Array<{ source: string; target: string }>;
-}): Set<string> {
-  const synth = graph.nodes.find(
-    (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-  );
-  if (!synth) return new Set();
-  const ids = new Set<string>();
-  for (const n of graph.nodes) {
-    if (n.kind !== "agent") continue;
-    if (n.id === synth.id) continue;
-    const toSynth = graph.edges.some((e) => e.source === n.id && e.target === synth.id);
-    if (toSynth) ids.add(n.id);
-  }
-  return ids;
-}
-
-/**
- * A flow exposes the add/remove-reviewer controls when its graph has the
- * fan-out review shape — a PR trigger feeding one or more reviewer agents that
- * feed a synthesizer. Detecting this structurally (instead of by slug) means
- * the controls light up for any flow with the shape: the standalone
- * `pr-review-multi`, the `development-lifecycle` review stage, and any future
- * flow built the same way.
- */
-export function hasMultiReviewShape(graph: {
-  nodes: Array<{ id: string; kind: string }>;
-  edges: Array<{ source: string; target: string }>;
-}): boolean {
-  return deriveReviewerIds(graph).size > 0;
-}

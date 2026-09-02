@@ -65,8 +65,9 @@ here does nothing).
 
 ## Out of scope
 
-Adding/removing nodes, adding reviewers, deleting reviewers, toggling
-\`enabled\` — those still go through the UI. The only mutation available
+Adding/removing nodes, editing a node's agent pool (the ordered agent
+list, parallelism, retries) or prompt link, toggling \`enabled\` — those
+still go through the UI. The only mutation available
 from this skill is \`opencara_flow_node_config_set\`.
 
 ## Hydrated stdin keys

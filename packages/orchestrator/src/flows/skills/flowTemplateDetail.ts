@@ -71,8 +71,8 @@ here does nothing).
 
 ## Out of scope
 
-Adding/removing reviewer nodes, editing per-node agent/prompt links —
-those still go through the UI. The only mutation available from this
+Editing per-node agent pools (the ordered agent list, parallelism,
+retries) and prompt links — those still go through the UI. The only mutation available from this
 skill is \`opencara_template_node_config_set\`.
 
 ## Hydrated stdin keys
