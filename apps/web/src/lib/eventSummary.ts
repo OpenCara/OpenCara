@@ -30,12 +30,29 @@ interface AzureEnvelope {
     pullRequestId?: number;
     status?: string;
     createdBy?: { displayName?: string };
+    // PR comment event, flat shape: the comment fields sit on resource.
     author?: { displayName?: string };
     _links?: { self?: { href?: string } };
+    // PR comment event, wrapped shape: { comment, pullRequest } (still
+    // accepted by azure/events.ts CommentResourceSchema).
+    comment?: { author?: { displayName?: string } };
+    pullRequest?: { pullRequestId?: number };
     id?: number;
     workItemId?: number;
     revisedBy?: { displayName?: string };
+    // workitem.created carries the actor in fields, not revisedBy. The
+    // identity is either an object or a "Name <email>" string.
+    fields?: Record<string, unknown>;
   };
+}
+
+function identityName(v: unknown): string | undefined {
+  if (typeof v === "string") return v.replace(/\s*<[^>]*>\s*$/, "") || undefined;
+  if (v && typeof v === "object" && "displayName" in v) {
+    const d = (v as { displayName?: unknown }).displayName;
+    return typeof d === "string" && d ? d : undefined;
+  }
+  return undefined;
 }
 
 function summarizeAzure(type: string, p: AzureEnvelope): string {
@@ -51,13 +68,24 @@ function summarizeAzure(type: string, p: AzureEnvelope): string {
     return `PR #${r.pullRequestId ?? "?"} ${action} by ${r.createdBy?.displayName ?? "?"}`;
   }
   if (et === "ms.vss-code.git-pullrequest-comment-event") {
-    const num = /\/pullRequests\/(\d+)\b/.exec(r._links?.self?.href ?? "")?.[1] ?? "?";
-    return `PR #${num} comment by ${r.author?.displayName ?? "?"}`;
+    // Same precedence as the SQL subject extraction in activity.ts:
+    // wrapped pullRequest.pullRequestId first, then the self link.
+    const num =
+      r.pullRequest?.pullRequestId ??
+      /\/pullRequests\/(\d+)\b/.exec(r._links?.self?.href ?? "")?.[1] ??
+      "?";
+    const who = r.author?.displayName ?? r.comment?.author?.displayName ?? "?";
+    return `PR #${num} comment by ${who}`;
   }
   if (et.startsWith("workitem.")) {
     const id = r.workItemId ?? r.id ?? "?";
     const action = et === "workitem.created" ? "created" : "updated";
-    return `WI #${id} ${action} by ${r.revisedBy?.displayName ?? "?"}`;
+    const who =
+      r.revisedBy?.displayName ??
+      identityName(r.fields?.["System.ChangedBy"]) ??
+      identityName(r.fields?.["System.CreatedBy"]) ??
+      "?";
+    return `WI #${id} ${action} by ${who}`;
   }
   return type;
 }

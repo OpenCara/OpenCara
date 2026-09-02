@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   existsSync,
   realpathSync,
@@ -18,7 +19,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 const OPENCARA_ROOT = join(homedir(), ".opencara");
 // Per-PR-branch trees are siblings under ~/.opencara/. Both keyed by
@@ -41,6 +42,7 @@ export async function internal(argv: string[]): Promise<void> {
     if (op === "create") return worktreeCreate(opArgs);
     if (op === "remove") return worktreeRemove(opArgs);
     if (op === "write-session") return worktreeWriteSession(opArgs);
+    if (op === "gc") return worktreeGc(opArgs);
     fail(`unknown worktree op: ${op ?? "(none)"}`);
   }
   fail(`unknown internal subcommand: ${sub ?? "(none)"}`);
@@ -375,12 +377,21 @@ function worktreeCreate(args: string[]): void {
           join(checkoutLfsDir, "objects"),
         );
       }
-      // If branch == fromBranch (review-fix cloning the existing PR
-      // branch), the just-cloned ref already IS that branch — `-b`
-      // would error. Otherwise create the new branch off whatever
-      // ref clone landed on (= fromBranch or repo default).
+      // Three cases, mirroring the reuse path above:
+      //   1. branch == fromBranch (a PR run cloning the PR's own branch):
+      //      the just-cloned ref already IS that branch — `-b` would error.
+      //   2. `origin/<branch>` exists (an issue rerun / retry after an
+      //      earlier attempt already pushed `opencara/issue-<n>`): track it,
+      //      or the agent starts from the base with none of the pushed
+      //      commits and its push is rejected or clobbers them. Every
+      //      attempt clones afresh now, so this is the ONLY place that
+      //      reconciliation can happen.
+      //   3. Neither — create the new branch off whatever ref the clone
+      //      landed on (= fromBranch or repo default).
       if (fromBranch && branch === fromBranch) {
         git(checkoutDir, ["checkout", branch], gitEnv);
+      } else if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
+        git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`], gitEnv);
       } else {
         git(checkoutDir, ["checkout", "-b", branch], gitEnv);
       }
@@ -493,6 +504,163 @@ function worktreeRemove(args: string[]): void {
       fail(`worktree remove: refuses to remove ${resolved} (not under ${opencaraRoot})`);
     }
     rmSync(resolved, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Device-side stale-worktree sweep: `worktree gc --max-age-hours N
+ * [--keep <key>]...`. Walks ~/.opencara/work and ~/.opencara/sessions for
+ * per-key dirs the orchestrator no longer knows about — an attempt whose
+ * `worktree remove` never arrived (device offline, orchestrator crash,
+ * pin row gone) or a checkout from the old per-branch scheme — and removes
+ * every one older than the age limit that is not in the keep list. The
+ * orchestrator passes the keys of its live pins on this host as `--keep`,
+ * so an in-flight attempt is never swept no matter how long it runs.
+ *
+ * Age is the newest of the key dir, its checkout/ and checkout/.git/index
+ * (touched by every git operation). Emits one JSON line
+ * `{removed, kept, failed}` for the orchestrator's audit log; a dir that
+ * cannot be removed is reported, never fatal.
+ */
+function worktreeGc(args: string[]): void {
+  const maxAgeRaw = pickFlag(args, "--max-age-hours");
+  const maxAgeHours = Number(maxAgeRaw);
+  if (!maxAgeRaw || !Number.isFinite(maxAgeHours) || maxAgeHours < 0) {
+    fail("worktree gc requires --max-age-hours <n>");
+  }
+  const keep = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--keep" && args[i + 1]) {
+      const k = safeKey(args[i + 1]!);
+      if (k) keep.add(k);
+      i++;
+    }
+  }
+  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
+  mkdirSync(OPENCARA_ROOT, { recursive: true });
+  const opencaraRoot = realpathSync(OPENCARA_ROOT);
+
+  const removed: string[] = [];
+  const kept: string[] = [];
+
+  const newestMtime = (paths: string[]): number => {
+    let newest = 0;
+    for (const p of paths) {
+      try {
+        newest = Math.max(newest, statSync(p).mtimeMs);
+      } catch {
+        /* missing → ignore */
+      }
+    }
+    return newest;
+  };
+
+  // A key is `<owner>/<repo>/<step-…|branch-…>`: exactly three segments.
+  // Anything shallower is an ancestor dir shared by live checkouts and must
+  // never be handed to removeKey (a `sessions/<owner>/<repo>/` left empty by
+  // an operator would otherwise map onto `work/<owner>/<repo>/` and wipe
+  // every checkout under it, --keep or not).
+  const KEY_DEPTH = 3;
+  const isKeyShaped = (key: string): boolean => key.split("/").length === KEY_DEPTH;
+  const failed: string[] = [];
+  const removeKey = (key: string): boolean => {
+    if (!isKeyShaped(key)) return false;
+    let ok = true;
+    for (const subtreeRoot of [WORK_ROOT, SESSION_ROOT]) {
+      const target = join(subtreeRoot, key.split("/").join(sep));
+      if (!existsSync(target)) continue;
+      let resolved: string;
+      try {
+        resolved = realpathSync(target);
+      } catch {
+        continue;
+      }
+      if (!resolved.startsWith(opencaraRoot + sep)) continue;
+      // One stuck dir (EACCES, ENOTEMPTY on a busy .git) must not abort the
+      // whole sweep — record it and carry on with the rest.
+      try {
+        rmSync(resolved, { recursive: true, force: true });
+      } catch (err) {
+        ok = false;
+        failed.push(`${key}: ${(err as Error).message}`);
+      }
+    }
+    return ok;
+  };
+
+  // A key dir under work/ is any dir with a `checkout` child (both the
+  // per-attempt `step-*` layout and the legacy `branch-*` one). Bounded
+  // depth so a stray deep tree can't turn the sweep into a full disk walk.
+  const seen = new Set<string>();
+  const walkWork = (dir: string, depth: number): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    if (entries.includes("checkout")) {
+      const key = relative(WORK_ROOT, dir).split(sep).join("/");
+      seen.add(key);
+      if (!isKeyShaped(key) || keep.has(key.split("/").join(sep))) {
+        kept.push(key);
+        return;
+      }
+      const checkout = join(dir, "checkout");
+      const age = newestMtime([dir, checkout, join(checkout, ".git", "index")]);
+      if (age < cutoff) {
+        if (removeKey(key)) removed.push(key);
+      } else {
+        kept.push(key);
+      }
+      return;
+    }
+    if (depth >= 6) return;
+    for (const e of entries) {
+      const child = join(dir, e);
+      try {
+        if (statSync(child).isDirectory()) walkWork(child, depth + 1);
+      } catch {
+        /* vanished */
+      }
+    }
+  };
+  if (existsSync(WORK_ROOT)) walkWork(WORK_ROOT, 0);
+
+  // Session dirs whose checkout is already gone (leaf dirs under sessions/
+  // with no work/ counterpart) age out on their own mtime.
+  const walkSessions = (dir: string, depth: number): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    const subdirs = entries.filter((e) => {
+      try {
+        return statSync(join(dir, e)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (subdirs.length === 0 && dir !== SESSION_ROOT) {
+      const key = relative(SESSION_ROOT, dir).split(sep).join("/");
+      // Only a key-shaped leaf with no live checkout and no --keep is a
+      // candidate; an empty ancestor dir is left alone.
+      if (!isKeyShaped(key) || seen.has(key) || keep.has(key.split("/").join(sep))) return;
+      if (newestMtime([dir]) < cutoff) {
+        if (removeKey(key)) removed.push(key);
+      }
+      return;
+    }
+    if (depth >= 6) return;
+    for (const e of subdirs) walkSessions(join(dir, e), depth + 1);
+  };
+  if (existsSync(SESSION_ROOT)) walkSessions(SESSION_ROOT, 0);
+
+  process.stdout.write(`${JSON.stringify({ removed, kept, failed })}\n`);
+  if (failed.length > 0) {
+    process.stderr.write(`worktree gc: ${failed.length} dir(s) could not be removed:\n  ${failed.join("\n  ")}\n`);
   }
 }
 

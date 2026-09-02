@@ -42,7 +42,8 @@ import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
-import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
+import { cleanupClosedPrWorktree, removeAttemptWorktree } from "../worktrees/cleanup.js";
+import { deriveWorktreeBranch, worktreeKeyForStep } from "../worktrees/branch.js";
 import { extractScopedLabelValues } from "./labelRouting.js";
 
 import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
@@ -799,15 +800,7 @@ export async function resolveAgentPool(
     concurrency: setting?.concurrency ?? 1,
     quorum: setting?.quorum ?? 1,
     candidateCount: candidates.length,
-    worktree: !!node.config.worktree,
   });
-  if (shape.forcedSingleSlot) {
-    console.warn("[flows] agent pool: worktree node forced to concurrency 1", {
-      flowId: ctx.flowId,
-      nodeId: node.id,
-      requested: setting?.concurrency,
-    });
-  }
   if (shape.quorumCapped) {
     console.warn("[flows] agent pool: quorum capped to the slot count", {
       flowId: ctx.flowId,
@@ -824,6 +817,32 @@ export async function resolveAgentPool(
     quorum: shape.quorum,
     promptBody,
   };
+}
+
+/**
+ * What the trigger event promises the worktree deriver: mirrors the engine's
+ * context pre-build (engine.ts `prepareRun`) — PR-shaped events get a
+ * PullRequestContext, Projects v2 moves and manual-with-issueNumber get an
+ * IssueStatusContext. Anything else (schedule, plain issue comment, bare
+ * manual) carries neither and gets a run-scoped branch.
+ */
+export function worktreeBranchExpectation(ctx: {
+  event: { type: string; payload: unknown };
+}): "pr" | "issue" | null {
+  const { type, payload } = ctx.event;
+  if (type === "pull_request" || type === "pull_request_review") return "pr";
+  if (type === "issue_comment") {
+    const issue = (payload as { issue?: { pull_request?: unknown } } | null)?.issue;
+    return issue?.pull_request ? "pr" : null;
+  }
+  if (type === "projects_v2_item") return "issue";
+  if (
+    type === "manual" &&
+    typeof (payload as { issueNumber?: unknown } | null)?.issueNumber === "number"
+  ) {
+    return "issue";
+  }
+  return null;
 }
 
 /**
@@ -868,14 +887,14 @@ export async function runAgentAttempt(
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // If the operator wired a worktree onto this agent node, allocate
-  // (or reuse) the per-PR-branch checkout on a paired device BEFORE
-  // dispatching the agent. The worktree persists across flow runs and
-  // is removed by the `pull_request.closed` webhook handler — the
-  // first iteration clones, every subsequent iteration on the same
-  // (repo, branch) finds .git/ already present and just fetches +
-  // checks out the branch. Pinning sticks the device that allocated
-  // first so the cached checkout is reused across iterations.
+  // If the operator wired a worktree onto this agent node, allocate a
+  // FRESH checkout on a paired device BEFORE dispatching the agent. Every
+  // attempt gets its own checkout, keyed by its flow_run_steps id, so two
+  // parallel pool slots (or a rerun) never share a working tree or race the
+  // allocation. The branch is derived from the trigger (worktrees/branch.ts):
+  // PR → head ref, issue → opencara/issue-<n>, else opencara/run-<id>.
+  // Checkouts are removed by the `pull_request.closed` webhook handler and
+  // the stale-worktree prune (worktrees/cleanup.ts).
   let worktree: {
     workdir: string;
     branch: string;
@@ -883,50 +902,42 @@ export async function runAgentAttempt(
     sessionDir: string | null;
     hostId: string;
   } | null = null;
+  let worktreeKey: string | null = null;
   if (node.config.worktree) {
     const tplVars = collectTemplateVars(ctx);
     tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
-    const branchName = renderTemplate(
-      node.config.worktree.branchName,
-      tplVars,
-      "agent.worktree.branchName",
-    );
-    if (branchName.length === 0) {
-      throw new FlowConfigError(
-        `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
-      );
-    }
-    const fromBranchRaw =
-      node.config.worktree.fromBranch && node.config.worktree.fromBranch.length > 0
-        ? node.config.worktree.fromBranch
-        : ctx.project.defaultBranch ?? "";
-    // Render templates so flows like `pr-review-fix` can pin
-    // `fromBranch: "{{OPENCARA_PR_HEAD_REF}}"`. The happy path
-    // (existing checkout) ignores --from-branch, but a fresh-device /
-    // fallback allocation passes it straight to `git clone --branch`,
-    // where an unrendered `{{...}}` literal would fail.
-    const fromBranch = renderTemplate(
-      fromBranchRaw,
+    // Render templates so a flow can pin `fromBranch: "{{SOME_VAR}}"`; an
+    // unrendered `{{...}}` literal would reach `git clone --branch` and fail.
+    const fromBranchRendered = renderTemplate(
+      node.config.worktree.fromBranch ?? "",
       tplVars,
       "agent.worktree.fromBranch",
     );
+    const derived = deriveWorktreeBranch({
+      expected: worktreeBranchExpectation(ctx),
+      prHeadRef: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_REF"],
+      issueNumber: ctx.issueContext?.stdin.issue?.number ?? null,
+      flowRunId: ctx.flowRunId,
+      fromBranch: fromBranchRendered,
+      defaultBranch: ctx.project.defaultBranch,
+    });
+    const branchName = derived.branch;
+    const fromBranch = derived.fromBranch;
     const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
-    // Stable per-(repo, branch) slug. The implement flow's first run
-    // and any later review-fix iteration on the same PR compute the
-    // same slug → the second one finds the first's checkout +
-    // session-id file on the same pinned device.
-    const key = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    const key = worktreeKeyForStep(ownerRepo, ctx.flowRunStepId);
+    worktreeKey = key;
 
-    // Pin lookup: prefer explicit operator pins (node-level first,
-    // linked-agent second), then reuse the device that allocated the
-    // worktree on a previous iteration of this branch. Fall back to
-    // pickIdle() if no pin exists OR the pinned device is currently
-    // disconnected (the dispatcher will throw "pinned device <id> is
-    // not connected" otherwise; pickIdle gives a graceful degrade).
+    // Host choice: explicit operator pins first (node-level, then the
+    // linked agent), else prefer the device that most recently ran this
+    // branch so its object cache is warm. Nothing depends on landing there —
+    // every attempt clones afresh — so fall back to pickIdle() when no pin
+    // exists or the pinned device is disconnected (the dispatcher would
+    // throw "pinned device <id> is not connected" otherwise).
     let pinnedHostId: string | null = node.config.worktree.hostId ?? agent.hostId ?? null;
     if (!pinnedHostId) {
       const existing = await ctx.db.query.worktreePins.findFirst({
         where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
+        orderBy: (t, { desc }) => [desc(t.lastRunAt)],
       });
       if (existing) pinnedHostId = existing.hostId;
     }
@@ -943,9 +954,9 @@ export async function runAgentAttempt(
       pinnedHostId = null;
     }
 
-    // Sub-dispatch: opencara internal worktree create. Idempotent —
-    // creates the dir + clone on first run, fetches + checkouts on
-    // subsequent runs. Persisted as its own agent_runs row with
+    // Sub-dispatch: opencara internal worktree create. The key is new per
+    // attempt, so this always clones (borrowing objects from the host's
+    // repo cache when enabled). Persisted as its own agent_runs row with
     // flowRunStepId=null so the engine's "find the agent_run for
     // this step" lookups still hit the primary agent run below.
     const allocateRunId = ulid();
@@ -1034,19 +1045,20 @@ export async function runAgentAttempt(
 
 
     const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-    // Upsert the pin so the next iteration on this branch hits the
-    // same device. lastRunAt drives the reaper's pruning later.
+    // Record where this checkout lives so PR-close cleanup and the stale
+    // prune can dispatch `worktree remove --key` to the right device.
     await ctx.db
       .insert(worktreePins)
       .values({
         id: ulid(),
         ownerRepo,
         branch: branchName,
+        key,
         hostId: allocateResult.agentHostId,
         lastRunAt: new Date(),
       })
       .onConflictDoUpdate({
-        target: [worktreePins.ownerRepo, worktreePins.branch],
+        target: [worktreePins.key],
         set: { hostId: allocateResult.agentHostId, lastRunAt: new Date() },
       });
 
@@ -1063,287 +1075,307 @@ export async function runAgentAttempt(
     env["OPENCARA_WORKTREE_BRANCH"] = worktree.branch;
     if (worktree.sessionDir) env["OPENCARA_SESSION_DIR"] = worktree.sessionDir;
   }
-  const issueImplementRun = Boolean(
-    worktree?.branch && ctx.issueContext?.stdin.issue?.number,
-  );
+  // Everything from here runs against the checkout; tear it down when the
+  // attempt is over, however it ends (success, failure, cancel). The
+  // checkout serves exactly this attempt — the next iteration clones afresh
+  // and steering chat resumes by session id, not cwd — so keeping it only
+  // costs disk. Best-effort: a failure is logged and the stale sweep
+  // (worktrees/cleanup.ts) picks the dir up later.
+  try {
+    const issueImplementRun = Boolean(
+      worktree?.branch && ctx.issueContext?.stdin.issue?.number,
+    );
 
-  // Inject the issue-implement contract skill when this run is shaped
-  // like one: a worktree was allocated AND the trigger carries issue
-  // context. The skill tells the agent it must commit/push and run
-  // `gh pr create` before exiting — the missing-PR mode this contract
-  // closes was visible on flow run 01KRDW75RV2Y6YN9BSTPP2JVE5, where
-  // the agent edited a file, ran typecheck, then stopped without
-  // shipping anything. Other shapes (pr-review etc.) don't carry an
-  // issue context so this short-circuits to null.
-  //
-  // Stamp OPENCARA_ISSUE_NUMBER here (in addition to whatever the
-  // node's contextInjection.env lists) so the env var the skill names
-  // is always present — otherwise an operator-customized flow that
-  // dropped it from contextInjection.env would silently break the
-  // shell snippets in the skill prose.
-  const implementSkill =
-    issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch
-      ? buildIssueImplementContractSkill({
-          baseUrl: ctx.publicBaseUrl,
-          runId: agentRunId,
+    // Inject the issue-implement contract skill when this run is shaped
+    // like one: a worktree was allocated AND the trigger carries issue
+    // context. The skill tells the agent it must commit/push and run
+    // `gh pr create` before exiting — the missing-PR mode this contract
+    // closes was visible on flow run 01KRDW75RV2Y6YN9BSTPP2JVE5, where
+    // the agent edited a file, ran typecheck, then stopped without
+    // shipping anything. Other shapes (pr-review etc.) don't carry an
+    // issue context so this short-circuits to null.
+    //
+    // Stamp OPENCARA_ISSUE_NUMBER here (in addition to whatever the
+    // node's contextInjection.env lists) so the env var the skill names
+    // is always present — otherwise an operator-customized flow that
+    // dropped it from contextInjection.env would silently break the
+    // shell snippets in the skill prose.
+    const implementSkill =
+      issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch
+        ? buildIssueImplementContractSkill({
+            baseUrl: ctx.publicBaseUrl,
+            runId: agentRunId,
+            branchName: worktree.branch,
+            issueNumber: ctx.issueContext.stdin.issue.number,
+            defaultBranch: ctx.project.defaultBranch ?? "main",
+            draftPr: Boolean(node.config.draftPr),
+            platform: ctx.scm.platform,
+          })
+        : null;
+    if (implementSkill && ctx.issueContext?.stdin.issue?.number) {
+      env["OPENCARA_ISSUE_NUMBER"] = String(ctx.issueContext.stdin.issue.number);
+    }
+
+    const stdinJson = node.config.contextInjection.stdinJson
+      ? {
+          ...(ctx.prContext?.stdin ?? {}),
+          ...(ctx.issueContext?.stdin ?? {}),
+          ...(ctx.scheduleContext?.stdin ?? {}),
+          previousOutput: ctx.previousOutput,
+          prompt: promptBody ?? undefined,
+        }
+      : undefined;
+
+    // ACP cutover (#30): all flow-driven agent dispatch goes through the
+    // device's `runAcpJob` path. The per-kind adapter machinery in the
+    // legacy `kindsAdapter` (claude --resume, codex exec resume, etc.)
+    // is gone; per-kind specifics now live inside the per-kind ACP
+    // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
+    //
+    // Flow runs never resume a prior ACP session. Every attempt starts a
+    // cold `session/new`: the previous iteration's context reaches the agent
+    // through the PR/issue conversation and `previousOutput`, not through the
+    // adapter's transcript. Resuming by (repo, branch, agent kind) made a
+    // re-reviewer inherit the synthesizer's session and a synthesizer inherit
+    // the reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
+    // still resumes via the id recorded on the agent_runs row after the run.
+    //
+    // What we keep:
+    //   - Worktree allocation (the per-attempt checkout on a paired
+    //     device — the `dispatchAgentRun` for `worktree-allocate`
+    //     above is unchanged; that's an internal CLI subcommand, not
+    //     an ACP agent).
+    //   - Linked-prompt + skill envelope; both fold into systemPromptMd.
+    //   - Upstream `previousOutput` chaining; goes into userPromptMd.
+    //   - PR / issue context-injection; surfaced via pageContextJson.
+    const eligibility = checkAcpEligibility(agent.kind);
+    if (eligibility.refuseReason) {
+      throw new AgentUnusableError(eligibility.refuseReason);
+    }
+
+    const systemPromptParts: string[] = [];
+    const injectedSkills: Array<{ name: string; instructions: string }> = [];
+    if (promptBody && promptBody.trim().length > 0) {
+      systemPromptParts.push(promptBody.trim());
+    }
+    if (implementSkill) {
+      systemPromptParts.push(implementSkill.instructions);
+      injectedSkills.push({
+        name: implementSkill.name,
+        instructions: implementSkill.instructions,
+      });
+    }
+    // Auto-injected when this agent's downstream graph contains a
+    // `scm.post_review` node. Mandates the `verdict: <token>` first-line
+    // contract that the post-review parser reads to populate GitHub's
+    // review `event` enum. Active for both standalone reviewers
+    // (pr-review) and every agent in fan-in chains (pr-review-multi
+    // reviewers + synthesizer).
+    if (ctx.hasDownstreamPostReview) {
+      const verdictSkill = buildPrReviewVerdictSkill({
+        baseUrl: ctx.publicBaseUrl,
+        runId: agentRunId,
+      });
+      systemPromptParts.push(verdictSkill.instructions);
+      injectedSkills.push({
+        name: verdictSkill.name,
+        instructions: verdictSkill.instructions,
+      });
+    }
+    const systemPromptMd =
+      systemPromptParts.length > 0
+        ? systemPromptParts.join("\n\n---\n\n")
+        : "You are an opencara flow agent. Process the input below.";
+
+    // Persist the assembled system prompt + skill list to the step row
+    // BEFORE dispatching, so the flow-run detail UI can show what the
+    // agent actually saw while the run is in flight (and even when it
+    // fails mid-run). Merge into the existing inputJson rather than
+    // overwriting it — the engine wrote node config / previousOutput at
+    // step creation. Best-effort: a write failure here just means the
+    // UI loses the system-prompt panel; it must not break the run.
+    try {
+      const existing = await ctx.db.query.flowRunSteps.findFirst({
+        where: eq(flowRunStepsTable.id, ctx.flowRunStepId),
+      });
+      const existingInput = (existing?.inputJson ?? {}) as Record<string, unknown>;
+      await ctx.db
+        .update(flowRunStepsTable)
+        .set({
+          inputJson: {
+            ...existingInput,
+            agentName: agent.name,
+            agentKind: agent.kind,
+            systemPromptMd,
+            injectedSkills,
+          },
+        })
+        .where(eq(flowRunStepsTable.id, ctx.flowRunStepId));
+      await ctx.pg.notify("flow_run_steps", ctx.flowRunId);
+    } catch (err) {
+      console.error("[flows] failed to persist system prompt to step row", err);
+    }
+
+    // userPromptMd is the upstream node's stdoutCaptured (already cleaned
+    // of agent-envelope/JSONL noise by `extractAgentResultText` in
+    // engine.ts:outputs.set). Triggers / first-step agents have no
+    // upstream output; surface a sentinel so ACP doesn't reject the
+    // empty prompt.
+    const upstream = ctx.previousOutput?.trim() ?? "";
+    // Review agents fed by other agents (the synthesizer position) get an
+    // explicit task directive above the pasted upstream sections. Without
+    // it, a single polished review starting with `verdict: ...` reads as
+    // the model's own completed turn and it replies with a wrap-up
+    // one-liner instead of doing the work (ParadiseGodot#25 review
+    // 4618560289).
+    const userPromptMd =
+      upstream.length === 0
+        ? "(no upstream output — proceed using the system prompt and any page context above.)"
+        : ctx.hasDownstreamPostReview
+          ? "The sections below are outputs from upstream agents — input for you to verify, not your own prior work. Write your review now, following the format in the system prompt, starting with the `verdict:` line.\n\n" +
+            upstream
+          : upstream;
+
+    // Flow-time pageContext = whatever stdin payloads the legacy path
+    // would have stuffed into stdinJson. The agent gets the same data;
+    // it just lives inside the prompt content block instead of an
+    // out-of-band stdin envelope.
+    const pageContext: Record<string, unknown> = {};
+    if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
+    if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
+
+    // Validate the project-level instructions file setting and forward the
+    // relative path into the spec when it's safe + the agent will run in a
+    // worktree. The device-side adapter (claude-acp) does the actual disk
+    // stat-check; this side only gates on the setting being a sane
+    // repo-relative path. No worktree → skip (chat/test runs).
+    let projectInstructionsFile: string | undefined;
+    if (worktree?.workdir) {
+      const validated = validateInstructionsFileSetting({
+        setting: ctx.project.instructionsFile,
+      });
+      if (validated.relativePath) {
+        projectInstructionsFile = validated.relativePath;
+      } else if (validated.skipReason) {
+        console.warn(
+          `[flows] project instructionsFile not injected: ${validated.skipReason}`,
+          { projectId: ctx.projectId },
+        );
+      }
+    }
+
+    const acpSpec = buildAcpSpec({
+      agent: flowAgentSpecInput(agent, worktree?.workdir ?? null),
+      env,
+      systemPromptMd,
+      userPromptMd,
+      pageContext,
+      instructionsFile: projectInstructionsFile,
+    });
+
+    const result = await dispatchAgentRun(ctx, {
+      agentRunId,
+      kind: agent.name,
+      command: acpSpec.command,
+      args: [...acpSpec.args],
+      env,
+      cwd: acpSpec.cwd,
+      acp: acpSpec.acp,
+      hostId: worktree?.hostId ?? agent.hostId ?? null,
+      triggerEventId: ctx.event.id,
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`agent exited with code ${result.exitCode}`);
+    }
+
+    // Post-step: when an issue-implement-shaped run succeeds (issue
+    // context present, worktree allocated), link the PR the agent just
+    // opened back to its source issue (Closes #N in body → populates
+    // GitHub's Development panel) and copy the issue's agent:<name>
+    // label onto the PR so pr-review-fix's label-based agent routing
+    // finds the same agent on the next iteration.
+    //
+    // Two failure modes are distinguished:
+    //   - `no-pr` → the agent skipped `gh pr create`. This is the bug
+    //     the implement-contract skill exists to prevent; surface it
+    //     loudly so the flow run is marked failed instead of silently
+    //     "succeeded".
+    //   - `transient-failure` (network / 5xx on the list call) → log
+    //     and continue; the agent's work is unaffected and the PR may
+    //     well exist.
+    if (
+      issueImplementRun &&
+      ctx.issueContext?.stdin.issue?.number &&
+      worktree?.branch &&
+      !skipOnAzure(ctx, "linking the PR to its issue")
+    ) {
+      let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
+      try {
+        const octokit = await requireGithubApp(ctx.app).forInstallation(
+          githubInstallationId(ctx),
+        );
+        linkResult = await linkPrToIssueAndCopyAgentLabel({
+          octokit,
+          owner: ctx.project.owner,
+          repo: ctx.project.name,
           branchName: worktree.branch,
           issueNumber: ctx.issueContext.stdin.issue.number,
-          defaultBranch: ctx.project.defaultBranch ?? "main",
-          draftPr: Boolean(node.config.draftPr),
-          platform: ctx.scm.platform,
-        })
-      : null;
-  if (implementSkill && ctx.issueContext?.stdin.issue?.number) {
-    env["OPENCARA_ISSUE_NUMBER"] = String(ctx.issueContext.stdin.issue.number);
-  }
-
-  const stdinJson = node.config.contextInjection.stdinJson
-    ? {
-        ...(ctx.prContext?.stdin ?? {}),
-        ...(ctx.issueContext?.stdin ?? {}),
-        ...(ctx.scheduleContext?.stdin ?? {}),
-        previousOutput: ctx.previousOutput,
-        prompt: promptBody ?? undefined,
+          issueLabels: ctx.issueContext.stdin.issue.labels ?? [],
+        });
+      } catch (err) {
+        console.error("[flows] link-pr-to-issue post-step failed", err);
       }
-    : undefined;
+      if (linkResult?.kind === "no-pr") {
+        throw new Error(
+          `agent ran successfully but did not open a pull request on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch}. ` +
+            `The issue-implement flow requires the agent to commit, push the branch, and run \`gh pr create\` before exiting. ` +
+            `Check the agent's logs above; the orchestrator now injects the opencara-issue-implement-contract skill to spell out this contract.`,
+        );
+      }
+    }
 
-  // ACP cutover (#30): all flow-driven agent dispatch goes through the
-  // device's `runAcpJob` path. The per-kind adapter machinery in the
-  // legacy `kindsAdapter` (claude --resume, codex exec resume, etc.)
-  // is gone; per-kind specifics now live inside the per-kind ACP
-  // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
-  //
-  // Flow runs never resume a prior ACP session. Every attempt starts a
-  // cold `session/new`: the previous iteration's context reaches the agent
-  // through the PR/issue conversation and `previousOutput`, not through the
-  // adapter's transcript. Resuming by (repo, branch, agent kind) made a
-  // re-reviewer inherit the synthesizer's session and a synthesizer inherit
-  // the reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
-  // still resumes via the id recorded on the agent_runs row after the run.
-  //
-  // What we keep:
-  //   - Worktree allocation (the per-(repo, branch) checkout on a
-  //     pinned device — the `dispatchAgentRun` for `worktree-allocate`
-  //     above is unchanged; that's an internal CLI subcommand, not
-  //     an ACP agent).
-  //   - Linked-prompt + skill envelope; both fold into systemPromptMd.
-  //   - Upstream `previousOutput` chaining; goes into userPromptMd.
-  //   - PR / issue context-injection; surfaced via pageContextJson.
-  const eligibility = checkAcpEligibility(agent.kind);
-  if (eligibility.refuseReason) {
-    throw new AgentUnusableError(eligibility.refuseReason);
-  }
+    if (
+      node.config.draftPr &&
+      issueImplementRun &&
+      worktree?.branch &&
+      !skipOnAzure(ctx, "marking the draft PR ready for review")
+    ) {
+      try {
+        const octokit = await requireGithubApp(ctx.app).forInstallation(
+          githubInstallationId(ctx),
+        );
+        await markDraftPrReadyByHead({
+          octokit,
+          owner: ctx.project.owner,
+          repo: ctx.project.name,
+          headBranch: worktree.branch,
+        });
+      } catch (err) {
+        console.error("[flows] mark-draft-pr-ready post-step failed", err);
+      }
+    }
 
-  const systemPromptParts: string[] = [];
-  const injectedSkills: Array<{ name: string; instructions: string }> = [];
-  if (promptBody && promptBody.trim().length > 0) {
-    systemPromptParts.push(promptBody.trim());
-  }
-  if (implementSkill) {
-    systemPromptParts.push(implementSkill.instructions);
-    injectedSkills.push({
-      name: implementSkill.name,
-      instructions: implementSkill.instructions,
-    });
-  }
-  // Auto-injected when this agent's downstream graph contains a
-  // `scm.post_review` node. Mandates the `verdict: <token>` first-line
-  // contract that the post-review parser reads to populate GitHub's
-  // review `event` enum. Active for both standalone reviewers
-  // (pr-review) and every agent in fan-in chains (pr-review-multi
-  // reviewers + synthesizer).
-  if (ctx.hasDownstreamPostReview) {
-    const verdictSkill = buildPrReviewVerdictSkill({
-      baseUrl: ctx.publicBaseUrl,
-      runId: agentRunId,
-    });
-    systemPromptParts.push(verdictSkill.instructions);
-    injectedSkills.push({
-      name: verdictSkill.name,
-      instructions: verdictSkill.instructions,
-    });
-  }
-  const systemPromptMd =
-    systemPromptParts.length > 0
-      ? systemPromptParts.join("\n\n---\n\n")
-      : "You are an opencara flow agent. Process the input below.";
+    const autoMergeOutput = await maybeAutoMergeAfterFix(ctx, node);
 
-  // Persist the assembled system prompt + skill list to the step row
-  // BEFORE dispatching, so the flow-run detail UI can show what the
-  // agent actually saw while the run is in flight (and even when it
-  // fails mid-run). Merge into the existing inputJson rather than
-  // overwriting it — the engine wrote node config / previousOutput at
-  // step creation. Best-effort: a write failure here just means the
-  // UI loses the system-prompt panel; it must not break the run.
-  try {
-    const existing = await ctx.db.query.flowRunSteps.findFirst({
-      where: eq(flowRunStepsTable.id, ctx.flowRunStepId),
-    });
-    const existingInput = (existing?.inputJson ?? {}) as Record<string, unknown>;
-    await ctx.db
-      .update(flowRunStepsTable)
-      .set({
-        inputJson: {
-          ...existingInput,
-          agentName: agent.name,
-          agentKind: agent.kind,
-          systemPromptMd,
-          injectedSkills,
-        },
-      })
-      .where(eq(flowRunStepsTable.id, ctx.flowRunStepId));
-    await ctx.pg.notify("flow_run_steps", ctx.flowRunId);
-  } catch (err) {
-    console.error("[flows] failed to persist system prompt to step row", err);
-  }
-
-  // userPromptMd is the upstream node's stdoutCaptured (already cleaned
-  // of agent-envelope/JSONL noise by `extractAgentResultText` in
-  // engine.ts:outputs.set). Triggers / first-step agents have no
-  // upstream output; surface a sentinel so ACP doesn't reject the
-  // empty prompt.
-  const upstream = ctx.previousOutput?.trim() ?? "";
-  // Review agents fed by other agents (the synthesizer position) get an
-  // explicit task directive above the pasted upstream sections. Without
-  // it, a single polished review starting with `verdict: ...` reads as
-  // the model's own completed turn and it replies with a wrap-up
-  // one-liner instead of doing the work (ParadiseGodot#25 review
-  // 4618560289).
-  const userPromptMd =
-    upstream.length === 0
-      ? "(no upstream output — proceed using the system prompt and any page context above.)"
-      : ctx.hasDownstreamPostReview
-        ? "The sections below are outputs from upstream agents — input for you to verify, not your own prior work. Write your review now, following the format in the system prompt, starting with the `verdict:` line.\n\n" +
-          upstream
-        : upstream;
-
-  // Flow-time pageContext = whatever stdin payloads the legacy path
-  // would have stuffed into stdinJson. The agent gets the same data;
-  // it just lives inside the prompt content block instead of an
-  // out-of-band stdin envelope.
-  const pageContext: Record<string, unknown> = {};
-  if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
-  if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
-
-  // Validate the project-level instructions file setting and forward the
-  // relative path into the spec when it's safe + the agent will run in a
-  // worktree. The device-side adapter (claude-acp) does the actual disk
-  // stat-check; this side only gates on the setting being a sane
-  // repo-relative path. No worktree → skip (chat/test runs).
-  let projectInstructionsFile: string | undefined;
-  if (worktree?.workdir) {
-    const validated = validateInstructionsFileSetting({
-      setting: ctx.project.instructionsFile,
-    });
-    if (validated.relativePath) {
-      projectInstructionsFile = validated.relativePath;
-    } else if (validated.skipReason) {
-      console.warn(
-        `[flows] project instructionsFile not injected: ${validated.skipReason}`,
-        { projectId: ctx.projectId },
-      );
+    return {
+      output: { exitCode: result.exitCode, ...(autoMergeOutput ? { autoMerge: autoMergeOutput } : {}) },
+      stdoutCaptured: result.stdoutCaptured,
+      agentName: agent.name,
+    };
+  } finally {
+    if (worktreeKey) {
+      try {
+        await removeAttemptWorktree(ctx, worktreeKey, ctx.projectId);
+      } catch (err) {
+        console.warn("[flows] worktree teardown failed", {
+          flowRunStepId: ctx.flowRunStepId,
+          key: worktreeKey,
+          err,
+        });
+      }
     }
   }
-
-  const acpSpec = buildAcpSpec({
-    agent: flowAgentSpecInput(agent, worktree?.workdir ?? null),
-    env,
-    systemPromptMd,
-    userPromptMd,
-    pageContext,
-    instructionsFile: projectInstructionsFile,
-  });
-
-  const result = await dispatchAgentRun(ctx, {
-    agentRunId,
-    kind: agent.name,
-    command: acpSpec.command,
-    args: [...acpSpec.args],
-    env,
-    cwd: acpSpec.cwd,
-    acp: acpSpec.acp,
-    hostId: worktree?.hostId ?? agent.hostId ?? null,
-    triggerEventId: ctx.event.id,
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`agent exited with code ${result.exitCode}`);
-  }
-
-  // Post-step: when an issue-implement-shaped run succeeds (issue
-  // context present, worktree allocated), link the PR the agent just
-  // opened back to its source issue (Closes #N in body → populates
-  // GitHub's Development panel) and copy the issue's agent:<name>
-  // label onto the PR so pr-review-fix's label-based agent routing
-  // finds the same agent on the next iteration.
-  //
-  // Two failure modes are distinguished:
-  //   - `no-pr` → the agent skipped `gh pr create`. This is the bug
-  //     the implement-contract skill exists to prevent; surface it
-  //     loudly so the flow run is marked failed instead of silently
-  //     "succeeded".
-  //   - `transient-failure` (network / 5xx on the list call) → log
-  //     and continue; the agent's work is unaffected and the PR may
-  //     well exist.
-  if (
-    issueImplementRun &&
-    ctx.issueContext?.stdin.issue?.number &&
-    worktree?.branch &&
-    !skipOnAzure(ctx, "linking the PR to its issue")
-  ) {
-    let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
-    try {
-      const octokit = await requireGithubApp(ctx.app).forInstallation(
-        githubInstallationId(ctx),
-      );
-      linkResult = await linkPrToIssueAndCopyAgentLabel({
-        octokit,
-        owner: ctx.project.owner,
-        repo: ctx.project.name,
-        branchName: worktree.branch,
-        issueNumber: ctx.issueContext.stdin.issue.number,
-        issueLabels: ctx.issueContext.stdin.issue.labels ?? [],
-      });
-    } catch (err) {
-      console.error("[flows] link-pr-to-issue post-step failed", err);
-    }
-    if (linkResult?.kind === "no-pr") {
-      throw new Error(
-        `agent ran successfully but did not open a pull request on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch}. ` +
-          `The issue-implement flow requires the agent to commit, push the branch, and run \`gh pr create\` before exiting. ` +
-          `Check the agent's logs above; the orchestrator now injects the opencara-issue-implement-contract skill to spell out this contract.`,
-      );
-    }
-  }
-
-  if (
-    node.config.draftPr &&
-    issueImplementRun &&
-    worktree?.branch &&
-    !skipOnAzure(ctx, "marking the draft PR ready for review")
-  ) {
-    try {
-      const octokit = await requireGithubApp(ctx.app).forInstallation(
-        githubInstallationId(ctx),
-      );
-      await markDraftPrReadyByHead({
-        octokit,
-        owner: ctx.project.owner,
-        repo: ctx.project.name,
-        headBranch: worktree.branch,
-      });
-    } catch (err) {
-      console.error("[flows] mark-draft-pr-ready post-step failed", err);
-    }
-  }
-
-  const autoMergeOutput = await maybeAutoMergeAfterFix(ctx, node);
-
-  return {
-    output: { exitCode: result.exitCode, ...(autoMergeOutput ? { autoMerge: autoMergeOutput } : {}) },
-    stdoutCaptured: result.stdoutCaptured,
-    agentName: agent.name,
-  };
 }
 
 async function enforceMaxIterations(ctx: NodeRunCtx, node: AgentNode): Promise<void> {

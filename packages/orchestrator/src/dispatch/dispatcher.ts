@@ -85,6 +85,11 @@ export interface AgentDispatcher {
    */
   isConnected(hostId: string): boolean;
   /**
+   * Ids of every currently connected device. Optional so lightweight test
+   * doubles need not implement it; callers treat "absent" as "none".
+   */
+  connectedHostIds?(): string[];
+  /**
    * Signal the device to terminate an in-flight run. Returns true iff
    * a `cancel` frame was actually delivered to a connected device.
    *

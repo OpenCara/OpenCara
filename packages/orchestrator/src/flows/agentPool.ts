@@ -68,33 +68,29 @@ export function clampQuorum(value: unknown): number {
 /**
  * The slot count and quorum a pool will ACTUALLY run with, derived from the
  * stored settings:
- *   - a worktree node is pinned to one slot: its agents share one checkout
- *     (per repo+branch pin), so parallel candidates would trample each
- *     other's working tree and race the allocation. Failover still applies.
  *   - concurrency never exceeds the candidate count
  *   - quorum never exceeds the slot count — it counts successes, and only
  *     `concurrency` attempts can ever succeed.
  *
+ * Worktree nodes are NOT capped any more: every attempt allocates its own
+ * checkout (keyed by its flow_run_steps id), so parallel slots never share a
+ * working tree.
+ *
  * `runWithAgentPool` re-applies the same caps defensively, but the caller
- * must persist THESE numbers as the attempt's pool meta: a raw quorum 2 on
- * a node forced to one slot made the run page paint a succeeded reviewer
- * node as failed (opencara run 01M1GQ7K1NMS90ERCNWZWVNP5V).
+ * must persist THESE numbers as the attempt's pool meta: a raw quorum above
+ * the slot count made the run page paint a succeeded reviewer node as failed
+ * (opencara run 01M1GQ7K1NMS90ERCNWZWVNP5V).
  */
 export function effectivePoolShape(input: {
   concurrency: unknown;
   quorum: unknown;
   candidateCount: number;
-  worktree: boolean;
-}): { concurrency: number; quorum: number; forcedSingleSlot: boolean; quorumCapped: boolean } {
+}): { concurrency: number; quorum: number; quorumCapped: boolean } {
   const requested = clampConcurrency(input.concurrency);
-  const forcedSingleSlot = input.worktree && requested > 1;
-  const concurrency = Math.min(
-    forcedSingleSlot ? 1 : requested,
-    Math.max(1, input.candidateCount),
-  );
+  const concurrency = Math.min(requested, Math.max(1, input.candidateCount));
   const requestedQuorum = clampQuorum(input.quorum);
   const quorum = Math.min(requestedQuorum, concurrency);
-  return { concurrency, quorum, forcedSingleSlot, quorumCapped: quorum < requestedQuorum };
+  return { concurrency, quorum, quorumCapped: quorum < requestedQuorum };
 }
 
 /**

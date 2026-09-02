@@ -299,6 +299,10 @@ export class DevicePool {
     return this.devices.has(agentHostId);
   }
 
+  connectedHostIds(): string[] {
+    return [...this.devices.keys()];
+  }
+
   handleMessage(agentHostId: string, msg: DeviceToServerMessage): void {
     if (msg.type === "log") {
       const p = this.pending.get(msg.runId);
@@ -536,6 +540,10 @@ export class WebSocketDispatcher implements AgentDispatcher {
 
   isConnected(hostId: string): boolean {
     return this.pool.isConnected(hostId);
+  }
+
+  connectedHostIds(): string[] {
+    return this.pool.connectedHostIds();
   }
 
   async run(spec: AgentSpec, ctx: RunContext): Promise<RunResult> {
