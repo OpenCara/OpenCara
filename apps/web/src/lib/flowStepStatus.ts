@@ -77,11 +77,29 @@ export function aggregateNodeStatus(
   const succeeded = attempts.filter((a) => a.status === "succeeded").length;
   if (succeeded >= quorum) return "succeeded";
   if (attempts.some((a) => a.status === "skipped")) return "skipped";
-  // Below quorum with nothing in flight. While the run is still going the
-  // pool may be about to start the next candidate (the row doesn't exist
-  // yet), so don't paint the node failed until the run itself has decided.
-  if (runStatus === "running" || runStatus === "pending") return "running";
+  // Below quorum with nothing in flight. While the run is still going, a
+  // pool with candidates or retries left may be about to start its next
+  // attempt (the row doesn't exist yet), so hold the failed paint for THAT
+  // case only; a node with nothing left to try is failed right away.
+  if ((runStatus === "running" || runStatus === "pending") && poolHasAttemptsLeft(attempts)) {
+    return "running";
+  }
   return "failed";
+}
+
+function poolHasAttemptsLeft(attempts: readonly FlowRunStep[]): boolean {
+  let meta: StepPoolMeta | null = null;
+  let maxCandidateIndex = -1;
+  let retryLeft = false;
+  for (const a of attempts) {
+    const m = parsePoolMeta(a.inputJson);
+    if (!m) continue;
+    meta = m;
+    if (m.candidateIndex > maxCandidateIndex) maxCandidateIndex = m.candidateIndex;
+    if (a.status === "failed" && m.retryIndex < m.retrySame) retryLeft = true;
+  }
+  if (!meta) return false;
+  return retryLeft || maxCandidateIndex < meta.candidateCount - 1;
 }
 
 /**
