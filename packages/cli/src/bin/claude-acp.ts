@@ -754,18 +754,27 @@ export interface TranslatedEvent {
  * (flow run 01M1GWKV0F4AGJRGP93RBSK5SW). Track where the last forwarded
  * text stopped and whether a new block has begun since, so the first
  * delta of a new block is preceded by a paragraph break when needed.
+ *
+ * AskUserQuestion fences emitted from the `assistant` frame don't update
+ * this state; worst case is one extra blank line before the next text.
  */
 export interface TurnTextState {
   /** Any text forwarded yet this turn. */
   emitted: boolean;
-  /** The last forwarded text ended with a newline. */
-  atLineStart: boolean;
-  /** A `message_start` / `content_block_start` arrived since the last delta. */
+  /** Newlines the last forwarded text ended with (0, 1, or 2+). */
+  trailingNewlines: number;
+  /** A message / content-block boundary arrived since the last delta. */
   newBlock: boolean;
 }
 
 export function newTurnTextState(): TurnTextState {
-  return { emitted: false, atLineStart: true, newBlock: false };
+  return { emitted: false, trailingNewlines: 2, newBlock: false };
+}
+
+function countTrailingNewlines(text: string): number {
+  let n = 0;
+  for (let i = text.length - 1; i >= 0 && text[i] === "\n"; i--) n++;
+  return n;
 }
 
 export function translateClaudeEvent(
@@ -800,6 +809,10 @@ export function translateClaudeEvent(
         }
       }
     }
+    // The cumulative assistant frame always marks a message boundary and
+    // can never arrive mid-text — belt and braces for the stream_event
+    // start markers below.
+    turn.newBlock = true;
     return { notifications: out };
   }
   if (type === "stream_event") {
@@ -819,15 +832,15 @@ export function translateClaudeEvent(
     if (event.delta?.type !== "text_delta") return { notifications: out };
     const delta = typeof event.delta.text === "string" ? event.delta.text : "";
     if (delta.length === 0) return { notifications: out };
-    // First delta of a new block after text that stopped mid-line: open a
-    // new paragraph so consecutive assistant messages don't run together.
-    // Blank lines (never a lone "\n") so markdown renders them as separate
-    // paragraphs too, not just as separate lines for the marker parser.
-    const separator = turn.newBlock && turn.emitted && !turn.atLineStart ? "\n\n" : "";
+    // First delta of a new block: top up to a blank line so consecutive
+    // assistant messages land as separate markdown paragraphs, not just
+    // separate lines for the marker parser. Nothing before the first text.
+    const separator =
+      turn.newBlock && turn.emitted ? "\n".repeat(Math.max(0, 2 - turn.trailingNewlines)) : "";
     const text = separator + delta;
     turn.newBlock = false;
     turn.emitted = true;
-    turn.atLineStart = delta.endsWith("\n");
+    turn.trailingNewlines = countTrailingNewlines(delta);
     out.push({
       method: "session/update",
       params: {

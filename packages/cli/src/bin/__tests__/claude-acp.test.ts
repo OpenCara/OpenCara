@@ -170,7 +170,21 @@ describe("translateClaudeEvent", () => {
     assert.equal(textOf(translateClaudeEvent(SID, delta("\n\n## Summary"), turn)), "\n\n## Summary");
   });
 
-  it("adds no separator when the previous block already ended a line, or before the first text", () => {
+  it("tops a single trailing newline up to a blank line, and marks a boundary on the assistant frame", () => {
+    const turn = newTurnTextState();
+    const delta = (text: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    });
+    const textOf = (r: ReturnType<typeof translateClaudeEvent>) =>
+      (r.notifications[0]?.params.update as { content: { text: string } }).content.text;
+    assert.equal(textOf(translateClaudeEvent(SID, delta("Done.\n"), turn)), "Done.\n");
+    // No stream_event start marker — only the cumulative assistant frame.
+    translateClaudeEvent(SID, { type: "assistant", message: { content: [{ type: "text", text: "Done.\n" }] } }, turn);
+    assert.equal(textOf(translateClaudeEvent(SID, delta("Next"), turn)), "\nNext");
+  });
+
+  it("adds no separator when the previous block already ended a paragraph, or before the first text", () => {
     const turn = newTurnTextState();
     const delta = (text: string) => ({
       type: "stream_event",
@@ -179,7 +193,7 @@ describe("translateClaudeEvent", () => {
     const textOf = (r: ReturnType<typeof translateClaudeEvent>) =>
       (r.notifications[0]?.params.update as { content: { text: string } }).content.text;
     translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
-    assert.equal(textOf(translateClaudeEvent(SID, delta("Done.\n"), turn)), "Done.\n");
+    assert.equal(textOf(translateClaudeEvent(SID, delta("Done.\n\n"), turn)), "Done.\n\n");
     translateClaudeEvent(SID, { type: "stream_event", event: { type: "content_block_start" } }, turn);
     assert.equal(textOf(translateClaudeEvent(SID, delta("Next"), turn)), "Next");
   });
