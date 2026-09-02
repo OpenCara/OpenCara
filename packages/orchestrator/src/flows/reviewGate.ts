@@ -1,8 +1,10 @@
 /**
  * Per-PR review gate: at most ONE review run executes at a time for a given
  * pull request — across both review flows (multi + single) — with at most one
- * more waiting behind it. A third request while one is already queued is
- * discarded: the queued run will review the newest state of the PR anyway.
+ * more waiting behind it. NEWEST WINS: a further request while one is already
+ * queued replaces the waiter (the older request is superseded), because each
+ * request carries the PR state of its own event and the one that should run
+ * next is the latest push.
  *
  * In-process by design: the orchestrator is a single instance and a run's
  * execution lives in this process, so the map here IS the truth; the DB only
@@ -11,11 +13,11 @@
  * stopped from the UI leaves the queue instead of running later.
  */
 
-export type GateVerdict = "run" | "discard" | "cancelled";
+export type GateVerdict = "run" | "superseded" | "cancelled";
 
 interface Waiter {
   runId: string;
-  resolve: (v: "run") => void;
+  resolve: (v: "run" | "superseded") => void;
 }
 
 interface Slot {
@@ -52,21 +54,42 @@ export class ReviewGate {
       return "run";
     }
     if (slot.running === runId) return "run";
-    if (slot.queued !== null) return "discard";
 
-    let resolveRun!: (v: "run") => void;
-    const promoted = new Promise<"run">((r) => (resolveRun = r));
-    slot.queued = { runId, resolve: resolveRun };
-    await hooks.onQueued?.(slot.running);
+    // Newest wins: an older waiter is told to stand down and this run takes
+    // its place in the queue.
+    if (slot.queued !== null) {
+      const older = slot.queued;
+      slot.queued = null;
+      older.resolve("superseded");
+    }
+
+    let settle!: (v: "run" | "superseded") => void;
+    const outcome = new Promise<"run" | "superseded">((r) => (settle = r));
+    slot.queued = { runId, resolve: settle };
+    try {
+      await hooks.onQueued?.(slot.running);
+    } catch (err) {
+      if (slot.queued?.runId === runId) slot.queued = null;
+      this.prune(key, slot);
+      throw err;
+    }
 
     const pollMs = hooks.pollMs ?? 5000;
     for (;;) {
       const winner = await Promise.race([
-        promoted,
+        outcome,
         new Promise<"tick">((r) => setTimeout(() => r("tick"), pollMs)),
       ]);
+      if (winner === "superseded") return "superseded";
       if (winner === "run") {
-        await hooks.onResumed?.();
+        try {
+          await hooks.onResumed?.();
+        } catch (err) {
+          // We already hold the running slot; give it back so the PR isn't
+          // wedged, then surface the failure to the caller.
+          this.release(key, runId);
+          throw err;
+        }
         return "run";
       }
       if (await hooks.isCancelled?.()) {

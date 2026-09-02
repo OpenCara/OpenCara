@@ -44,7 +44,9 @@ export function triggerMayMatchEvent(trigger: FlowDefinition["nodes"][number], e
       return false;
     }
     case "scm.pull_request_review": {
-      if (event.type === "pull_request_review") return true;
+      // The runner only fires on `submitted`; edited / dismissed reviews
+      // would otherwise mint a trigger_skip run each.
+      if (event.type === "pull_request_review") return payload.action === "submitted";
       if (event.type === "issue_comment") {
         if (payload.action !== "created" || !payload.issue?.pull_request) return false;
         return commentMentions(payload.comment?.body, trigger.config.commentPhrase);

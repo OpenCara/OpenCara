@@ -113,6 +113,156 @@ describe("FlowDefinitionSchema agent review-fix options", () => {
   });
 });
 
+describe("schedule.cron trigger node", () => {
+  const scheduleFlow = {
+    slug: "nightly-audit",
+    name: "Nightly audit",
+    description: "",
+    nodes: [
+      {
+        id: "schedule",
+        kind: "schedule.cron",
+        position: { x: 0, y: 0 },
+        config: {
+          name: "Nightly dependency audit",
+          cron: "0 3 * * *",
+          timezone: "America/New_York",
+          enabled: true,
+        },
+      },
+      {
+        id: "agent",
+        kind: "agent",
+        position: { x: 320, y: 0 },
+        config: { label: "Auditor", contextInjection: { env: [], stdinJson: true } },
+      },
+    ],
+    edges: [{ id: "e1", source: "schedule", target: "agent" }],
+  };
+
+  it("is recognised as a trigger kind", () => {
+    assert.equal(isTriggerKind("schedule.cron"), true);
+  });
+
+  it("round-trips cron/timezone/name/enabled", () => {
+    const parsed = FlowDefinitionSchema.parse(scheduleFlow);
+    const node = parsed.nodes.find((n) => n.kind === "schedule.cron");
+    assert.ok(node && node.kind === "schedule.cron");
+    assert.equal(node.config.cron, "0 3 * * *");
+    assert.equal(node.config.timezone, "America/New_York");
+    assert.equal(node.config.name, "Nightly dependency audit");
+    assert.equal(node.config.enabled, true);
+  });
+
+  it("applies defaults for an empty schedule config", () => {
+    const parsed = FlowDefinitionSchema.parse({
+      ...scheduleFlow,
+      nodes: [
+        { ...scheduleFlow.nodes[0], config: {} },
+        scheduleFlow.nodes[1],
+      ],
+    });
+    const node = parsed.nodes.find((n) => n.kind === "schedule.cron");
+    assert.ok(node && node.kind === "schedule.cron");
+    assert.equal(node.config.cron, "0 9 * * *");
+    assert.equal(node.config.timezone, "UTC");
+    assert.equal(node.config.enabled, true);
+  });
+});
+
+describe("legacy github.* node kinds", () => {
+  const legacyFlow = {
+    slug: "legacy-flow",
+    name: "Legacy Flow",
+    description: "Graph as stored before the scm.* rename",
+    nodes: [
+      {
+        id: "t1",
+        kind: "github.pull_request",
+        position: { x: 0, y: 0 },
+        config: { actions: ["opened"] },
+      },
+      {
+        id: "a1",
+        kind: "agent",
+        position: { x: 320, y: 0 },
+        config: { label: "Reviewer", contextInjection: { env: [], stdinJson: true } },
+      },
+      {
+        id: "x1",
+        kind: "github.post_review",
+        position: { x: 640, y: 0 },
+        config: { event: "COMMENT" },
+      },
+    ],
+    edges: [
+      { id: "e1", source: "t1", target: "a1" },
+      { id: "e2", source: "a1", target: "x1" },
+    ],
+  };
+
+  it("parses a stored pre-rename graph", () => {
+    assert.doesNotThrow(() => FlowDefinitionSchema.parse(legacyFlow));
+  });
+
+  it("canonicalizes legacy kinds to their scm.* spelling on parse", () => {
+    const parsed = FlowDefinitionSchema.parse(legacyFlow);
+    assert.deepEqual(
+      parsed.nodes.map((n) => n.kind),
+      ["scm.pull_request", "agent", "scm.post_review"],
+    );
+  });
+
+  it("preserves config through normalization", () => {
+    const parsed = FlowDefinitionSchema.parse(legacyFlow);
+    const action = parsed.nodes.find((n) => n.kind === "scm.post_review");
+    assert.ok(action && action.kind === "scm.post_review");
+    assert.equal(action.config.event, "COMMENT");
+  });
+
+  it("maps the projects_v2_item trigger onto the neutral board trigger", () => {
+    const parsed = FlowDefinitionSchema.parse({
+      ...legacyFlow,
+      nodes: [
+        { ...legacyFlow.nodes[0], kind: "github.projects_v2_item", config: {} },
+        legacyFlow.nodes[1],
+        legacyFlow.nodes[2],
+      ],
+    });
+    const trigger = parsed.nodes.find((n) => n.kind === "scm.board_item");
+    assert.ok(trigger && trigger.kind === "scm.board_item");
+    // Defaults still apply after the kind rewrite.
+    assert.equal(trigger.config.fieldName, "Status");
+  });
+
+  it("classifies both spellings as trigger kinds", () => {
+    for (const kind of [
+      "github.pull_request",
+      "github.pull_request_review",
+      "github.projects_v2_item",
+      "scm.pull_request",
+      "scm.pull_request_review",
+      "scm.board_item",
+      "schedule.cron",
+    ]) {
+      assert.equal(isTriggerKind(kind), true, kind);
+    }
+    assert.equal(isTriggerKind("agent"), false);
+    assert.equal(isTriggerKind("scm.post_review"), false);
+  });
+
+  it("normalizeGraphKinds rewrites a raw graph in place", () => {
+    const raw = {
+      nodes: [{ kind: "github.add_label" }, { kind: "agent" }, { kind: "scm.add_comment" }],
+    };
+    normalizeGraphKinds(raw);
+    assert.deepEqual(
+      raw.nodes.map((n) => n.kind),
+      ["scm.add_label", "agent", "scm.add_comment"],
+    );
+  });
+});
+
 describe("the four stage built-in flows", () => {
   it("are exactly the auto-seeded built-ins, in lifecycle order", () => {
     assert.deepEqual(Object.keys(builtinFlows), [

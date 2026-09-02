@@ -5,7 +5,7 @@ import { ReviewGate, reviewGateKeyFor } from "../reviewGate.js";
 const tick = () => new Promise((r) => setImmediate(r));
 
 describe("ReviewGate", () => {
-  it("first run acquires; second waits; third is discarded", async () => {
+  it("first run acquires; second waits; a third supersedes the second (newest wins)", async () => {
     const gate = new ReviewGate();
     assert.equal(await gate.acquire("k", "r1"), "run");
     let queuedBehind: string | null = null;
@@ -13,14 +13,14 @@ describe("ReviewGate", () => {
     await tick();
     assert.equal(queuedBehind, "r1");
     assert.deepEqual(gate.state("k"), { running: "r1", queued: "r2" });
-    assert.equal(await gate.acquire("k", "r3"), "discard");
-    let resumed = false;
+    const third = gate.acquire("k", "r3", { pollMs: 10 });
+    await tick();
+    assert.equal(await second, "superseded");
+    assert.deepEqual(gate.state("k"), { running: "r1", queued: "r3" });
     gate.release("k", "r1");
-    // r2 is promoted synchronously on release; its acquire resolves next tick.
-    assert.deepEqual(gate.state("k"), { running: "r2", queued: null });
-    const v = await second;
-    assert.equal(v, "run");
-    void resumed;
+    // r3 is promoted synchronously on release; its acquire resolves next tick.
+    assert.deepEqual(gate.state("k"), { running: "r3", queued: null });
+    assert.equal(await third, "run");
   });
 
   it("a queued run that gets cancelled leaves the queue", async () => {
@@ -51,6 +51,21 @@ describe("ReviewGate", () => {
     gate.release("k", "r1");
     await second;
     assert.equal(resumed, 1);
+  });
+
+  it("a throwing onQueued hook leaves no waiter behind; a throwing onResumed releases the slot", async () => {
+    const gate = new ReviewGate();
+    await gate.acquire("k", "r1");
+    await assert.rejects(
+      gate.acquire("k", "r2", { onQueued: () => { throw new Error("db down"); }, pollMs: 5 }),
+      /db down/,
+    );
+    assert.deepEqual(gate.state("k"), { running: "r1", queued: null });
+    const third = gate.acquire("k", "r3", { onResumed: () => { throw new Error("db down"); }, pollMs: 5 });
+    await tick();
+    gate.release("k", "r1");
+    await assert.rejects(third, /db down/);
+    assert.deepEqual(gate.state("k"), { running: null, queued: null });
   });
 
   it("keys are independent and release by a non-holder is a no-op", async () => {

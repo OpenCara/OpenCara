@@ -7,10 +7,10 @@ OpenCara receives webhook events from GitHub, coordinates agents driven by those
 The full development lifecycle ships as four built-in flows — `issue-implement`, `pr-review-multi`, `pr-review`, `pr-review-fix` — one trigger each, chained by platform round-trips:
 
 - Issue moves from `backlog` → `ready` on a GitHub Projects v2 board → dispatch the implement agent (it commits, pushes, and opens the PR).
-- PR opened → fan out to three reviewer agents (correctness, performance, style) → synthesize their reviews into one → post it.
+- PR opened → run the reviewer agent pool (an ordered list of agents sharing one prompt, N in parallel with failover) → synthesize the successful reviews into one → post it; follow-up pushes get a lighter single-reviewer pass.
 - Review submitted (or an `@opencara fix` comment) → wake the implement agent in the same worktree to address feedback, then optionally auto-merge.
 
-Each incoming webhook activates only the matching stage's subgraph, so a single event no longer fans out to four separate flows with three immediately cancelled as `trigger_skip`. (The earlier `issue-implement`, `pr-review`, `pr-review-multi`, and `pr-review-fix` templates are superseded by this one; their definitions remain in `packages/flows` for reference.)
+Each flow has exactly one trigger, and the engine pre-filters every incoming webhook per flow (trigger kind, PR action, comment phrase), so an event reaches only the stage that can take it — no `trigger_skip` noise on the other three. Reviews of one PR are serialised (one running, the newest request queued), a configurable grace period lets a quick merge or an ignored label cancel a review before it starts, and a merge / ignored label during a review cancels it, agents included.
 
 ## Using opencara.com
 
@@ -118,7 +118,7 @@ Azure DevOps Services (`dev.azure.com`) is supported alongside GitHub. Azure Dev
 Not yet done: **Boards/kanban mirroring** (work item events are received and recorded but drive no board), **auto-merge**, **PR↔work-item linking**, and **draft-PR ready-for-review** — each is skipped with a log line on Azure DevOps rather than failing the run. Diffs are not inlined into the agent's stdin (see below). See ROADMAP.md.
 
 > **The `pr-review-fix` flow does not run on Azure DevOps.**
-> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — says nothing about what changed, so a vote is not distinguishable from any other edit. If you assign the built-in `development-lifecycle` flow to an Azure DevOps project, the implement and review stages work and the **review-submitted → fix loop silently never fires**. Reviews still post; nothing consumes them.
+> That stage is keyed on a `scm.pull_request_review` trigger, and nothing in the Azure DevOps path ever produces one: service hooks have no reviewer-vote event, and `git.pullrequest.updated` — which does fire on a vote — says nothing about what changed, so a vote is not distinguishable from any other edit. On an Azure DevOps project the implement and review flows work and the **`pr-review-fix` flow silently never fires**. Reviews still post; nothing consumes them.
 >
 > A lossy proxy is possible — treat `git.pullrequest.updated` as a review event when any reviewer carries a non-zero vote — but it would re-fire on every later update to the same PR, so it needs deduplication work first. Tracked in ROADMAP.md.
 

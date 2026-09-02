@@ -535,7 +535,7 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const result = await cancelFlowRun(
       { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
       { id, projectId: run.projectId },
-      "user_stopped",
+      { db: "user_stopped", wire: "user_stopped" },
     );
     if (!result.cancelled) {
       return c.json({ error: "already terminal" }, 409);

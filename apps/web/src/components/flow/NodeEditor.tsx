@@ -1394,7 +1394,9 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
             re-read the PR: the review is cancelled if the PR was merged or closed, or
             picked up one of the <span className="font-medium">labels ignore</span>{" "}
             labels meanwhile. A run cancelled from the run page stops waiting too.
-            Comment-triggered reviews start at once.
+            Comment-triggered reviews start at once. The wait lives in the server
+            process: a server restart inside the window drops that run (no review), like
+            any in-flight step.
           </p>
         </div>
 

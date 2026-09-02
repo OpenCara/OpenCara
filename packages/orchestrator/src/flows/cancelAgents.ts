@@ -14,11 +14,14 @@ import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 
 const IN_FLIGHT = ["queued", "assigned", "running"] as const;
 
+/** Reasons the device cancel frame understands (shared host-protocol enum). */
+export type WireCancelReason = "user_stopped" | "wave_cancelled" | "review_preempted";
+
 export async function cancelFlowRunAgents(
   db: Db,
   dispatcher: AgentDispatcher,
   flowRunId: string,
-  reason: string,
+  reason: WireCancelReason,
 ): Promise<{ cancelled: number; signalled: number }> {
   const rows = await db
     .select({ id: agentRuns.id })
@@ -40,18 +43,9 @@ export async function cancelFlowRunAgents(
       and(inArray(agentRuns.id, ids), inArray(agentRuns.status, [...IN_FLIGHT])),
     );
 
-  // The wire enum is narrower than the free-text DB column: any
-  // `review_preempted_*` reason collapses onto the protocol's
-  // `review_preempted`; older devices `.catch()` unknown values anyway.
-  const wireReason: "user_stopped" | "wave_cancelled" | "review_preempted" =
-    reason === "wave_cancelled"
-      ? "wave_cancelled"
-      : reason.startsWith("review_preempted")
-        ? "review_preempted"
-        : "user_stopped";
   let signalled = 0;
   for (const id of ids) {
-    if (dispatcher.cancel(id, wireReason)) signalled += 1;
+    if (dispatcher.cancel(id, reason)) signalled += 1;
   }
   return { cancelled: ids.length, signalled };
 }

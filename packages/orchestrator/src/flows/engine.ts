@@ -655,6 +655,9 @@ export class FlowEngine {
     }
     let failed = false;
     let errorMsg: string | undefined;
+    /** Specific `cancel_reason` for a skip that should stay visible (grace
+     *  period, review queue) instead of the default `trigger_skip`. */
+    let skipCancelReason: string | undefined;
     let skipped = false;
 
     let layers: FlowNode[][];
@@ -735,6 +738,7 @@ export class FlowEngine {
         if (r.value.skipped) {
           // A skipped trigger deactivates ONLY its own subgraph; it does
           // not fail/cancel the run.
+          if (r.value.skipCancelReason) skipCancelReason ??= r.value.skipCancelReason;
           return { id: node.id, status: "skipped", skipReason: r.value.skipReason };
         }
         return { id: node.id, status: "matched", stdoutCaptured: r.value.stdoutCaptured };
@@ -847,19 +851,30 @@ export class FlowEngine {
       } else {
         skipped = true;
         errorMsg ??=
-          verdict === "discard"
-            ? "discarded: a review for this PR is already running and another is queued"
+          verdict === "superseded"
+            ? "superseded: a newer review request for this PR took the queue slot"
             : "cancelled while queued behind another review of this PR";
-        await this.deps.db
-          .update(flowRuns)
-          .set({ cancelReason: verdict === "discard" ? "review_superseded" : "review_queue_cancelled" })
-          .where(eq(flowRuns.id, flowRunId));
+        skipCancelReason =
+          verdict === "superseded" ? "review_superseded" : "review_queue_cancelled";
       }
     }
 
     try {
     if (!failed && !skipped) {
       outer: for (const layer of layers) {
+        // A cancel from outside (UI stop, review pre-emption on merge / ignored
+        // label) flips flow_runs.status; agents in flight get killed, but a
+        // run between layers would otherwise march on into post_review. Check
+        // once per layer so nothing new starts after the run was cancelled.
+        const live = await this.deps.db.query.flowRuns.findFirst({
+          where: eq(flowRuns.id, flowRunId),
+          columns: { status: true },
+        });
+        if (!live || (live.status !== "running" && live.status !== "pending")) {
+          skipped = true;
+          errorMsg ??= `run ${live?.status ?? "deleted"} externally; no further nodes started`;
+          break outer;
+        }
         // Snapshot idx per node before launching the layer so step rows
         // have stable, sequential idx even when siblings run
         // concurrently. Skip nodes whose output is already in the map
@@ -963,7 +978,9 @@ export class FlowEngine {
         // skipped → trigger_skip so the Flow runs page can hide these by
         // default. (Other 'cancelled' rows come from the reaper, which
         // sets cancel_reason='abandoned'.)
-        cancelReason: skipped ? "trigger_skip" : null,
+        // A specific reason set for this skip (grace period, review queue)
+        // wins over the generic marker; the runs page hides trigger_skip.
+        cancelReason: skipped ? (skipCancelReason ?? "trigger_skip") : null,
       })
       .where(
         and(
@@ -1250,7 +1267,11 @@ export class FlowEngine {
           .set({ status: "skipped", finishedAt: new Date(), error: err.message })
           .where(eq(flowRunSteps.id, stepId));
         await this.deps.pg.notify("flow_run_steps", flowRunId);
-        return { skipped: true, skipReason: err.message };
+        return {
+          skipped: true,
+          skipReason: err.message,
+          ...(err.cancelReason ? { skipCancelReason: err.cancelReason } : {}),
+        };
       }
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.db
@@ -1282,6 +1303,8 @@ interface StepOutcome {
   stdoutCaptured?: string;
   skipped: boolean;
   skipReason?: string;
+  /** `SkipFlowError.cancelReason` when the skip named one. */
+  skipCancelReason?: string;
   /** Set by agent nodes: the agent that was actually resolved and run. */
   agentName?: string;
   /**

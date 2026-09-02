@@ -8,7 +8,7 @@ import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
 import { flowRuns } from "../db/schema.js";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
-import { cancelFlowRunAgents } from "./cancelAgents.js";
+import { cancelFlowRunAgents, type WireCancelReason } from "./cancelAgents.js";
 import { FLOW_RUNS_CHANNEL, serializeFlowRunsNotify } from "./notify.js";
 
 export interface CancelFlowRunDeps {
@@ -23,10 +23,17 @@ export interface CancelFlowRunResult {
   signalled: number;
 }
 
+export interface CancelReason {
+  /** Free-text `flow_runs.cancel_reason` / `agent_runs.cancel_reason`. */
+  db: string;
+  /** What the device cancel frame carries (narrow protocol enum). */
+  wire: WireCancelReason;
+}
+
 export async function cancelFlowRun(
   deps: CancelFlowRunDeps,
   run: { id: string; projectId: string },
-  reason: string,
+  reason: CancelReason,
   /** Human-readable cause surfaced in `flow_runs.error` (run page header). */
   error?: string,
 ): Promise<CancelFlowRunResult> {
@@ -37,7 +44,7 @@ export async function cancelFlowRun(
     .update(flowRuns)
     .set({
       status: "cancelled",
-      cancelReason: reason,
+      cancelReason: reason.db,
       finishedAt: new Date(),
       ...(error ? { error } : {}),
     })
@@ -51,7 +58,7 @@ export async function cancelFlowRun(
   // push commits / open PRs) until it finished naturally.
   let signalled = 0;
   if (deps.dispatcher) {
-    ({ signalled } = await cancelFlowRunAgents(deps.db, deps.dispatcher, run.id, reason));
+    ({ signalled } = await cancelFlowRunAgents(deps.db, deps.dispatcher, run.id, reason.wire));
   }
   // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
   // board, which LISTENs on `flow_runs` to refresh implement statuses).

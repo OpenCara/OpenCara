@@ -30,8 +30,10 @@ describe("flowMayMatchEvent routes each event to exactly the stage that can take
     assert.deepEqual(matching({ type: "pull_request", payload: { action: "labeled" } }), []);
   });
 
-  it("pull_request_review → pr-review-fix only", () => {
+  it("pull_request_review submitted → pr-review-fix only; edited/dismissed → nothing", () => {
     assert.deepEqual(matching({ type: "pull_request_review", payload: { action: "submitted" } }), ["pr-review-fix"]);
+    assert.deepEqual(matching({ type: "pull_request_review", payload: { action: "edited" } }), []);
+    assert.deepEqual(matching({ type: "pull_request_review", payload: { action: "dismissed" } }), []);
   });
 
   const comment = (body: string) => ({

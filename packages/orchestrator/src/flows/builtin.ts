@@ -97,7 +97,17 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
   // Kanban "Start" dispatches the project's default implement flow; if that
   // was the retired unified flow, point it at `issue-implement` (which now
   // exists — the loop above inserted it if needed).
-  if (retiredLegacyFlowId && project?.defaultImplementFlowId === retiredLegacyFlowId) {
+  // Also covers a legacy row an operator disabled by hand before the split:
+  // the kanban default must never point at a disabled flow.
+  const legacyRow = await db.query.flows.findFirst({
+    where: and(eq(flows.projectId, projectId), eq(flows.slug, LEGACY_LIFECYCLE_SLUG)),
+    columns: { id: true },
+  });
+  const defaultPointsAtLegacy =
+    !!project?.defaultImplementFlowId &&
+    (project.defaultImplementFlowId === retiredLegacyFlowId ||
+      project.defaultImplementFlowId === legacyRow?.id);
+  if (defaultPointsAtLegacy) {
     const implement = await db.query.flows.findFirst({
       where: and(eq(flows.projectId, projectId), eq(flows.slug, "issue-implement")),
       columns: { id: true },
@@ -236,26 +246,70 @@ export async function splitLegacyLifecycleTemplates(db: Db, ownerUserId: string)
 }
 
 /**
- * Retire a project's `development-lifecycle` row once the split ships:
- * disable it (run history stays) and put any pre-existing stage-flow rows
- * back to enabled + inheriting, so the seeding loop refreshes their graph
- * from the (split) template. Returns the retired flow id, or null when there
- * was nothing (left) to retire — a disabled legacy row is left alone.
+ * Retire a project's `development-lifecycle` row once the split ships, in ONE
+ * transaction: disable it (run history stays), put the four stage rows back to
+ * enabled + inheriting so the seeding loop refreshes their graph, and carry
+ * the legacy row's per-project node overrides (`flow_node_settings`) onto the
+ * stage flow whose graph has that node id. Re-entrant: it also repairs the
+ * half-done shape (legacy already disabled but every stage row still
+ * disabled) that an earlier crash or the old convergence step left behind.
+ * Returns the legacy flow id when something was retired/repaired, else null.
  */
 async function retireLegacyLifecycleFlow(db: Db, projectId: string): Promise<string | null> {
   const legacy = await db.query.flows.findFirst({
     where: and(eq(flows.projectId, projectId), eq(flows.slug, LEGACY_LIFECYCLE_SLUG)),
     columns: { id: true, enabled: true },
   });
-  if (!legacy || !legacy.enabled) return null;
-  await db
-    .update(flows)
-    .set({ enabled: false, updatedAt: new Date() })
-    .where(eq(flows.id, legacy.id));
-  await db
-    .update(flows)
-    .set({ enabled: true, customizedAt: null, updatedAt: new Date() })
-    .where(and(eq(flows.projectId, projectId), inArray(flows.slug, Object.keys(builtinFlows))));
+  if (!legacy) return null;
+  const stageSlugs = Object.keys(builtinFlows);
+  const stageRows = await db
+    .select({ id: flows.id, slug: flows.slug, enabled: flows.enabled, graphJson: flows.graphJson })
+    .from(flows)
+    .where(and(eq(flows.projectId, projectId), inArray(flows.slug, stageSlugs)));
+  const stagesAllOff = stageRows.length > 0 && stageRows.every((r) => !r.enabled);
+  if (!legacy.enabled && !stagesAllOff) return null;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(flows)
+      .set({ enabled: false, updatedAt: new Date() })
+      .where(eq(flows.id, legacy.id));
+    await tx
+      .update(flows)
+      .set({ enabled: true, customizedAt: null, updatedAt: new Date() })
+      .where(and(eq(flows.projectId, projectId), inArray(flows.slug, stageSlugs)));
+
+    // Per-project overrides made on the unified flow move to the stage flow
+    // that owns the node id (never overwriting an override already there).
+    const overrides = await tx
+      .select()
+      .from(flowNodeSettings)
+      .where(eq(flowNodeSettings.flowId, legacy.id));
+    for (const o of overrides) {
+      const def = Object.values(builtinFlows).find((d) => d.nodes.some((n) => n.id === o.nodeId));
+      if (!def) continue;
+      const target = stageRows.find((r) => r.slug === def.slug);
+      if (!target) continue;
+      const exists = await tx.query.flowNodeSettings.findFirst({
+        where: and(eq(flowNodeSettings.flowId, target.id), eq(flowNodeSettings.nodeId, o.nodeId)),
+        columns: { id: true },
+      });
+      if (exists) continue;
+      await tx.insert(flowNodeSettings).values({
+        id: ulid(),
+        projectId,
+        flowId: target.id,
+        nodeId: o.nodeId,
+        promptId: o.promptId,
+        agentId: o.agentId,
+        fallbackAgentIds: o.fallbackAgentIds,
+        retrySame: o.retrySame,
+        concurrency: o.concurrency,
+        quorum: o.quorum,
+        label: o.label,
+      });
+    }
+  });
   console.log("[flows] retired legacy development-lifecycle flow", { projectId, flowId: legacy.id });
   return legacy.id;
 }

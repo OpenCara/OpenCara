@@ -11,7 +11,7 @@
  */
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { flowRuns, flowRunSteps, platformEvents } from "../db/schema.js";
+import { flowRuns, flowRunSteps, flows, platformEvents } from "../db/schema.js";
 import type { PlatformEventInput } from "./engine.js";
 import { cancelFlowRun, type CancelFlowRunDeps } from "./cancelRun.js";
 
@@ -87,9 +87,15 @@ export async function cancelPreemptedReviewRuns(
 
   // In-flight runs of this project whose triggering event concerns the same PR.
   const candidates = await deps.db
-    .select({ id: flowRuns.id, projectId: flowRuns.projectId, payload: platformEvents.payload })
+    .select({
+      id: flowRuns.id,
+      projectId: flowRuns.projectId,
+      payload: platformEvents.payload,
+      graphJson: flows.graphJson,
+    })
     .from(flowRuns)
     .innerJoin(platformEvents, eq(platformEvents.id, flowRuns.triggerEventId))
+    .innerJoin(flows, eq(flows.id, flowRuns.flowId))
     .where(
       and(eq(flowRuns.projectId, event.projectId), inArray(flowRuns.status, ["pending", "running"])),
     );
@@ -114,15 +120,26 @@ export async function cancelPreemptedReviewRuns(
 
   let cancelled = 0;
   for (const run of samePr) {
+    // The trigger step carries the config that actually matched. A run minted
+    // moments ago may not have inserted it yet — fall back to the flow graph's
+    // scm.pull_request triggers so a merge in that window still cancels.
     const trigger = steps.find((s) => s.flowRunId === run.id);
-    if (!trigger) continue;
-    const cfg = (trigger.inputJson as { nodeConfig?: unknown } | null)?.nodeConfig;
-    const reason = preemptionReason(preemption, cfg);
+    const configs: unknown[] = trigger
+      ? [(trigger.inputJson as { nodeConfig?: unknown } | null)?.nodeConfig]
+      : ((run.graphJson as { nodes?: Array<{ kind?: string; config?: unknown }> } | null)?.nodes ?? [])
+          .filter((n) => n.kind === "scm.pull_request" || n.kind === "github.pull_request")
+          .map((n) => n.config);
+    if (configs.length === 0) continue;
+    let reason: string | null = null;
+    for (const cfg of configs) {
+      reason = preemptionReason(preemption, cfg);
+      if (reason) break;
+    }
     if (!reason) continue;
     const result = await cancelFlowRun(
       deps,
       { id: run.id, projectId: run.projectId },
-      `review_preempted_${preemption.kind}`,
+      { db: `review_preempted_${preemption.kind}`, wire: "review_preempted" },
       reason,
     );
     if (result.cancelled) {

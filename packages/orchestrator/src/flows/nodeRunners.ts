@@ -331,7 +331,7 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   const prNumber = (payload.pull_request as { number?: unknown } | undefined)?.number;
   if (delaySeconds > 0 && typeof prNumber === "number") {
     const recheck = await waitReviewGracePeriod(ctx, delaySeconds, prNumber, cfg.labelsIgnore);
-    return { output: { matched: true, delayedSeconds: delaySeconds, recheck } };
+    return { output: { matched: true, delayedSeconds: delaySeconds, recheck: recheck ?? null } };
   }
 
   return { output: { matched: true } };
@@ -357,7 +357,7 @@ async function waitReviewGracePeriod(
   delaySeconds: number,
   prNumber: number,
   labelsIgnore: readonly string[],
-): Promise<PullRequestState> {
+): Promise<PullRequestState | undefined> {
   const deadline = Date.now() + delaySeconds * 1000;
   // Sleep in slices so a run cancelled from the UI (or by the reaper) stops
   // waiting instead of dispatching reviewers minutes after the cancel.
@@ -368,7 +368,10 @@ async function waitReviewGracePeriod(
       columns: { status: true },
     });
     if (run && run.status !== "running" && run.status !== "pending") {
-      throw new SkipFlowError(`run ${run.status} during the review grace period`);
+      throw new SkipFlowError(
+        `run ${run.status} during the review grace period`,
+        "review_grace_period",
+      );
     }
   }
   const provider = await providerFor(
@@ -388,9 +391,21 @@ async function waitReviewGracePeriod(
       azure: ctx.azure,
     },
   );
-  const state = await provider.getPullRequestState(prNumber);
+  // Fail open: the re-check is an optimisation. A 5xx / rate limit here must
+  // not turn "review after a pause" into "no review at all".
+  let state: PullRequestState;
+  try {
+    state = await provider.getPullRequestState(prNumber);
+  } catch (err) {
+    console.error("[flows] grace-period PR re-check failed; reviewing anyway", {
+      flowRunId: ctx.flowRunId,
+      prNumber,
+      err,
+    });
+    return undefined;
+  }
   const reason = gracePeriodSkipReason(state, labelsIgnore);
-  if (reason) throw new SkipFlowError(reason);
+  if (reason) throw new SkipFlowError(reason, "review_grace_period");
   return state;
 }
 

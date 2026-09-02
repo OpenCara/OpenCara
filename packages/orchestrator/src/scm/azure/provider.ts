@@ -90,9 +90,9 @@ const ConnectionDataSchema = z.object({
   authenticatedUser: z.object({ id: z.string() }),
 });
 
-const PullRequestStatusSchema = z.object({
-  status: z.enum(["active", "completed", "abandoned", "notSet", "all"]).or(z.string()),
-});
+// Azure reports `active` | `completed` (merged) | `abandoned`; anything else
+// is treated as closed-not-merged by the caller, so a plain string suffices.
+const PullRequestStatusSchema = z.object({ status: z.string() });
 const LabelListSchema = z.object({
   value: z.array(z.object({ name: z.string().optional() })).default([]),
 });
