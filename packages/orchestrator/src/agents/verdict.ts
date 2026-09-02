@@ -24,9 +24,23 @@
 // return `null` and the runner falls back to `node.config.event`. Only
 // the position rule is relaxed; we still want malformed tokens to be
 // operator-visible rather than silently coerced.
+//
+// Line rule (relaxed 2026-09): the marker no longer has to be alone on its
+// line. Streaming adapters concatenate an agent's text segments around tool
+// calls without newlines, so a posted review read
+// "…before writing the verdict.verdict: request_changes" — the strict
+// line-anchored match missed it, the review fell back to GitHub's raw
+// `commented` state, and the review→fix trigger fired on the wrong intent
+// (flow_run_id=01M1GWKV0F4AGJRGP93RBSK5SW). Markdown emphasis around the
+// label or token (`**verdict:** approve`, `` `verdict: comment` ``) is
+// tolerated for the same reason. Only the matched marker is stripped; the
+// rest of its line is kept.
 export type ReviewVerdict = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 
-const VERDICT_LINE_RE = /^verdict:\s*(approve|request_changes|comment)\s*$/i;
+// (^|non-word) keeps `myverdict:` from matching; the lookahead keeps
+// `approved` / `commentary` from matching the strict token.
+const VERDICT_RE =
+  /(^|[^A-Za-z0-9_])([*_`]*verdict[*_`]*:\s*[*_`]*\s*(approve|request_changes|comment)[*_`]*)(?=$|[\s.,;:!?)\]])/i;
 
 export interface ParsedReviewVerdict {
   verdict: ReviewVerdict;
@@ -40,31 +54,38 @@ export function parseReviewVerdict(body: string): ParsedReviewVerdict | null {
   const normalized = body.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
 
-  // Scan every line for a standalone `verdict: <token>` match. First
-  // match wins — a reviewer that quotes another verdict mid-paragraph
-  // would tag the wrong event, but that's been observed exactly never;
-  // the common case is a single contract line, preceded or not by
-  // preamble.
+  // Scan every line for the marker. First match wins — a reviewer that
+  // quotes another verdict mid-paragraph would tag the wrong event, but
+  // that's been observed exactly never; the common case is a single
+  // contract line, preceded or not by preamble.
   let verdictIdx = -1;
   let token: ReviewVerdict | null = null;
+  let stripped = "";
   for (let i = 0; i < lines.length; i++) {
-    const m = VERDICT_LINE_RE.exec(lines[i]!.trim());
+    const line = lines[i]!;
+    const m = VERDICT_RE.exec(line);
     if (m) {
       verdictIdx = i;
       // The regex group is constrained to the three canonical tokens;
       // the cast stays exhaustive as long as the alternation matches
       // the ReviewVerdict union.
-      token = m[1]!.toUpperCase() as ReviewVerdict;
+      token = m[3]!.toUpperCase() as ReviewVerdict;
+      // Remove just the marker (keep the leading delimiter char, which
+      // belongs to the surrounding prose), then tidy the seam.
+      const start = m.index + m[1]!.length;
+      stripped = (line.slice(0, start) + line.slice(start + m[2]!.length)).trim();
       break;
     }
   }
   if (verdictIdx === -1 || !token) return null;
 
-  // Strip only the matched line. Preamble and post-amble both stay in
-  // the body so the operator sees what the agent actually wrote, minus
-  // the contract marker that GitHub's UI already renders as a badge.
+  // Strip only the marker. Preamble and post-amble both stay in the body
+  // so the operator sees what the agent actually wrote, minus the contract
+  // marker that GitHub's UI already renders as a badge. A line that held
+  // nothing but the marker disappears entirely.
   const remainingLines = [
     ...lines.slice(0, verdictIdx),
+    ...(stripped.length > 0 ? [stripped] : []),
     ...lines.slice(verdictIdx + 1),
   ];
   const bodyWithoutVerdict = remainingLines.join("\n").trim();
