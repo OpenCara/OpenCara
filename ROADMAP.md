@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#166](https://github.com/OpenCara/OpenCara/pull/166) - fix(cli): stop WS reconnect storm by gating backoff reset on connection stability
 - **2026-09-02**: Merged [#226](https://github.com/OpenCara/OpenCara/pull/226) - fix(flows): never resume a prior ACP session across flow runs
 - **2026-09-02**: Merged [#225](https://github.com/OpenCara/OpenCara/pull/225) - fix(flows): persist the effective pool quorum, capped to the slot count
 - **2026-09-02**: Merged [#223](https://github.com/OpenCara/OpenCara/pull/223) - feat(flows): review grace period, event-driven pre-emption, and four stage flows
@@ -25,6 +26,7 @@
 
 ## Completed
 
+- [x] fix(cli): stop WS reconnect storm by gating backoff reset on connection stability ([#166](https://github.com/OpenCara/OpenCara/pull/166))
 - [x] fix(flows): never resume a prior ACP session across flow runs ([#226](https://github.com/OpenCara/OpenCara/pull/226))
 - [x] fix(flows): persist the effective pool quorum, capped to the slot count ([#225](https://github.com/OpenCara/OpenCara/pull/225))
 - [x] docs(readme): refresh for ACP cutover + new-user onboarding section ([#197](https://github.com/OpenCara/OpenCara/pull/197))
