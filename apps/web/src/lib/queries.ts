@@ -108,13 +108,56 @@ export interface ProjectRun {
   exitCode: number | null;
 }
 
+export interface ActivityProjectRef {
+  id: string;
+  owner: string;
+  name: string;
+  platform: "github" | "azure_devops";
+  webUrl: string | null;
+}
+export interface ActivityFlowRef {
+  id: string;
+  slug: string;
+  name: string;
+}
+export interface ActivitySubject {
+  kind: "pull_request" | "issue" | "work_item" | "push";
+  number: number | null;
+  title: string | null;
+  url: string | null;
+  label: string;
+}
+export interface ActivityTriggeredRun {
+  id: string;
+  status: string;
+  flow: ActivityFlowRef;
+}
+export interface ActivityRunPayload {
+  status: string;
+  hostId: string | null;
+  exitCode: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  cancelReason: string | null;
+}
 export interface ActivityItem {
   kind: "event" | "run";
   id: string;
   ts: string;
   type: string;
   project_id: string | null;
+  /** Events: the raw webhook payload. Runs: an ActivityRunPayload. */
   payload: unknown;
+  project: ActivityProjectRef | null;
+  /** Runs only: the owning flow (null for chat / agent-test runs). */
+  flow: ActivityFlowRef | null;
+  flowRunId: string | null;
+  nodeId: string | null;
+  agentKind: string | null;
+  /** PR / issue / work item / push the entry is about, when known. */
+  subject: ActivitySubject | null;
+  /** Events only: flow runs this event dispatched. */
+  triggeredRuns: ActivityTriggeredRun[];
 }
 
 export interface FlowGraph {

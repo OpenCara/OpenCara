@@ -1,9 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router";
+import { ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { activityQuery, type ActivityItem } from "@/lib/queries";
-import { formatRelative, formatDayHeader } from "@/lib/format";
+import {
+  activityQuery,
+  type ActivityItem,
+  type ActivityRunPayload,
+  type ActivitySubject,
+} from "@/lib/queries";
+import { formatRelative, formatAbsolute, formatDayHeader } from "@/lib/format";
 import { summarizeEvent } from "@/lib/eventSummary";
 
 export function ActivityPage() {
@@ -51,28 +58,154 @@ function Timeline({ items }: { items: ActivityItem[] }) {
           </h3>
           <ul className="space-y-1.5">
             {group.items.map((it) => (
-              <li
-                key={`${it.kind}-${it.id}`}
-                className="flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-secondary/40"
-              >
-                <span className="w-20 shrink-0 text-xs text-muted-foreground">
-                  {formatRelative(it.ts)}
-                </span>
-                <Badge variant={it.kind === "run" ? "outline" : "secondary"}>
-                  {it.kind}
-                </Badge>
-                <span className="text-sm">
-                  {it.kind === "event"
-                    ? summarizeEvent(it.type, it.payload)
-                    : `agent run ${it.type}`}
-                </span>
-              </li>
+              <TimelineRow key={`${it.kind}-${it.id}`} item={it} />
             ))}
           </ul>
         </section>
       ))}
     </div>
   );
+}
+
+function TimelineRow({ item }: { item: ActivityItem }) {
+  const isRun = item.kind === "run";
+  const run = isRun ? (item.payload as ActivityRunPayload) : null;
+  const projectId = item.project?.id ?? item.project_id;
+  const headline = isRun
+    ? `${item.agentKind ?? "agent"} run ${item.type}`
+    : summarizeEvent(item.type, item.payload);
+
+  return (
+    <li className="flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-secondary/40">
+      <span
+        className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground"
+        title={formatAbsolute(item.ts)}
+      >
+        {formatRelative(item.ts)}
+      </span>
+      <Badge variant={isRun ? statusVariant(item.type) : "secondary"} className="shrink-0">
+        {item.type}
+      </Badge>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span>{headline}</span>
+          {item.subject && <SubjectLink subject={item.subject} projectId={projectId} />}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {item.project && (
+            <Link to={`/projects/${item.project.id}`} className="hover:underline">
+              {item.project.owner}/{item.project.name}
+            </Link>
+          )}
+          {item.flow && projectId && (
+            <Link
+              to={`/projects/${projectId}/flows/${item.flow.slug}`}
+              className="hover:underline"
+            >
+              flow: {item.flow.name}
+            </Link>
+          )}
+          {item.flowRunId && projectId && (
+            <Link
+              to={`/projects/${projectId}/flow-runs/${item.flowRunId}`}
+              className="hover:underline"
+            >
+              run {item.flowRunId.slice(-8)}
+            </Link>
+          )}
+          {item.nodeId && <span>node: {item.nodeId}</span>}
+          {run?.hostId && <span>host: {run.hostId}</span>}
+          {run && run.exitCode != null && <span>exit {run.exitCode}</span>}
+          {run && formatDuration(run.startedAt, run.finishedAt) && (
+            <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
+          )}
+          {run?.cancelReason && <span>cancelled: {run.cancelReason}</span>}
+        </div>
+        {item.triggeredRuns.length > 0 && projectId && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>triggered:</span>
+            {item.triggeredRuns.map((tr) => (
+              <span key={tr.id} className="inline-flex items-center gap-1">
+                <Link
+                  to={`/projects/${projectId}/flow-runs/${tr.id}`}
+                  className="hover:underline"
+                >
+                  {tr.flow.name}
+                </Link>
+                <Badge variant={statusVariant(tr.status)} className="px-1.5 py-0 text-[10px]">
+                  {tr.status}
+                </Badge>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Issues and work items have an in-app detail page, so they link there with
+ * an extra external icon for the platform page. PRs and pushes only exist
+ * on the platform.
+ */
+function SubjectLink({
+  subject,
+  projectId,
+}: {
+  subject: ActivitySubject;
+  projectId: string | null;
+}) {
+  const text = subject.title ? `${subject.label} · ${subject.title}` : subject.label;
+  const internal =
+    (subject.kind === "issue" || subject.kind === "work_item") &&
+    projectId &&
+    subject.number != null
+      ? `/projects/${projectId}/issues/${subject.number}`
+      : null;
+  const cls = "inline-flex max-w-md items-center gap-1 truncate font-medium hover:underline";
+  if (internal) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Link to={internal} className={cls} title={text}>
+          {text}
+        </Link>
+        {subject.url && (
+          <a
+            href={subject.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-muted-foreground hover:text-foreground"
+            title="Open on platform"
+          >
+            <ExternalLink className="size-3.5" />
+          </a>
+        )}
+      </span>
+    );
+  }
+  if (subject.url) {
+    return (
+      <a href={subject.url} target="_blank" rel="noreferrer" className={cls} title={text}>
+        {text} <ExternalLink className="size-3.5 shrink-0" />
+      </a>
+    );
+  }
+  return <span className="font-medium">{text}</span>;
+}
+
+function formatDuration(start: string | null, end: string | null): string {
+  if (!start || !end) return "";
+  const s = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
+  if (s === "succeeded") return "default";
+  if (s === "failed" || s === "cancelled") return "destructive";
+  if (s === "running") return "outline";
+  return "secondary";
 }
 
 function groupByDay(items: ActivityItem[]): { day: string; items: ActivityItem[] }[] {
