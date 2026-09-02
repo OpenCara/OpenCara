@@ -51,6 +51,7 @@ import { runWithAgentPool } from "./agentPool.js";
 import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
 import { cancelPreemptedReviewRuns } from "./preempt.js";
 import { flowMayMatchEvent } from "./eventMatch.js";
+import { ReviewGate, reviewGateKeyFor } from "./reviewGate.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
 import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
@@ -82,6 +83,9 @@ export interface FlowEngineDeps {
 }
 
 export class FlowEngine {
+  /** Serialises review runs per PR (flows/reviewGate.ts). */
+  private readonly reviewGate = new ReviewGate();
+
   constructor(private deps: FlowEngineDeps) {}
 
   /** Fire-and-forget: webhook caller should NOT await this. */
@@ -801,6 +805,59 @@ export class FlowEngine {
     // already done (their ids are in `outputs`); pruned nodes — not
     // downstream of any matched trigger — are filtered out, so they get
     // no step row and don't affect the run's status.
+    // ── Review gate ─────────────────────────────────────────────────
+    // One review per PR at a time across BOTH review flows; one more may
+    // wait behind it (status `pending`); any further request is discarded —
+    // the queued run reviews the PR's newest state anyway.
+    const reviewGateKey =
+      !failed && !skipped ? reviewGateKeyFor(def, matchedTriggerIds, event, project.id) : null;
+    let reviewGateHeld = false;
+    if (reviewGateKey) {
+      const verdict = await this.reviewGate.acquire(reviewGateKey, flowRunId, {
+        onQueued: async (aheadRunId) => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "pending", error: `queued: waiting for review run ${aheadRunId} on this PR to finish` })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "running")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        onResumed: async () => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "running", error: null })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "pending")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        isCancelled: async () => {
+          const row = await this.deps.db.query.flowRuns.findFirst({
+            where: eq(flowRuns.id, flowRunId),
+            columns: { status: true },
+          });
+          return !row || (row.status !== "pending" && row.status !== "running");
+        },
+      });
+      if (verdict === "run") {
+        reviewGateHeld = true;
+      } else {
+        skipped = true;
+        errorMsg ??=
+          verdict === "discard"
+            ? "discarded: a review for this PR is already running and another is queued"
+            : "cancelled while queued behind another review of this PR";
+        await this.deps.db
+          .update(flowRuns)
+          .set({ cancelReason: verdict === "discard" ? "review_superseded" : "review_queue_cancelled" })
+          .where(eq(flowRuns.id, flowRunId));
+      }
+    }
+
+    try {
     if (!failed && !skipped) {
       outer: for (const layer of layers) {
         // Snapshot idx per node before launching the layer so step rows
@@ -879,6 +936,9 @@ export class FlowEngine {
 
         if (failed || skipped) break outer;
       }
+    }
+    } finally {
+      if (reviewGateKey && reviewGateHeld) this.reviewGate.release(reviewGateKey, flowRunId);
     }
 
     // Worktrees no longer get cleaned up at end-of-run — they
