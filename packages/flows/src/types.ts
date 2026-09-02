@@ -246,7 +246,7 @@ export function isTriggerKind(kind: string): boolean {
 // `agents/acp-gate.ts`). Per-node knobs that DO affect dispatch live on
 // `config` directly: `contextInjection` (which env keys + stdin payload
 // reach the agent), `draftPr` (agent opens a draft PR that the engine
-// marks ready after success), and optional `worktree` (per-PR-branch
+// marks ready after success), and optional `worktree` (per-attempt
 // checkout).
 export const AgentNodeSchema = z.object({
   id: z.string(),
@@ -275,25 +275,20 @@ export const AgentNodeSchema = z.object({
         commentOnSkip: z.boolean().default(false),
       })
       .optional(),
-    // When set, the engine allocates (or reuses) a stable per-PR-branch
-    // worktree on a paired device before dispatching the agent. The
-    // worktree persists across flow runs (so a review-fix iteration
-    // reuses the implementer's checkout) and is removed when the PR
-    // closes — see `pull_request.closed` handler in routes/webhooks.ts.
-    // Pinned to the device that first allocated it via `worktree_pins`
-    // (owner_repo, branch) → host_id; the agent's session id file
-    // (`agent-session.json`) lives in a sibling sessions/ dir on the
-    // same device, which is how conversation resume works without a
-    // shared filesystem.
+    // When set, the engine allocates a FRESH checkout on a paired device
+    // for every agent attempt before dispatching it, so parallel pool slots
+    // never share a working tree. The branch is derived from the trigger:
+    // a PR trigger checks out the PR head ref, an issue trigger gets
+    // `opencara/issue-<n>`, anything else `opencara/run-<flow run id>`.
+    // Checkouts are removed when the PR closes (routes/webhooks.ts) or by
+    // the stale-worktree prune; `worktree_pins` records key → host.
     worktree: z
       .object({
-        // null = repo's default branch
+        // Base ref for a NEW branch (issue / schedule / manual triggers).
+        // Template; supports {{ENV_VAR}} substitution. null = repo's
+        // default branch. Ignored on PR triggers, which check out the PR
+        // head ref itself.
         fromBranch: z.string().nullable().default(null),
-        // Template; supports {{ENV_VAR}} substitution against the
-        // run env. Must render to a non-empty string at dispatch.
-        // Same template across implement / review-fix flows is what
-        // makes the second one find the first one's checkout.
-        branchName: z.string(),
         // Optional pin. null = let worktree_pins / pickIdle decide.
         hostId: z.string().nullable().default(null),
         // Opt-in shared object cache. When enabled, the device keeps a

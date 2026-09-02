@@ -4,14 +4,16 @@
 // the per-PR-branch checkout).
 //
 // Mechanism:
-//   1. Look up `worktree_pins` for (owner_repo, head.ref).
+//   1. Look up every `worktree_pins` row for (owner_repo, head.ref) —
+//      one per agent attempt that ran against the PR.
 //   2. Dispatch `opencara internal worktree remove --key <slug>` to
-//      the pinned device. This wipes both
+//      each pin's device. This wipes both
 //      ~/.opencara/work/<key>/checkout/ AND
-//      ~/.opencara/sessions/<key>/agent-session.json so the next PR
-//      that lands on the same branch name (rare but possible) starts
-//      fresh.
-//   3. Delete the pin row.
+//      ~/.opencara/sessions/<key>/.
+//   3. Delete the pin rows.
+//
+// `pruneStaleWorktrees` covers checkouts no PR-close will ever reach
+// (schedule / manual runs, PRs closed while the device was offline).
 //
 // Best-effort: dispatch failures are logged + ignored, and the pin
 // row is deleted regardless. Worst case is an orphaned worktree dir
@@ -23,7 +25,7 @@
 // directly with a no-op log handler.
 
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
 import { agentRunLogs, agentRuns, worktreePins } from "../db/schema.js";
@@ -41,13 +43,48 @@ export async function cleanupClosedPrWorktree(
   branch: string,
   projectId: string | null,
 ): Promise<void> {
-  const pin = await deps.db.query.worktreePins.findFirst({
+  // Every attempt on this PR got its own checkout; remove all of them.
+  const pins = await deps.db.query.worktreePins.findMany({
     where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branch)),
   });
-  if (!pin) return;
+  for (const pin of pins) {
+    await removePinnedWorktree(deps, pin, projectId);
+  }
+}
 
-  const safeBranch = branch.replace(/[^A-Za-z0-9._-]/g, "_");
-  const key = `${ownerRepo}/branch-${safeBranch}`;
+/** Default age after which an attempt's checkout is reclaimed. */
+export const DEFAULT_WORKTREE_RETENTION_DAYS = 3;
+
+/**
+ * Reclaim checkouts that no PR-close event will ever remove — schedule /
+ * manual runs, PRs closed while the device was offline, anything older than
+ * the retention window. Nothing reuses a worktree after its attempt finished
+ * (every attempt clones afresh), so removing an old one is always safe.
+ * Returns the number of pins processed.
+ */
+export async function pruneStaleWorktrees(
+  deps: CleanupDeps,
+  retentionDays: number = DEFAULT_WORKTREE_RETENTION_DAYS,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+  const pins = await deps.db.query.worktreePins.findMany({
+    where: lt(worktreePins.lastRunAt, cutoff),
+  });
+  for (const pin of pins) {
+    await removePinnedWorktree(deps, pin, null);
+  }
+  return pins.length;
+}
+
+type PinRow = typeof worktreePins.$inferSelect;
+
+async function removePinnedWorktree(
+  deps: CleanupDeps,
+  pin: PinRow,
+  projectId: string | null,
+): Promise<void> {
+  const { ownerRepo, branch, key } = pin;
 
   // Persist the cleanup as an agent_runs row for audit (so an operator
   // can see "we asked the device to remove the worktree at <time>")
@@ -102,10 +139,10 @@ export async function cleanupClosedPrWorktree(
       .where(eq(agentRuns.id, runId));
   } catch (err) {
     // The pinned device may be offline or revoked. Log + proceed —
-    // we still drop the pin row so a future PR on this branch
-    // doesn't keep targeting the dead device. The orphaned dir on
-    // the device, if it ever comes back, is an operator concern.
-    console.warn("[worktree-cleanup] dispatch failed", { ownerRepo, branch, hostId: pin.hostId, err });
+    // we still drop the pin row so nothing keeps targeting the dead
+    // device. The orphaned dir on the device, if it ever comes back,
+    // is an operator concern.
+    console.warn("[worktree-cleanup] dispatch failed", { ownerRepo, branch, key, hostId: pin.hostId, err });
     await deps.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })

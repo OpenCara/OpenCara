@@ -594,8 +594,10 @@ function AgentNodePanel({
               {!!node.config?.worktree && concurrency > 1 && (
                 <>
                   {" "}
-                  This node runs in a shared worktree, so the engine caps it to one agent at a
-                  time (failover still applies).
+                  Each parallel agent gets its own checkout on the device (
+                  {Math.min(concurrency, Math.max(poolSize, 1))} at once); enable the repo cache
+                  under Worktree so they share git objects and only the working-tree files cost
+                  disk.
                 </>
               )}
             </p>
@@ -969,7 +971,6 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
     contextInjection?: unknown;
     worktree?: {
       fromBranch?: string | null;
-      branchName?: string;
       hostId?: string | null;
       cacheRepo?: { enabled?: boolean; lfs?: boolean };
     };
@@ -977,9 +978,6 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   const wt = cfg.worktree;
   const [enabled, setEnabled] = useState(Boolean(wt));
   const [fromBranch, setFromBranch] = useState(wt?.fromBranch ?? "");
-  const [branchName, setBranchName] = useState(
-    wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
-  );
   const [hostId, setHostId] = useState(wt?.hostId ?? "");
   const [cacheRepo, setCacheRepo] = useState(Boolean(wt?.cacheRepo?.enabled));
   const [cacheLfs, setCacheLfs] = useState(Boolean(wt?.cacheRepo?.lfs));
@@ -988,14 +986,12 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
   useEffect(() => {
     setEnabled(Boolean(wt));
     setFromBranch(wt?.fromBranch ?? "");
-    setBranchName(wt?.branchName ?? "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}");
     setHostId(wt?.hostId ?? "");
     setCacheRepo(Boolean(wt?.cacheRepo?.enabled));
     setCacheLfs(Boolean(wt?.cacheRepo?.lfs));
   }, [
     node.id,
     wt?.fromBranch,
-    wt?.branchName,
     wt?.hostId,
     wt?.cacheRepo?.enabled,
     wt?.cacheRepo?.lfs,
@@ -1013,10 +1009,8 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
       contextInjection: cfg.contextInjection,
     };
     if (enabled) {
-      if (!branchName.trim()) return;
       const wtNext: Record<string, unknown> = {
         fromBranch: fromBranch.trim().length > 0 ? fromBranch.trim() : null,
-        branchName: branchName.trim(),
         hostId: hostId.trim().length > 0 ? hostId.trim() : null,
       };
       if (cacheRepo) {
@@ -1040,30 +1034,19 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
           onChange={(e) => setEnabled(e.target.checked)}
           className="size-4 rounded border-input"
         />
-        <span>Run in a per-PR-branch worktree</span>
+        <span>Run in a git worktree</span>
       </label>
       <p className="text-xs text-muted-foreground">
-        Allocates a stable git checkout on a paired device, keyed by{" "}
-        <code className="font-mono">(repo, branch)</code>. The same branch
-        across the implement and review-fix flows reuses the same checkout
-        and the agent's prior session id; removed on{" "}
-        <code className="font-mono">pull_request.closed</code>.
+        Every agent attempt gets its own fresh checkout on a paired device. The
+        branch comes from the trigger: a PR trigger checks out the PR head ref,
+        an issue trigger creates{" "}
+        <code className="font-mono">opencara/issue-&lt;n&gt;</code>, anything
+        else <code className="font-mono">opencara/run-&lt;id&gt;</code>. Removed
+        on <code className="font-mono">pull_request.closed</code> or after 3
+        days.
       </p>
       {enabled && (
         <div className="space-y-3 rounded-md border bg-muted/20 p-3">
-          <div>
-            <Label>Branch name</Label>
-            <Input
-              value={branchName}
-              onChange={(e) => setBranchName(e.target.value)}
-              placeholder="opencara/issue-{{OPENCARA_ISSUE_NUMBER}}"
-              className="mt-1 font-mono text-xs"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Template; supports <code className="font-mono">{`{{ENV_VAR}}`}</code>{" "}
-              substitution against the run env.
-            </p>
-          </div>
           <div>
             <Label>From branch</Label>
             <Input
@@ -1072,6 +1055,11 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
               placeholder="(repo default)"
               className="mt-1 font-mono text-xs"
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Base for a new branch on issue / schedule / manual triggers; supports{" "}
+              <code className="font-mono">{`{{ENV_VAR}}`}</code>. Ignored on PR
+              triggers.
+            </p>
           </div>
           <div>
             <Label>Pin to device (host id)</Label>
@@ -1095,7 +1083,7 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
             <p className="text-xs text-muted-foreground">
               Keeps a single full clone at{" "}
               <code className="font-mono">~/.opencara/cache/&lt;owner&gt;/&lt;repo&gt;</code>{" "}
-              and clones each per-PR-branch checkout with{" "}
+              and clones each attempt's checkout with{" "}
               <code className="font-mono">--reference</code>, sharing pack files.
               Persists across PR closes.
             </p>

@@ -53,11 +53,11 @@ const reviewerContext = {
 // comment `@opencara review`. (`@opencara review` is not a substring of
 // `@opencara mreview`, so the comment phrases don't collide.)
 //
-// Worktree / session continuity across stages is preserved exactly as
-// it was across the old issue-implement + pr-review-fix pair: both the
-// implement and fix agents resolve the SAME per-(repo, branch) worktree
-// (`opencara/issue-<n>`), so the fix agent reuses the implementer's
-// checkout and resumes its conversation from `agent-session.json`.
+// Every agent attempt gets a fresh checkout: the implement agent works on
+// the derived `opencara/issue-<n>` branch and pushes it; the fix agent
+// later checks out the PR head ref (that same branch) into its own
+// worktree. Context flows through the PR/issue conversation, not a shared
+// working tree.
 //
 // The review stage is a multi-agent review driven by ONE agent-pool node
 // (absorbing the old `pr-review-multi` fan-out): the `reviewer` node carries
@@ -122,7 +122,6 @@ export const developmentLifecycleFlow: FlowDefinition = {
         },
         worktree: {
           fromBranch: null, // = repo's default branch
-          branchName: "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
           hostId: null,
         },
       },
@@ -234,13 +233,10 @@ export const developmentLifecycleFlow: FlowDefinition = {
           ],
           stdinJson: true,
         },
-        // Same branchName template as the implement stage (the PR's head
-        // ref equals `opencara/issue-<n>`), so the per-(repo, branch) pin
-        // lands this iteration on the implementer's device + checkout,
-        // where the agent-session.json lives.
+        // PR trigger → the engine checks out the PR head ref (which the
+        // implement stage pushed as `opencara/issue-<n>`).
         worktree: {
-          fromBranch: "{{OPENCARA_PR_HEAD_REF}}",
-          branchName: "{{OPENCARA_PR_HEAD_REF}}",
+          fromBranch: null, // PR trigger: the PR head ref is checked out
           hostId: null,
         },
       },

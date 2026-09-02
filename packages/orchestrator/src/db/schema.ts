@@ -622,14 +622,18 @@ export const worktreePins = pgTable(
   {
     id: text("id").primaryKey(),
     ownerRepo: text("owner_repo").notNull(),
+    /** Git branch checked out in this worktree; PR-close cleanup keys on it. */
     branch: text("branch").notNull(),
+    /** On-device slug passed to `opencara internal worktree {create,remove} --key`. */
+    key: text("key").notNull(),
     hostId: text("host_id")
       .notNull()
       .references(() => agentHosts.id, { onDelete: "cascade" }),
     lastRunAt: timestamp("last_run_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    repoBranchUq: uniqueIndex("worktree_pins_repo_branch_uq").on(t.ownerRepo, t.branch),
+    keyUq: uniqueIndex("worktree_pins_key_uq").on(t.key),
+    repoBranchIdx: index("worktree_pins_repo_branch_idx").on(t.ownerRepo, t.branch),
     lastRunAtIdx: index("worktree_pins_last_run_at_idx").on(t.lastRunAt),
   }),
 );

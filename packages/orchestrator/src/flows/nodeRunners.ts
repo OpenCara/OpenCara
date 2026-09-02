@@ -43,6 +43,7 @@ import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
 import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
+import { deriveWorktreeBranch, worktreeKeyForStep } from "../worktrees/branch.js";
 import { extractScopedLabelValues } from "./labelRouting.js";
 
 import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
@@ -799,15 +800,7 @@ export async function resolveAgentPool(
     concurrency: setting?.concurrency ?? 1,
     quorum: setting?.quorum ?? 1,
     candidateCount: candidates.length,
-    worktree: !!node.config.worktree,
   });
-  if (shape.forcedSingleSlot) {
-    console.warn("[flows] agent pool: worktree node forced to concurrency 1", {
-      flowId: ctx.flowId,
-      nodeId: node.id,
-      requested: setting?.concurrency,
-    });
-  }
   if (shape.quorumCapped) {
     console.warn("[flows] agent pool: quorum capped to the slot count", {
       flowId: ctx.flowId,
@@ -868,14 +861,14 @@ export async function runAgentAttempt(
   const agentRunId = ulid();
   env["OPENCARA_AGENT_RUN_ID"] = agentRunId;
 
-  // If the operator wired a worktree onto this agent node, allocate
-  // (or reuse) the per-PR-branch checkout on a paired device BEFORE
-  // dispatching the agent. The worktree persists across flow runs and
-  // is removed by the `pull_request.closed` webhook handler — the
-  // first iteration clones, every subsequent iteration on the same
-  // (repo, branch) finds .git/ already present and just fetches +
-  // checks out the branch. Pinning sticks the device that allocated
-  // first so the cached checkout is reused across iterations.
+  // If the operator wired a worktree onto this agent node, allocate a
+  // FRESH checkout on a paired device BEFORE dispatching the agent. Every
+  // attempt gets its own checkout, keyed by its flow_run_steps id, so two
+  // parallel pool slots (or a rerun) never share a working tree or race the
+  // allocation. The branch is derived from the trigger (worktrees/branch.ts):
+  // PR → head ref, issue → opencara/issue-<n>, else opencara/run-<id>.
+  // Checkouts are removed by the `pull_request.closed` webhook handler and
+  // the stale-worktree prune (worktrees/cleanup.ts).
   let worktree: {
     workdir: string;
     branch: string;
@@ -886,47 +879,36 @@ export async function runAgentAttempt(
   if (node.config.worktree) {
     const tplVars = collectTemplateVars(ctx);
     tplVars["OPENCARA_AGENT_RUN_ID"] = agentRunId;
-    const branchName = renderTemplate(
-      node.config.worktree.branchName,
-      tplVars,
-      "agent.worktree.branchName",
-    );
-    if (branchName.length === 0) {
-      throw new FlowConfigError(
-        `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
-      );
-    }
-    const fromBranchRaw =
-      node.config.worktree.fromBranch && node.config.worktree.fromBranch.length > 0
-        ? node.config.worktree.fromBranch
-        : ctx.project.defaultBranch ?? "";
-    // Render templates so flows like `pr-review-fix` can pin
-    // `fromBranch: "{{OPENCARA_PR_HEAD_REF}}"`. The happy path
-    // (existing checkout) ignores --from-branch, but a fresh-device /
-    // fallback allocation passes it straight to `git clone --branch`,
-    // where an unrendered `{{...}}` literal would fail.
-    const fromBranch = renderTemplate(
-      fromBranchRaw,
+    // Render templates so a flow can pin `fromBranch: "{{SOME_VAR}}"`; an
+    // unrendered `{{...}}` literal would reach `git clone --branch` and fail.
+    const fromBranchRendered = renderTemplate(
+      node.config.worktree.fromBranch ?? "",
       tplVars,
       "agent.worktree.fromBranch",
     );
+    const derived = deriveWorktreeBranch({
+      prHeadRef: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_REF"],
+      issueNumber: ctx.issueContext?.stdin.issue?.number ?? null,
+      flowRunId: ctx.flowRunId,
+      fromBranch: fromBranchRendered,
+      defaultBranch: ctx.project.defaultBranch,
+    });
+    const branchName = derived.branch;
+    const fromBranch = derived.fromBranch;
     const ownerRepo = `${ctx.project.owner}/${ctx.project.name}`;
-    // Stable per-(repo, branch) slug. The implement flow's first run
-    // and any later review-fix iteration on the same PR compute the
-    // same slug → the second one finds the first's checkout +
-    // session-id file on the same pinned device.
-    const key = `${ownerRepo}/branch-${branchName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    const key = worktreeKeyForStep(ownerRepo, ctx.flowRunStepId);
 
-    // Pin lookup: prefer explicit operator pins (node-level first,
-    // linked-agent second), then reuse the device that allocated the
-    // worktree on a previous iteration of this branch. Fall back to
-    // pickIdle() if no pin exists OR the pinned device is currently
-    // disconnected (the dispatcher will throw "pinned device <id> is
-    // not connected" otherwise; pickIdle gives a graceful degrade).
+    // Host choice: explicit operator pins first (node-level, then the
+    // linked agent), else prefer the device that most recently ran this
+    // branch so its object cache is warm. Nothing depends on landing there —
+    // every attempt clones afresh — so fall back to pickIdle() when no pin
+    // exists or the pinned device is disconnected (the dispatcher would
+    // throw "pinned device <id> is not connected" otherwise).
     let pinnedHostId: string | null = node.config.worktree.hostId ?? agent.hostId ?? null;
     if (!pinnedHostId) {
       const existing = await ctx.db.query.worktreePins.findFirst({
         where: and(eq(worktreePins.ownerRepo, ownerRepo), eq(worktreePins.branch, branchName)),
+        orderBy: (t, { desc }) => [desc(t.lastRunAt)],
       });
       if (existing) pinnedHostId = existing.hostId;
     }
@@ -943,9 +925,9 @@ export async function runAgentAttempt(
       pinnedHostId = null;
     }
 
-    // Sub-dispatch: opencara internal worktree create. Idempotent —
-    // creates the dir + clone on first run, fetches + checkouts on
-    // subsequent runs. Persisted as its own agent_runs row with
+    // Sub-dispatch: opencara internal worktree create. The key is new per
+    // attempt, so this always clones (borrowing objects from the host's
+    // repo cache when enabled). Persisted as its own agent_runs row with
     // flowRunStepId=null so the engine's "find the agent_run for
     // this step" lookups still hit the primary agent run below.
     const allocateRunId = ulid();
@@ -1034,19 +1016,20 @@ export async function runAgentAttempt(
 
 
     const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-    // Upsert the pin so the next iteration on this branch hits the
-    // same device. lastRunAt drives the reaper's pruning later.
+    // Record where this checkout lives so PR-close cleanup and the stale
+    // prune can dispatch `worktree remove --key` to the right device.
     await ctx.db
       .insert(worktreePins)
       .values({
         id: ulid(),
         ownerRepo,
         branch: branchName,
+        key,
         hostId: allocateResult.agentHostId,
         lastRunAt: new Date(),
       })
       .onConflictDoUpdate({
-        target: [worktreePins.ownerRepo, worktreePins.branch],
+        target: [worktreePins.key],
         set: { hostId: allocateResult.agentHostId, lastRunAt: new Date() },
       });
 
@@ -1122,8 +1105,8 @@ export async function runAgentAttempt(
   // still resumes via the id recorded on the agent_runs row after the run.
   //
   // What we keep:
-  //   - Worktree allocation (the per-(repo, branch) checkout on a
-  //     pinned device — the `dispatchAgentRun` for `worktree-allocate`
+  //   - Worktree allocation (the per-attempt checkout on a paired
+  //     device — the `dispatchAgentRun` for `worktree-allocate`
   //     above is unchanged; that's an internal CLI subcommand, not
   //     an ACP agent).
   //   - Linked-prompt + skill envelope; both fold into systemPromptMd.

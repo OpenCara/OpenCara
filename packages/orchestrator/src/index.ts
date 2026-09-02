@@ -34,6 +34,7 @@ import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
 import { pruneTriggerSkipFlowRuns } from "./flows/prune.js";
+import { pruneStaleWorktrees } from "./worktrees/cleanup.js";
 import { runSchedulerTick } from "./flows/scheduler.js";
 
 // Resilience backstop. opencara.com runs as a bare `nohup` process with no
@@ -194,6 +195,20 @@ runFlowRunPrune();
 const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
 setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
+
+// Reclaim per-attempt worktrees that outlived the retention window (see
+// worktrees/cleanup.ts). Every attempt clones afresh, so nothing depends on
+// an old checkout surviving. Best-effort; a failure never blocks startup.
+const runWorktreePrune = () => {
+  pruneStaleWorktrees({ db, pg, dispatcher })
+    .then((n) => {
+      if (n > 0) console.log(`[orchestrator] pruned ${n} stale worktree(s)`);
+    })
+    .catch((err: unknown) => console.error("[orchestrator] worktree prune failed", err));
+};
+// Delay the first pass so devices have reconnected after a restart.
+setTimeout(runWorktreePrune, 5 * 60 * 1000).unref();
+setInterval(runWorktreePrune, 6 * 60 * 60 * 1000).unref();
 
 // Server-side WS heartbeat: ping every device each tick and reap half-open
 // sockets that miss a pong, so a flaky-link reconnect can't leave a dead

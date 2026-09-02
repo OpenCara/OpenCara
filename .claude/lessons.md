@@ -46,6 +46,10 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - The LISTEN connection is a single shared singleton — `pg.listen('a')` and `pg.listen('b')` and 100 concurrent SSE subscribers all multiplex onto ONE connection (extra listeners just push to an in-memory array; only the first per channel sends `LISTEN`). So there is NO per-SSE-stream connection leak — the bug was static over-subscription by one, not a leak. Don't go hunting for un-unlistened subscriptions.
 - The crash was delivered by an **unguarded `async setInterval`** in the SSE routes (`runs.ts` / `flows.ts` `terminalCheck`): a rejected DB query inside it is an unhandled rejection, which Node promotes to a fatal `uncaughtException`. Any `setInterval(async …)` that awaits the DB MUST try/catch its whole body. There is now also a process-level `unhandledRejection`/`uncaughtException` backstop in `index.ts` (non-fatal log) because prod runs under bare `nohup` with no supervisor — a crash stays down until a human restarts it.
 
+### [hits: 1] `platform_events.payload` for Azure DevOps is the RAW service-hook envelope, not the normalised GitHub-like shape
+- `azure/events.ts` normalises `{eventType, resource}` into `{pull_request|issue_comment|work_item,...}` only in memory at dispatch; the row keeps the envelope. Any SQL/UI that reads payload keys directly (Activity feed subject extraction, `summarizeEvent`) must branch on `payload->>'eventType'` (`git.pullrequest.*`, `ms.vss-code.git-pullrequest-comment-event`, `workitem.*`). Bit PR #227's activity links on 2026-09-02 (fixed in #231).
+- PR comment events carry no PR object; the PR number only exists in `resource._links.self.href` (`/pullRequests/{id}/`).
+
 ## Dispatch
 
 ### [hits: 1] pickIdle() ignores device capability/version
