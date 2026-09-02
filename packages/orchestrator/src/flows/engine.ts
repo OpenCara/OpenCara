@@ -712,7 +712,7 @@ export class FlowEngine {
           this.runNodeStep(
             prepared,
             def,
-            { node, idx: nodeIdx++, previousOutput: undefined },
+            { node, idx: nodeIdx++, previousOutput: undefined, previousAgentName: undefined },
             event,
             prContext,
             issueContext,
@@ -886,6 +886,7 @@ export class FlowEngine {
             node,
             idx: nodeIdx++,
             previousOutput: buildFanInInput(node, def.edges, outputs, labels),
+            previousAgentName: upstreamAgentName(node, def, outputs, labels),
           }));
         if (layerJobs.length === 0) continue;
 
@@ -1073,6 +1074,7 @@ export class FlowEngine {
       node: FlowNode;
       idx: number;
       previousOutput: string | undefined;
+      previousAgentName: string | undefined;
     },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
@@ -1081,7 +1083,7 @@ export class FlowEngine {
     opts: { rerun?: boolean; nodeSettings?: readonly EffectiveNodeSetting[] },
   ): Promise<StepOutcome> {
     const { flowRunId, flowId, project, scm } = prepared;
-    const { node, idx, previousOutput } = job;
+    const { node, idx, previousOutput, previousAgentName } = job;
 
     // Reviewer-agent verdict contract: when this node's outputs flow
     // (transitively) into a `scm.post_review` action, the agent
@@ -1120,6 +1122,7 @@ export class FlowEngine {
       issueContext,
       scheduleContext,
       previousOutput,
+      previousAgentName,
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,
       rerun: opts.rerun ?? false,
@@ -1764,6 +1767,30 @@ export function buildNodeLabels(
     if (label) labels.set(s.nodeId, label);
   }
   return labels;
+}
+
+/**
+ * Name of the agent whose output feeds `node`, when there is exactly one such
+ * upstream. `scm.post_review` stamps it on the published review so a PR with
+ * several reviewer flows still says which agent wrote which review. Undefined
+ * for fan-in (a synthesizer agent sits between the reviewers and the post) and
+ * for non-agent upstreams.
+ *
+ * Exported for unit tests.
+ */
+export function upstreamAgentName(
+  node: FlowNode,
+  def: Pick<FlowDefinition, "nodes" | "edges">,
+  outputs: Map<string, NodeOutput>,
+  labels: Map<string, string>,
+): string | undefined {
+  const incoming = def.edges.filter((e) => e.target === node.id);
+  if (incoming.length !== 1) return undefined;
+  const source = incoming[0]!.source;
+  if (def.nodes.find((n) => n.id === source)?.kind !== "agent") return undefined;
+  const out = outputs.get(source);
+  if (Array.isArray(out)) return out.length === 1 ? out[0]!.agentName : undefined;
+  return labels.get(source);
 }
 
 /**

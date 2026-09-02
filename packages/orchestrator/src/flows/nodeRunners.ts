@@ -118,6 +118,10 @@ export interface NodeRunCtx {
   issueContext?: IssueStatusContext;
   scheduleContext?: ScheduleContext;
   previousOutput?: string;
+  /** Name of the agent that produced `previousOutput`, when it came from a
+   *  single agent node (engine `upstreamAgentName`). `scm.post_review` stamps
+   *  it on the published review body. */
+  previousAgentName?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
   /** True when this node's downstream graph contains a `scm.post_review`
@@ -1706,6 +1710,12 @@ async function resolveLabelRoutedPrompt(ctx: AgentPoolCtx): Promise<string | nul
   return found.body;
 }
 
+/** Prefix a review body with its author line. Exported for unit tests. */
+export function withReviewAuthor(body: string, agentName: string | undefined): string {
+  if (!agentName) return body;
+  return `_Reviewed by **${agentName}**_\n\n${body}`;
+}
+
 // Floor for a verdict-less review body before post_review refuses to
 // publish it. A contract-honoring agent always emits `verdict: <token>`,
 // so this only gates the fallback path; real reviews that merely forgot
@@ -1799,7 +1809,13 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
         );
       }
       const event = parsed?.verdict ?? node.config.event;
-      const reviewBody = parsed?.bodyWithoutVerdict ?? body;
+      // Every review posts under the same bot identity, so the body itself
+      // must say which agent wrote it — a PR with several reviewer flows is
+      // otherwise a wall of indistinguishable bot reviews.
+      const reviewBody = withReviewAuthor(
+        parsed?.bodyWithoutVerdict ?? body,
+        ctx.previousAgentName,
+      );
       // The self-review downgrade that used to live here is now the GitHub
       // provider's concern (scm/github/provider.ts) — it is a quirk of
       // GitHub's review API, not flow-engine logic. `downgradedFrom` comes

@@ -156,7 +156,14 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   const translator = createUpdateTranslator(handlers.onLog, {
     captureThinking: spec.acp?.captureThinking,
   });
-  client.onSessionUpdate((p) => translator.handle(p.update));
+  // ACP `session/load` requires the agent to REPLAY the prior conversation
+  // as session/update notifications before it answers. cursor-agent does
+  // (claude-acp deliberately doesn't). Without this gate the replayed
+  // agent_message_chunks were logged as this run's output, so a resumed
+  // re-review re-posted the whole previous review body with the old
+  // verdict line still in it (ParadiseEngine#214 review 5087773518).
+  const replayGate = createLoadReplayGate(translator, handlers.onLog);
+  client.onSessionUpdate((p) => replayGate.handle(p.update));
   client.onStderr((chunk) => handlers.onLog("stderr", chunk));
 
   // Mutable handle the cancel() method reads. We can't capture the
@@ -241,12 +248,18 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       let resumed = false;
       let configOptions: AcpConfigOption[] | undefined;
       if (acpSpec.priorSessionId && shimSupportsLoad) {
-        const loaded = await client.loadSession({
-          sessionId: acpSpec.priorSessionId,
-          cwd,
-          mcpServers,
-          ...instructionsExtra,
-        });
+        replayGate.beginLoad();
+        let loaded;
+        try {
+          loaded = await client.loadSession({
+            sessionId: acpSpec.priorSessionId,
+            cwd,
+            mcpServers,
+            ...instructionsExtra,
+          });
+        } finally {
+          replayGate.endLoad();
+        }
         sessionId = acpSpec.priorSessionId;
         resumed = true;
         configOptions = loaded.configOptions;
@@ -506,6 +519,42 @@ export function flattenToolTitle(title: string): string {
   const flat = title.replace(/\s+/g, " ").trim();
   if (flat.length === 0) return "(tool)";
   return flat.length > TOOL_TITLE_MAX ? `${flat.slice(0, TOOL_TITLE_MAX - 1)}…` : flat;
+}
+
+/**
+ * Drops every session/update that arrives while `session/load` is in flight.
+ * Per the ACP spec those notifications are the agent replaying history the
+ * orchestrator already captured on the run that produced it; only updates
+ * after the load response belong to this run. Counts what it dropped and
+ * logs one stderr line so a resumed run's transcript says why it is short.
+ *
+ * Exported for unit tests.
+ */
+export function createLoadReplayGate(
+  inner: { handle(update: SessionUpdate): void },
+  onLog: (stream: "stdout" | "stderr", chunk: string) => void,
+): { handle(update: SessionUpdate): void; beginLoad(): void; endLoad(): void } {
+  let loading = false;
+  let dropped = 0;
+  return {
+    handle(update) {
+      if (loading) {
+        dropped++;
+        return;
+      }
+      inner.handle(update);
+    },
+    beginLoad() {
+      loading = true;
+      dropped = 0;
+    },
+    endLoad() {
+      loading = false;
+      if (dropped > 0) {
+        onLog("stderr", `[acp] session/load replayed ${dropped} history update(s); not captured as output\n`);
+      }
+    },
+  };
 }
 
 export function createUpdateTranslator(

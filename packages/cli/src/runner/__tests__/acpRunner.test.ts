@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { stripAcpMarkers } from "@opencara/shared";
 import {
   buildPromptContent,
+  createLoadReplayGate,
   createUpdateTranslator,
   flattenToolTitle,
   matchModelValue,
@@ -185,6 +186,51 @@ describe("buildPromptContent", () => {
     });
     assert.equal(blocks.length, 1);
     assert.equal(blocks[0]!.type, "text");
+  });
+});
+
+describe("createLoadReplayGate", () => {
+  const chunk = (text: string): SessionUpdate =>
+    ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } }) as SessionUpdate;
+
+  function harness() {
+    const seen: string[] = [];
+    const logs: Array<{ stream: string; chunk: string }> = [];
+    const gate = createLoadReplayGate(
+      { handle: (u) => seen.push((u as { content: { text: string } }).content.text) },
+      (stream, c) => logs.push({ stream, chunk: c }),
+    );
+    return { gate, seen, logs };
+  }
+
+  it("drops updates replayed while session/load is in flight and keeps the rest", () => {
+    const { gate, seen, logs } = harness();
+    gate.beginLoad();
+    gate.handle(chunk("verdict: request_changes"));
+    gate.handle(chunk("old review body"));
+    gate.endLoad();
+    gate.handle(chunk("verdict: approve"));
+    assert.deepEqual(seen, ["verdict: approve"]);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0]!.stream, "stderr");
+    assert.match(logs[0]!.chunk, /replayed 2 history update/);
+  });
+
+  it("is transparent on a fresh session (no load) and logs nothing", () => {
+    const { gate, seen, logs } = harness();
+    gate.handle(chunk("a"));
+    gate.handle(chunk("b"));
+    assert.deepEqual(seen, ["a", "b"]);
+    assert.equal(logs.length, 0);
+  });
+
+  it("stays quiet when the adapter replays nothing on load (claude-acp)", () => {
+    const { gate, seen, logs } = harness();
+    gate.beginLoad();
+    gate.endLoad();
+    gate.handle(chunk("new"));
+    assert.deepEqual(seen, ["new"]);
+    assert.equal(logs.length, 0);
   });
 });
 
