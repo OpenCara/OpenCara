@@ -81,6 +81,7 @@ describe("deleteInBatches", () => {
 });
 
 const cutoff = new Date("2026-05-28T12:00:00.000Z");
+const cutoffIso = cutoff.toISOString();
 
 describe("triggerSkipFlowRunsBatch", () => {
   it("only touches cancelled trigger_skip rows older than the cutoff, in a bounded batch", () => {
@@ -88,9 +89,9 @@ describe("triggerSkipFlowRunsBatch", () => {
     assert.match(sql, /DELETE FROM flow_runs WHERE id IN \(SELECT id FROM victims\)/);
     assert.match(sql, /status = 'cancelled'/);
     assert.match(sql, /cancel_reason = 'trigger_skip'/);
-    assert.match(sql, /created_at < \$1/);
+    assert.match(sql, /created_at < \$1::timestamptz/);
     assert.match(sql, /LIMIT \$2/);
-    assert.deepEqual(params, [cutoff, 1000]);
+    assert.deepEqual(params, [cutoffIso, 1000]);
   });
 });
 
@@ -98,11 +99,11 @@ describe("unreferencedPlatformEventsBatch", () => {
   it("keeps any event still referenced by a flow run or an agent run", () => {
     const { sql, params } = render(unreferencedPlatformEventsBatch(cutoff, 500));
     assert.match(sql, /DELETE FROM platform_events WHERE id IN \(SELECT id FROM victims\)/);
-    assert.match(sql, /received_at < \$1/);
+    assert.match(sql, /received_at < \$1::timestamptz/);
     assert.match(sql, /NOT EXISTS \(SELECT 1 FROM flow_runs fr WHERE fr\.trigger_event_id = e\.id\)/);
     assert.match(sql, /NOT EXISTS \(SELECT 1 FROM agent_runs r WHERE r\.trigger_event_id = e\.id\)/);
     assert.match(sql, /LIMIT \$2/);
-    assert.deepEqual(params, [cutoff, 500]);
+    assert.deepEqual(params, [cutoffIso, 500]);
   });
 });
 
@@ -110,11 +111,11 @@ describe("internalAgentRunsBatch", () => {
   it("only deletes terminal internal:* runs older than the cutoff", () => {
     const { sql, params } = render(internalAgentRunsBatch(cutoff, 200));
     assert.match(sql, /DELETE FROM agent_runs WHERE id IN \(SELECT id FROM victims\)/);
-    assert.match(sql, /created_at < \$1/);
+    assert.match(sql, /created_at < \$1::timestamptz/);
     assert.match(sql, /spec->>'kind' LIKE 'internal:%'/);
     assert.match(sql, /status::text IN \('succeeded', 'failed', 'cancelled'\)/);
     assert.match(sql, /LIMIT \$2/);
-    assert.deepEqual(params, [cutoff, 200]);
+    assert.deepEqual(params, [cutoffIso, 200]);
   });
 });
 
@@ -125,7 +126,7 @@ describe("prune entry points", () => {
     const { db, executed } = scriptedDb([2]);
     assert.equal(await pruneTriggerSkipFlowRuns(db, 7, now), 2);
     const { params } = render(executed[0]!);
-    assert.deepEqual(params, [cutoff, PRUNE_BATCH_SIZE]);
+    assert.deepEqual(params, [cutoffIso, PRUNE_BATCH_SIZE]);
   });
 
   it("pruneUnreferencedPlatformEvents targets platform_events with the requested cutoff", async () => {
@@ -133,7 +134,7 @@ describe("prune entry points", () => {
     assert.equal(await pruneUnreferencedPlatformEvents(db, 7, now), 0);
     const { sql, params } = render(executed[0]!);
     assert.match(sql, /DELETE FROM platform_events/);
-    assert.deepEqual(params, [cutoff, PRUNE_BATCH_SIZE]);
+    assert.deepEqual(params, [cutoffIso, PRUNE_BATCH_SIZE]);
   });
 
   it("pruneInternalAgentRuns targets agent_runs with the requested cutoff", async () => {
@@ -141,7 +142,7 @@ describe("prune entry points", () => {
     assert.equal(await pruneInternalAgentRuns(db, 7, now), 1);
     const { sql, params } = render(executed[0]!);
     assert.match(sql, /DELETE FROM agent_runs/);
-    assert.deepEqual(params, [cutoff, PRUNE_BATCH_SIZE]);
+    assert.deepEqual(params, [cutoffIso, PRUNE_BATCH_SIZE]);
   });
 });
 

@@ -53,7 +53,14 @@ export const DEFAULT_INTERNAL_RUN_RETENTION_DAYS = 7;
  */
 export const PRUNE_BATCH_SIZE = 1000;
 
-/** Cutoff instant: rows created before this are eligible for pruning. */
+/**
+ * Cutoff instant: rows created before this are eligible for pruning.
+ *
+ * Bound into the batch statements as an ISO string with an explicit
+ * `::timestamptz` cast: the raw `sql` template path hands parameters to
+ * postgres-js without column type info, and a bare `Date` there fails
+ * with ERR_INVALID_ARG_TYPE (seen on the v0.124.0 boot prune).
+ */
 export function retentionCutoff(now: Date, retentionDays: number): Date {
   return new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 }
@@ -92,7 +99,7 @@ export function triggerSkipFlowRunsBatch(cutoff: Date, limit: number): SQL {
       SELECT id FROM flow_runs
       WHERE status = 'cancelled'
         AND cancel_reason = 'trigger_skip'
-        AND created_at < ${cutoff}
+        AND created_at < ${cutoff.toISOString()}::timestamptz
       LIMIT ${limit}
     ), deleted AS (
       DELETE FROM flow_runs WHERE id IN (SELECT id FROM victims) RETURNING 1
@@ -121,7 +128,7 @@ export function unreferencedPlatformEventsBatch(cutoff: Date, limit: number): SQ
   return sql`
     WITH victims AS (
       SELECT e.id FROM platform_events e
-      WHERE e.received_at < ${cutoff}
+      WHERE e.received_at < ${cutoff.toISOString()}::timestamptz
         AND NOT EXISTS (SELECT 1 FROM flow_runs fr WHERE fr.trigger_event_id = e.id)
         AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.trigger_event_id = e.id)
       LIMIT ${limit}
@@ -152,7 +159,7 @@ export function internalAgentRunsBatch(cutoff: Date, limit: number): SQL {
   return sql`
     WITH victims AS (
       SELECT id FROM agent_runs
-      WHERE created_at < ${cutoff}
+      WHERE created_at < ${cutoff.toISOString()}::timestamptz
         AND spec->>'kind' LIKE 'internal:%'
         AND status::text IN ('succeeded', 'failed', 'cancelled')
       LIMIT ${limit}

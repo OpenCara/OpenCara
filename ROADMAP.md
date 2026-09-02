@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#236](https://github.com/OpenCara/OpenCara/pull/236) - fix(prune): bind the retention cutoff as ISO string ::timestamptz
 - **2026-09-02**: Merged [#235](https://github.com/OpenCara/OpenCara/pull/235) - fix(flows): make PR diff fetch optional and non-fatal; path filters use pulls/files
 - **2026-09-02**: Merged [#234](https://github.com/OpenCara/OpenCara/pull/234) - perf(activity): two-phase feed query, partial indexes, prune stale rows
 - **2026-09-02**: Merged [#231](https://github.com/OpenCara/OpenCara/pull/231) - fix(activity): link Azure DevOps PRs / work items from the Activity timeline
@@ -61,6 +62,7 @@
 - [x] fix(activity): link Azure DevOps PRs / work items from the Activity timeline ([#231](https://github.com/OpenCara/OpenCara/pull/231))
 - [x] perf(activity): two-phase feed query, partial indexes, prune stale rows ([#234](https://github.com/OpenCara/OpenCara/pull/234))
 - [x] fix(flows): make PR diff fetch optional and non-fatal; path filters use pulls/files ([#235](https://github.com/OpenCara/OpenCara/pull/235))
+- [x] fix(prune): bind the retention cutoff as ISO string ::timestamptz ([#236](https://github.com/OpenCara/OpenCara/pull/236))
 
 ## In Progress
 
