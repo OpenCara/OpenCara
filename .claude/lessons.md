@@ -50,6 +50,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - `azure/events.ts` normalises `{eventType, resource}` into `{pull_request|issue_comment|work_item,...}` only in memory at dispatch; the row keeps the envelope. Any SQL/UI that reads payload keys directly (Activity feed subject extraction, `summarizeEvent`) must branch on `payload->>'eventType'` (`git.pullrequest.*`, `ms.vss-code.git-pullrequest-comment-event`, `workitem.*`). Bit PR #227's activity links on 2026-09-02 (fixed in #231).
 - PR comment events carry no PR object; the PR number only exists in `resource._links.self.href` (`/pullRequests/{id}/`).
 
+### [hits: 1] A `UNION ALL ... ORDER BY ts LIMIT n` feed cannot push the LIMIT into its arms — pick (kind, id, ts) per arm first, then join the heavy columns
+- 2026-09-02: `/api/activity` took 7–10s on prod. The plan materialised all ~29k rows the user could see (3 arms), detoasted every ~17kB `platform_events.payload` / ~16kB `agent_runs.spec` jsonb for the projection + `spec->>'kind'` filter, then top-N sorted to 50. Two-phase rewrite (per-arm `ORDER BY .. LIMIT n` on indexed columns → merge → join payloads for the 50 winners) + partial indexes mirroring the arm predicates: 42ms.
+- Any WHERE/projection that touches a jsonb column on this DB is a TOAST read per row; keep it out of anything that runs before the LIMIT. A partial index only gets used if its predicate is textually the same expression the query uses (`COALESCE(spec->>'kind', '') NOT LIKE 'internal:%'`).
+- Cheap way to check an index idea on prod without deploying: `BEGIN; CREATE INDEX ...; EXPLAIN ANALYZE ...; ROLLBACK;` (holds a write lock on the table for the build, ~1s here).
+
 ## Dispatch
 
 ### [hits: 1] pickIdle() ignores device capability/version

@@ -519,6 +519,12 @@ export const flowRuns = pgTable(
       t.status,
       t.createdAt.desc(),
     ),
+    // Activity feed candidate scan: newest N user-visible flow runs per
+    // project. Partial on the same predicate the feed uses so trigger_skip
+    // fan-out noise (over half the table on a busy instance) is never read.
+    feedIdx: index("flow_runs_feed_idx")
+      .on(t.projectId, t.createdAt.desc())
+      .where(sql`cancel_reason IS NULL OR cancel_reason <> 'trigger_skip'`),
     // Serves the Activity feed's "which flow runs did this event trigger"
     // lookup (WHERE trigger_event_id IN (...)). The FK alone creates no
     // index in Postgres, and flow_runs is the table that accumulates
@@ -827,6 +833,13 @@ export const agentRuns = pgTable(
     ),
     flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
     addedByUserIdIdx: index("agent_runs_added_by_user_id_idx").on(t.addedByUserId),
+    // Activity feed candidate scan: newest N user-visible agent runs per
+    // project. The feed excludes housekeeping runs via this exact predicate;
+    // without a matching partial index Postgres has to detoast the ~16kB
+    // `spec` jsonb of every run just to throw half of them away.
+    feedIdx: index("agent_runs_feed_idx")
+      .on(t.projectId, t.createdAt.desc())
+      .where(sql`COALESCE(spec->>'kind', '') NOT LIKE 'internal:%'`),
     // Chat thread lookups (chat.ts priorTurn probe, chatSessions.ts
     // history/hard-delete/active-keys) all filter on this JSONB
     // expression — without an index each one seq-scans a table that

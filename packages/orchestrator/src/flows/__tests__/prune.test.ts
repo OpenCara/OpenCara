@@ -6,11 +6,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  pruneInternalAgentRuns,
   pruneTriggerSkipFlowRuns,
+  pruneUnreferencedPlatformEvents,
   retentionCutoff,
+  DEFAULT_INTERNAL_RUN_RETENTION_DAYS,
   DEFAULT_TRIGGER_SKIP_RETENTION_DAYS,
+  DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS,
 } from "../prune.js";
-import { flowRuns } from "../../db/schema.js";
+import { agentRuns, flowRuns, platformEvents } from "../../db/schema.js";
 import type { Db } from "../../db/client.js";
 
 describe("retentionCutoff", () => {
@@ -51,5 +55,53 @@ describe("pruneTriggerSkipFlowRuns", () => {
       delete: () => ({ where: () => ({ returning: async () => [] }) }),
     } as unknown as Db;
     assert.equal(await pruneTriggerSkipFlowRuns(fakeDb), 0);
+  });
+});
+
+/** Fake Db that records the deleted table and echoes `rows` back. */
+function fakeDeleteDb(rows: { id: string }[]) {
+  const seen: { table: unknown } = { table: null };
+  const db = {
+    delete: (table: unknown) => {
+      seen.table = table;
+      return { where: () => ({ returning: async () => rows }) };
+    },
+  } as unknown as Db;
+  return { db, seen };
+}
+
+describe("pruneUnreferencedPlatformEvents", () => {
+  it("keeps a month by default", () => {
+    assert.equal(DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS, 30);
+  });
+
+  it("deletes from platform_events and returns the number of rows removed", async () => {
+    const { db, seen } = fakeDeleteDb([{ id: "e1" }, { id: "e2" }]);
+    const n = await pruneUnreferencedPlatformEvents(db, 30, new Date());
+    assert.equal(seen.table, platformEvents, "must target the platform_events table");
+    assert.equal(n, 2);
+  });
+
+  it("returns 0 when nothing matches", async () => {
+    const { db } = fakeDeleteDb([]);
+    assert.equal(await pruneUnreferencedPlatformEvents(db), 0);
+  });
+});
+
+describe("pruneInternalAgentRuns", () => {
+  it("keeps a week by default", () => {
+    assert.equal(DEFAULT_INTERNAL_RUN_RETENTION_DAYS, 7);
+  });
+
+  it("deletes from agent_runs and returns the number of rows removed", async () => {
+    const { db, seen } = fakeDeleteDb([{ id: "r1" }]);
+    const n = await pruneInternalAgentRuns(db, 7, new Date());
+    assert.equal(seen.table, agentRuns, "must target the agent_runs table");
+    assert.equal(n, 1);
+  });
+
+  it("returns 0 when nothing matches", async () => {
+    const { db } = fakeDeleteDb([]);
+    assert.equal(await pruneInternalAgentRuns(db), 0);
   });
 });
