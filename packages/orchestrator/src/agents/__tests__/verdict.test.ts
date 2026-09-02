@@ -101,6 +101,58 @@ describe("parseReviewVerdict", () => {
     assert.equal(result?.verdict, "APPROVE");
   });
 
+  it("finds a marker glued to preceding prose (streamed segments without newlines)", () => {
+    // Verbatim shape from flow run 01M1GWKV0F4AGJRGP93RBSK5SW.
+    const body =
+      "_Reviewed by **Claude Fable**_\n\nI'll verify the claims before writing the verdict.Still verifying.verdict: request_changes\n\n## Summary\nOne blocking defect.";
+    const r = parseReviewVerdict(body);
+    assert.equal(r?.verdict, "REQUEST_CHANGES");
+    assert.equal(
+      r?.bodyWithoutVerdict,
+      "_Reviewed by **Claude Fable**_\n\nI'll verify the claims before writing the verdict.Still verifying.\n\n## Summary\nOne blocking defect.",
+    );
+  });
+
+  it("tolerates markdown emphasis around the label and token", () => {
+    assert.equal(parseReviewVerdict("**verdict:** approve\nbody")?.verdict, "APPROVE");
+    assert.equal(parseReviewVerdict("**Verdict**: `comment`\nbody")?.verdict, "COMMENT");
+    assert.equal(parseReviewVerdict("`verdict: request_changes`")?.verdict, "REQUEST_CHANGES");
+    assert.equal(parseReviewVerdict("**verdict:** approve\nbody")?.bodyWithoutVerdict, "body");
+  });
+
+  it("accepts a marker followed by punctuation or more prose on the same line", () => {
+    const r = parseReviewVerdict("Overall fine. verdict: approve. Nice work on the tests.");
+    assert.equal(r?.verdict, "APPROVE");
+    assert.equal(r?.bodyWithoutVerdict, "Overall fine. Nice work on the tests.");
+  });
+
+  it("a standalone marker line outranks an inline mention earlier in the body", () => {
+    // Agents quote the skill prompt's marker list; the real verdict follows.
+    const r = parseReviewVerdict("I'll emit `verdict: approve` when clean.\n\nverdict: request_changes");
+    assert.equal(r?.verdict, "REQUEST_CHANGES");
+    assert.equal(r?.bodyWithoutVerdict, "I'll emit `verdict: approve` when clean.");
+    const list = parseReviewVerdict(
+      "- `verdict: approve` — good\n- `verdict: request_changes` — blocking\n\nverdict: comment",
+    );
+    assert.equal(list?.verdict, "COMMENT");
+    const quoted = parseReviewVerdict("> verdict: approve\n\nverdict: request_changes");
+    assert.equal(quoted?.verdict, "REQUEST_CHANGES");
+    assert.equal(quoted?.bodyWithoutVerdict, "> verdict: approve");
+  });
+
+  it("does not backtrack quadratically on a long run of whitespace after the label", () => {
+    const body = "verdict:" + " ".repeat(40_000) + "x";
+    const t0 = performance.now();
+    assert.equal(parseReviewVerdict(body), null);
+    assert.ok(performance.now() - t0 < 200, "parser took too long");
+  });
+
+  it("does not match a label embedded in a longer word or a longer token", () => {
+    assert.equal(parseReviewVerdict("myverdict: approve"), null);
+    assert.equal(parseReviewVerdict("verdict: approved"), null);
+    assert.equal(parseReviewVerdict("verdict: commentary"), null);
+  });
+
   it("returns null for unknown tokens", () => {
     assert.equal(parseReviewVerdict("verdict: maybe\n\nbody"), null);
     assert.equal(parseReviewVerdict("verdict: lgtm\n\nbody"), null);

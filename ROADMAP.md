@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-02**: Merged [#229](https://github.com/OpenCara/OpenCara/pull/229) - fix(agents): accept verdict markers glued to prose or in markdown
 - **2026-09-02**: Merged [#228](https://github.com/OpenCara/OpenCara/pull/228) - feat(agents): per-agent ACP thinking/effort level
 - **2026-09-02**: Merged [#227](https://github.com/OpenCara/OpenCara/pull/227) - feat(web): add detail and links to Activity page entries
 - **2026-09-02**: Merged [#166](https://github.com/OpenCara/OpenCara/pull/166) - fix(cli): stop WS reconnect storm by gating backoff reset on connection stability
