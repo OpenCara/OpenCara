@@ -24,6 +24,7 @@ import {
   type IssueFlowRun,
 } from "@/lib/queries";
 import { formatAbsolute, formatRelative } from "@/lib/format";
+import { normalizeNodeKind } from "@/lib/nodeKinds";
 import { useEventSource } from "@/lib/sse";
 
 interface FlowRunSnapshot {
@@ -351,18 +352,21 @@ function labelForRun(
   if (status === "failed") return "Failed";
   if (status === "cancelled") return "Cancelled";
   if (status === "succeeded") return "Completed";
-  switch (runningNodeKind) {
+  // This reads a PERSISTED `flow_run_steps.node_kind`, so rows written before
+  // the `github.*` → `scm.*` rename still carry the old spelling — normalize
+  // rather than dropping historical runs into the generic "Working (…)" case.
+  switch (runningNodeKind === null ? null : normalizeNodeKind(runningNodeKind)) {
     case "agent":
       return "Implementing…";
     case "git.create_pr":
       return "Creating PR…";
     case "git.create_worktree":
       return "Preparing worktree…";
-    case "github.post_review":
+    case "scm.post_review":
       return "Posting review…";
-    case "github.add_comment":
+    case "scm.add_comment":
       return "Commenting…";
-    case "github.add_label":
+    case "scm.add_label":
       return "Labelling…";
     default:
       return runningNodeKind ? `Working (${runningNodeKind})…` : "Starting…";

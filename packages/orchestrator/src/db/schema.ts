@@ -12,7 +12,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const platformEnum = pgEnum("platform", ["github"]);
+export const platformEnum = pgEnum("platform", ["github", "azure_devops"]);
 
 export const agentRunStatusEnum = pgEnum("agent_run_status", [
   "queued",
@@ -58,14 +58,20 @@ export const agentKindEnum = pgEnum("agent_kind", [
   "opencode",
   "pi",
   "custom",
+  "omp",
+  "cursor",
 ]);
 
 export const users = pgTable(
   "users",
   {
     id: text("id").primaryKey(),
-    githubUserId: bigint("github_user_id", { mode: "number" }).notNull(),
-    githubLogin: text("github_login").notNull(),
+    // Nullable since migration 0043: a user who signed in with Microsoft Entra
+    // has no GitHub account. These two remain the cached GitHub identity for
+    // the display paths that read them directly; the authoritative,
+    // multi-provider mapping lives in `userIdentities`.
+    githubUserId: bigint("github_user_id", { mode: "number" }),
+    githubLogin: text("github_login"),
     name: text("name"),
     avatarUrl: text("avatar_url"),
     email: text("email"),
@@ -78,14 +84,53 @@ export const users = pgTable(
   }),
 );
 
+/**
+ * One row per external identity a user can sign in with. Looked up on every
+ * sign-in by (provider, externalId); a user gains a second row when they link
+ * an additional provider to the same account.
+ */
+export const userIdentities = pgTable(
+  "user_identities",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** "github" | "entra". Deliberately text, not an enum — see migration 0043. */
+    provider: text("provider").notNull(),
+    /** GitHub's numeric user id or Entra's `oid` claim, as text. */
+    externalId: text("external_id").notNull(),
+    /** GitHub login / Entra userPrincipalName. */
+    login: text("login"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    providerExternalIdUq: uniqueIndex("user_identities_provider_external_id_uq").on(
+      t.provider,
+      t.externalId,
+    ),
+    userIdIdx: index("user_identities_user_id_idx").on(t.userId),
+  }),
+);
+
 export const sessions = pgTable(
   "sessions",
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    githubAccessTokenEnc: text("github_access_token_enc").notNull(),
+    /** Which provider authenticated this session: "github" | "entra". */
+    authProvider: text("auth_provider").notNull().default("github"),
+    // Nullable since 0043 — an Entra-authenticated session carries no GitHub token.
+    githubAccessTokenEnc: text("github_access_token_enc"),
     githubRefreshTokenEnc: text("github_refresh_token_enc"),
     githubTokenExpiresAt: timestamp("github_token_expires_at", { withTimezone: true }),
+    // Entra tokens for the signed-in user. Used to enumerate the Azure DevOps
+    // organizations they can connect; per-connection tokens on
+    // `azureDevopsConnections` are what drive repo/PR traffic afterwards.
+    entraAccessTokenEnc: text("entra_access_token_enc"),
+    entraRefreshTokenEnc: text("entra_refresh_token_enc"),
+    entraTokenExpiresAt: timestamp("entra_token_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
@@ -128,14 +173,113 @@ export const githubInstallations = pgTable(
   }),
 );
 
+/**
+ * A connected Azure DevOps organization.
+ *
+ * Unlike a GitHub App installation, this is a **user-delegated** Entra grant:
+ * the credentials are one person's, API calls act as that person (not a bot),
+ * and the access token cannot be scoped to a subset of repositories or revoked
+ * early — it simply expires. See the Azure DevOps section of the README for the
+ * trust boundary that implies for agent runs.
+ */
+export const azureDevopsConnections = pgTable(
+  "azure_devops_connections",
+  {
+    id: text("id").primaryKey(),
+    /** Organization as it appears in the URL: https://dev.azure.com/<orgName>. */
+    orgName: text("org_name").notNull(),
+    /** Azure DevOps accountId GUID; resolved lazily after connect. */
+    orgId: text("org_id"),
+    /**
+     * Directory the grant came from, read best-effort from the access token's
+     * `tid` claim. Nullable (0045) — diagnostic metadata only; token refresh
+     * goes through the shared EntraOAuth built from AZDO_ENTRA_TENANT.
+     */
+    entraTenantId: text("entra_tenant_id"),
+    /** `oid` claim of the connecting user. Null for PAT connections (0046). */
+    entraObjectId: text("entra_object_id"),
+    /**
+     * "entra" | "pat". Azure DevOps registers in Entra as work/school-only, so
+     * an organization backed by a personal Microsoft account can ONLY be reached
+     * with a PAT. See migration 0046.
+     */
+    authMode: text("auth_mode").notNull().default("entra"),
+    /** Operator-facing PAT expiry, so a dead connection has a visible reason. */
+    patExpiresAt: timestamp("pat_expires_at", { withTimezone: true }),
+    // Encrypted with the same TokenCipher as session tokens.
+    refreshTokenEnc: text("refresh_token_enc"),
+    accessTokenEnc: text("access_token_enc"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    /**
+     * Shared secret registered as the HTTP Basic password on every service hook
+     * subscription for this org. Azure DevOps does not sign webhooks with an
+     * HMAC the way GitHub does, so this is the whole of inbound authentication.
+     */
+    webhookSecretEnc: text("webhook_secret_enc").notNull(),
+    /**
+     * NOT NULL (unlike githubInstallations.addedByUserId): the row's credentials
+     * ARE this user's, so it is meaningless without them — hence cascade.
+     */
+    addedByUserId: text("added_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // Per-user, not global: user-delegated credentials mean two people
+    // connecting the same org hold two genuinely different grants.
+    userOrgUq: uniqueIndex("azure_devops_connections_user_org_uq").on(
+      t.addedByUserId,
+      t.orgName,
+    ),
+    orgNameIdx: index("azure_devops_connections_org_name_idx").on(t.orgName),
+  }),
+);
+
 export const projects = pgTable(
   "projects",
   {
     id: text("id").primaryKey(),
-    installationId: text("installation_id")
+    /**
+     * Which platform this project lives on. Drives provider resolution in
+     * scm/registry.ts; every platform-specific branch keys off this column.
+     */
+    platform: platformEnum("platform").notNull().default("github"),
+    // Exactly one of installationId / azdoConnectionId is set, matching
+    // `platform` — enforced by the `projects_platform_connection_ck` CHECK
+    // constraint in migration 0043, not just by convention.
+    installationId: text("installation_id").references(() => githubInstallations.id, {
+      onDelete: "cascade",
+    }),
+    azdoConnectionId: text("azdo_connection_id").references(
+      () => azureDevopsConnections.id,
+      { onDelete: "cascade" },
+    ),
+    /** Azure DevOps team project GUID — required by the work item + hooks APIs. */
+    azdoProjectId: text("azdo_project_id"),
+    /** Service hook subscription ids, recorded so project removal can delete them. */
+    azdoSubscriptionIds: jsonb("azdo_subscription_ids")
+      .$type<string[]>()
       .notNull()
-      .references(() => githubInstallations.id, { onDelete: "cascade" }),
-    githubRepoId: bigint("github_repo_id", { mode: "number" }).notNull(),
+      .default([]),
+    /** GitHub-only; null for Azure DevOps projects. Prefer `externalRepoId`. */
+    githubRepoId: bigint("github_repo_id", { mode: "number" }),
+    /**
+     * Platform-neutral repo identity — GitHub's numeric repo id or Azure
+     * DevOps' repository GUID, as text. Unique per (platform, externalRepoId).
+     */
+    externalRepoId: text("external_repo_id").notNull(),
+    /**
+     * Canonical browser URL. Previously derived as github.com/{owner}/{name},
+     * which does not generalise (Azure DevOps is org/project/_git/repo).
+     */
+    webUrl: text("web_url"),
+    /**
+     * Display owner. For Azure DevOps this is "org/project" — the two segments
+     * above the repo — so that (owner, name) stays a unique, human-readable
+     * handle across both platforms.
+     */
     owner: text("owner").notNull(),
     name: text("name").notNull(),
     defaultBranch: text("default_branch"),
@@ -169,7 +313,13 @@ export const projects = pgTable(
     removedAt: timestamp("removed_at", { withTimezone: true }),
   },
   (t) => ({
+    // Still guards GitHub rows; Azure DevOps rows leave github_repo_id NULL and
+    // Postgres permits many NULLs under a unique index.
     githubRepoIdUq: uniqueIndex("projects_github_repo_id_uq").on(t.githubRepoId),
+    platformExternalRepoIdUq: uniqueIndex("projects_platform_external_repo_id_uq").on(
+      t.platform,
+      t.externalRepoId,
+    ),
     ownerNameUq: uniqueIndex("projects_owner_name_uq").on(t.owner, t.name),
     installationIdIdx: index("projects_installation_id_idx").on(t.installationId),
   }),
@@ -235,6 +385,11 @@ export const platformEvents = pgTable(
     installationId: text("installation_id").references(() => githubInstallations.id, {
       onDelete: "set null",
     }),
+    /** Set instead of installationId for Azure DevOps service-hook deliveries. */
+    azdoConnectionId: text("azdo_connection_id").references(
+      () => azureDevopsConnections.id,
+      { onDelete: "set null" },
+    ),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     githubRepoId: bigint("github_repo_id", { mode: "number" }),
     deliveryId: text("delivery_id"),
@@ -409,8 +564,25 @@ export const agents = pgTable(
     kind: agentKindEnum("kind").notNull().default("claude"),
     command: text("command").notNull(),
     args: jsonb("args").$type<string[]>().notNull().default([]),
+    // Full ACP adapter args OVERRIDE. NULL = derive from kind: the adapter's
+    // base args (`ACP_ADAPTERS`) plus the per-kind model translation of `args`
+    // (see buildAcpSpec). When set, these are used verbatim as the adapter args
+    // (the command still comes from `kind`), so operators can fix
+    // adapter/version/model quirks themselves without a code change.
+    acpArgs: jsonb("acp_args").$type<string[] | null>(),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
     cwd: text("cwd"),
+    // Whether this agent's reasoning stream reaches the logs at all. The
+    // device drops `agent_thought_chunk` updates when false, so nothing is
+    // written to agent_run_logs and there is no `[think]` block to render.
+    //
+    // Per-agent rather than per-kind because "is the reasoning worth the
+    // noise" is a property of how you use an agent, not of the adapter.
+    // Defaults true: claude/codex emit no thought chunks anyway, so the
+    // default only matters for the reasoners (omp, pi, cursor), and the
+    // safe default is "capture" — a run's thinking can't be recovered
+    // after the fact, but it can always be hidden.
+    captureThinking: boolean("capture_thinking").notNull().default(true),
     // Optional pin to a specific agent host. NULL = "any idle device".
     // ON DELETE SET NULL so revoking a device doesn't break the agent —
     // it just falls back to "any device" until the user picks a new one.
@@ -462,6 +634,17 @@ export const flowNodeSettings = pgTable(
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    // Agent pool (failover): ordered ids tried AFTER `agentId` when an
+    // attempt fails. Plain jsonb (no FK) — a deleted agent is skipped at
+    // resolve time rather than blocking the row. `retrySame` = extra
+    // attempts on the SAME agent before moving to the next candidate.
+    fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
+    retrySame: integer("retry_same").notNull().default(0),
+    // Parallel slots (== target successes) and the minimum successes needed.
+    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
+    // finishes". See flows/agentPool.ts.
+    concurrency: integer("concurrency").notNull().default(1),
+    quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -541,6 +724,17 @@ export const templateNodeSettings = pgTable(
     nodeId: text("node_id").notNull(),
     promptId: text("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    // Agent pool (failover): ordered ids tried AFTER `agentId` when an
+    // attempt fails. Plain jsonb (no FK) — a deleted agent is skipped at
+    // resolve time rather than blocking the row. `retrySame` = extra
+    // attempts on the SAME agent before moving to the next candidate.
+    fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
+    retrySame: integer("retry_same").notNull().default(0),
+    // Parallel slots (== target successes) and the minimum successes needed.
+    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
+    // finishes". See flows/agentPool.ts.
+    concurrency: integer("concurrency").notNull().default(1),
+    quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -563,6 +757,12 @@ export const flowRunSteps = pgTable(
     nodeId: text("node_id").notNull(),
     nodeKind: text("node_kind").notNull(),
     idx: integer("idx").notNull(),
+    // Agent-pool attempt ordinal. Every attempt of a node (retry on the same
+    // agent, or failover to the next candidate) gets its OWN step row sharing
+    // `nodeId`/`idx`. The node's outcome is aggregated over all its attempts
+    // (quorum met = succeeded) — with parallel slots the highest `attempt`
+    // is just the last one STARTED, not the one that decided the node.
+    attempt: integer("attempt").notNull().default(0),
     status: flowStepStatusEnum("status").notNull().default("pending"),
     inputJson: jsonb("input_json"),
     outputJson: jsonb("output_json"),
@@ -611,6 +811,14 @@ export const agentRuns = pgTable(
     ),
     flowRunStepIdx: index("agent_runs_flow_run_step_id_idx").on(t.flowRunStepId),
     addedByUserIdIdx: index("agent_runs_added_by_user_id_idx").on(t.addedByUserId),
+    // Chat thread lookups (chat.ts priorTurn probe, chatSessions.ts
+    // history/hard-delete/active-keys) all filter on this JSONB
+    // expression — without an index each one seq-scans a table that
+    // grows with every agent run. Partial on IS NOT NULL keeps
+    // flow-engine runs (no chat env key) out of the index entirely.
+    chatSessionKeyIdx: index("agent_runs_chat_session_key_idx")
+      .on(sql`(${t.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID')`)
+      .where(sql`(spec->'env'->>'OPENCARA_CHAT_SESSION_ID') IS NOT NULL`),
   }),
 );
 

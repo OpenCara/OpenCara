@@ -11,6 +11,7 @@ import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { stripAcpMarkers } from "@opencara/shared";
 import hljs from "highlight.js/lib/common";
 import { ChatMarkdown } from "./ChatMarkdown";
 import {
@@ -600,7 +601,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       .filter((m) => !m.pending && m.text.trim().length > 0)
       .map((m) => ({
         role: m.role,
-        text: m.role === "assistant" ? stripInternalMarkers(m.text) : m.text,
+        text: m.role === "assistant" ? stripAcpMarkers(m.text) : m.text,
       }));
     const history = allHistory.slice(-20);
 
@@ -1780,11 +1781,14 @@ function SessionRow({
       {!isRenaming && (
         <>
           {/* Timestamp normally; swaps to the action cluster on hover so
-              the narrow row isn't cluttered with both at once. */}
-          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
+              the narrow row isn't cluttered with both at once. In Tailwind
+              v4 the group-hover selector uses :where() which can match the
+              specificity of the static hidden/visible classes — use the !
+              suffix to guarantee the hover state always wins the cascade. */}
+          <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden!">
             {formatRelative(s.updatedAt)}
           </span>
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex!">
             <Button
               size="sm"
               variant="ghost"
@@ -1938,20 +1942,6 @@ function EmptyState({
       </p>
     </div>
   );
-}
-
-/**
- * Strip `[think]…[/think]` blocks and `[tool]` lines from assistant
- * text before sending it as conversation history. History is a fallback
- * for when session resume isn't available — the model only needs the
- * visible reply content, not internal reasoning or tool invocations
- * that were already handled by the prior turn.
- */
-function stripInternalMarkers(text: string): string {
-  return text
-    .replace(/\n?\[think\]\n[\s\S]*?\n\[\/think\]\n?/g, "")
-    .replace(/(?:^|\n)\[tool\] [^\n]*(?:\n|$)/g, "")
-    .trim();
 }
 
 function shortPath(p: string): string {

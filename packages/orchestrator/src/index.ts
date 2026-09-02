@@ -9,9 +9,12 @@ import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
 import { createGithubAppClient } from "./github/app.js";
 import { GithubOAuth } from "./github/oauth.js";
 import { TokenCipher } from "./auth/session.js";
-import { currentUser, type AuthEnv } from "./auth/middleware.js";
+import { currentUser, createSessionCache, type AuthEnv } from "./auth/middleware.js";
 import { appWebhookRoutes } from "./routes/webhooks.js";
 import { authRoutes } from "./routes/auth.js";
+import { EntraOAuth } from "./azure/entra.js";
+import { azureWebhookRoutes } from "./routes/webhooksAzure.js";
+import { azureRoutes } from "./routes/api/azure.js";
 import { projectRoutes } from "./routes/api/projects.js";
 import { installationRoutes } from "./routes/api/installations.js";
 import { activityRoutes } from "./routes/api/activity.js";
@@ -46,7 +49,17 @@ import { runSchedulerTick } from "./flows/scheduler.js";
 process.on("unhandledRejection", (reason) => {
   console.error("[orchestrator] unhandledRejection (non-fatal):", reason);
 });
+// Under a supervisor (the container's `restart: unless-stopped` sets
+// OPENCARA_SUPERVISED=1 via the Dockerfile) a clean crash-and-restart beats
+// limping in unknown state — the original reason for swallowing these was
+// precisely that the bare nohup process had no one to restart it. Unsupervised
+// boots keep the limp-on behaviour.
+const SUPERVISED = process.env["OPENCARA_SUPERVISED"] === "1";
 process.on("uncaughtException", (err) => {
+  if (SUPERVISED) {
+    console.error("[orchestrator] uncaughtException (fatal — supervisor restarts):", err);
+    process.exit(1);
+  }
   console.error("[orchestrator] uncaughtException (non-fatal):", err);
 });
 
@@ -65,7 +78,7 @@ await migrate(db, {
 console.log("[orchestrator] migrations up to date");
 
 const devicePool = new DevicePool(db);
-const dispatcher = new WebSocketDispatcher(devicePool);
+const dispatcher = new WebSocketDispatcher(devicePool, config.JOB_TIMEOUT_MS);
 
 const app = new Hono<AuthEnv>();
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
@@ -83,7 +96,10 @@ app.onError((err, c) => {
   return c.json({ error: "internal error" }, 500);
 });
 
-app.use("*", currentUser(db, config.SESSION_COOKIE_NAME));
+// One cache shared by the auth middleware (reads) and the logout route (eager
+// invalidation) so a logout takes effect immediately instead of after the TTL.
+const sessionCache = createSessionCache(db);
+app.use("*", currentUser(db, config.SESSION_COOKIE_NAME, sessionCache));
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -91,9 +107,40 @@ const githubApp = config.github
   ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)
   : null;
 
-const flowEngine = githubApp
-  ? new FlowEngine({ db, pg, app: githubApp, dispatcher, publicBaseUrl: config.PUBLIC_BASE_URL })
-  : null;
+// Azure DevOps client deps, built once and shared by the flow engine and the
+// API routes. Requires SESSION_ENCRYPTION_KEY because connection tokens are
+// stored encrypted with the same cipher as session tokens.
+const azureDeps =
+  config.SESSION_ENCRYPTION_KEY
+    ? {
+        db,
+        cipher: new TokenCipher(config.SESSION_ENCRYPTION_KEY),
+        // Present only when an Entra app is configured; PAT connections do not
+        // need one.
+        entra: config.azureDevops
+          ? new EntraOAuth({
+              clientId: config.azureDevops.clientId,
+              clientSecret: config.azureDevops.clientSecret,
+              tenant: config.azureDevops.tenant,
+              publicBaseUrl: config.PUBLIC_BASE_URL,
+            })
+          : undefined,
+      }
+    : null;
+
+// Built when EITHER platform is configured — an Azure-DevOps-only deployment
+// has no GitHub App but still needs an engine to run its flows.
+const flowEngine =
+  githubApp || azureDeps
+    ? new FlowEngine({
+        db,
+        pg,
+        app: githubApp ?? undefined,
+        azure: azureDeps ?? undefined,
+        dispatcher,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : null;
 
 // Wire flowEngine and githubApp into the device pool after construction
 // to break the circular dependency (pool → engine, engine → dispatcher → pool).
@@ -148,6 +195,11 @@ const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
 setInterval(runFlowRunPrune, FLOW_RUN_PRUNE_INTERVAL_MS).unref();
 
+// Server-side WS heartbeat: ping every device each tick and reap half-open
+// sockets that miss a pong, so a flaky-link reconnect can't leave a dead
+// socket registered for pinned dispatch. unref so it never holds the process.
+devicePool.startHeartbeat().unref();
+
 if (flowEngine) {
   seedBuiltinFlowsForAllProjects(db)
     .then(() => console.log("[orchestrator] flow engine ready (built-in flows seeded)"))
@@ -179,13 +231,33 @@ if (flowEngine) {
   console.log("[orchestrator] cron scheduler started (60s tick)");
 }
 
-if (config.github && config.SESSION_ENCRYPTION_KEY) {
-  const oauth = new GithubOAuth({
-    clientId: config.github.clientId,
-    clientSecret: config.github.clientSecret,
-    publicBaseUrl: config.PUBLIC_BASE_URL,
-  });
-  const cipher = new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+// Auth + the whole /api surface mount when EITHER platform is configured.
+// Gating this on `config.github` alone is what made an Azure-DevOps-only
+// deployment silently serve nothing but /health: the flow engine started, but
+// sign-in, /api/*, and /webhooks/azure-devops never mounted.
+// SESSION_ENCRYPTION_KEY is required either way — it encrypts session and
+// connection tokens.
+if ((config.github || azureDeps) && config.SESSION_ENCRYPTION_KEY) {
+  const oauth = config.github
+    ? new GithubOAuth({
+        clientId: config.github.clientId,
+        clientSecret: config.github.clientSecret,
+        publicBaseUrl: config.PUBLIC_BASE_URL,
+      })
+    : undefined;
+  // Same key, so azureDeps.cipher (when present) is interchangeable; reuse it
+  // rather than holding two instances of the same cipher.
+  const cipher = azureDeps?.cipher ?? new TokenCipher(config.SESSION_ENCRYPTION_KEY);
+
+  // Optional second sign-in provider. Absent config leaves /auth/azure/*
+  // unmounted and the login page GitHub-only. Reuses the single client built
+  // for `azureDeps` above so token refreshes share one instance.
+  const entraOAuth = azureDeps?.entra;
+  if (entraOAuth) {
+    console.log(
+      `[orchestrator] Microsoft Entra sign-in enabled (tenant: ${config.azureDevops!.tenant})`,
+    );
+  }
 
   app.route(
     "/",
@@ -197,16 +269,46 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
       ttlDays: config.SESSION_TTL_DAYS,
       publicBaseUrl: config.PUBLIC_BASE_URL,
       app: githubApp ?? undefined,
+      sessionCache,
+      entraOAuth,
     }),
   );
-  app.route("/api/projects", projectRoutes({ db, app: githubApp ?? undefined }));
-  app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  // Mounted unconditionally: a Personal Access Token connection needs no Entra
+  // app at all, and an organization backed by a personal Microsoft account can
+  // ONLY be reached that way (Azure DevOps is work/school-only in Entra). The
+  // Entra-specific endpoints answer 409 when AZDO_ENTRA_* is unset.
+  app.route(
+    "/webhooks/azure-devops",
+    azureWebhookRoutes({ db, cipher, flowEngine: flowEngine ?? undefined }),
+  );
+  app.route(
+    "/api/azure",
+    azureRoutes({
+      db,
+      cipher,
+      entra: entraOAuth,
+      publicBaseUrl: config.PUBLIC_BASE_URL,
+      cookieName: config.SESSION_COOKIE_NAME,
+    }),
+  );
+  console.log(
+    `[orchestrator] Azure DevOps routes mounted (webhooks at /webhooks/azure-devops; Entra sign-in ${entraOAuth ? "enabled" : "disabled — PAT connections only"})`,
+  );
+  app.route(
+    "/api/projects",
+    projectRoutes({ db, app: githubApp ?? undefined, azure: azureDeps ?? undefined }),
+  );
+  // GitHub App installations have no Azure DevOps analogue — the equivalent
+  // surface is /api/azure/connections.
+  if (config.github) {
+    app.route("/api/installations", installationRoutes({ db, app: githubApp ?? undefined }));
+  }
   app.route("/api/activity", activityRoutes({ db }));
   // Hono's app.route(prefix, subapp) only honours the FIRST mount at a given
   // prefix — subsequent app.route("/api", ...) calls are silently dropped.
   // Combine the /api sub-routers into one before mounting once.
   const apiHono = new Hono<AuthEnv>();
-  apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined }));
+  apiHono.route("/", flowRoutes({ db, pg, flowEngine: flowEngine ?? undefined, dispatcher }));
   apiHono.route("/", runRoutes({ db, pg }));
   apiHono.route("/", promptRoutes({ db }));
   apiHono.route("/", agentRoutes({ db, pg, dispatcher }));
@@ -217,7 +319,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
     "/",
     kanbanRoutes({ db, pg, app: githubApp ?? undefined, cipher, oauth }),
   );
-  apiHono.route("/", pmRoutes({ db, flowEngine: flowEngine ?? undefined }));
+  apiHono.route("/", pmRoutes({ db, flowEngine: flowEngine ?? undefined, dispatcher }));
   app.route("/api", apiHono);
   // WS endpoint registered on the root app so @hono/node-ws can attach the
   // upgrade handler to the same Node HTTP server. Must be BEFORE the
@@ -228,7 +330,7 @@ if (config.github && config.SESSION_ENCRYPTION_KEY) {
   console.log("[orchestrator] auth + API routes mounted (WS at /api/devices/ws)");
 } else {
   console.log(
-    "[orchestrator] auth/API not mounted (need GitHub App config + SESSION_ENCRYPTION_KEY)",
+    "[orchestrator] auth/API not mounted — configure GITHUB_APP_* and/or AZDO_ENTRA_*, plus SESSION_ENCRYPTION_KEY",
   );
 }
 
@@ -239,3 +341,36 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, ({ port }) => {
   console.log(`[orchestrator] listening on :${port}`);
 });
 injectWebSocket(server);
+
+// Graceful shutdown. Deploys send SIGTERM (docker stop / kill -TERM): stop
+// accepting new connections, close device sockets so CLIs reconnect to the
+// replacement process, then close the pg pool and exit 0. Open SSE streams
+// hold the HTTP server open indefinitely, so a grace timer — not
+// server.close() completing — is what actually bounds the drain.
+let shuttingDown = false;
+const DRAIN_GRACE_MS = 8_000;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[orchestrator] ${signal} received — draining (max ${DRAIN_GRACE_MS}ms)`);
+  // Reachable from both server.close()'s callback and the grace timer;
+  // guard so pg.end() runs once no matter which fires first.
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    void Promise.resolve(pg.end({ timeout: 5 }))
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  devicePool.closeAll();
+  server.close(() => finish());
+  // Not unref'd: it must fire even while lingering SSE/WS connections keep
+  // the server (and therefore server.close's callback) from completing.
+  setTimeout(() => {
+    console.log("[orchestrator] drain grace elapsed — exiting with streams open");
+    finish();
+  }, DRAIN_GRACE_MS);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

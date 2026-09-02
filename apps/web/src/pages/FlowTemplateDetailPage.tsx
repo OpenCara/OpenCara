@@ -4,15 +4,9 @@ import { Link, useParams } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
-import {
-  NodeEditor,
-  deriveReviewerIds,
-  hasMultiReviewShape,
-  useAddReviewer,
-  useRemoveReviewer,
-  type EditorScope,
-} from "@/components/flow/NodeEditor";
+import { FlowGraph } from "@/components/flow/FlowGraph";
+import { buildFlowNodeDisplays } from "@/lib/flowNodeLabels";
+import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
 import {
   agentsQuery,
   flowTemplateDetailQuery,
@@ -24,11 +18,7 @@ export function FlowTemplateDetailPage() {
   const q = useQuery(flowTemplateDetailQuery(slug!));
   const promptsQ = useQuery(promptsQuery());
   const agentsQ = useQuery(agentsQuery());
-  // Scope + reviewer mutation hooks before the early returns so they're called
-  // unconditionally; the template slug comes from the route param, not loaded data.
   const scope: EditorScope = { kind: "template", slug: slug! };
-  const addReviewer = useAddReviewer(scope);
-  const removeReviewer = useRemoveReviewer(scope);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -43,34 +33,13 @@ export function FlowTemplateDetailPage() {
   const hasDraft = q.data.hasDraft ?? false;
   const prompts = promptsQ.data?.prompts ?? [];
   const agents = agentsQ.data?.agents ?? [];
+  const overrides = q.data.overrides ?? [];
 
   const selectedNode = selectedNodeId
     ? t.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = Object.fromEntries(
-    settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
-  );
-
-  // Structural shape check, not slug — see ProjectFlowDetailPage.
-  const reviewerIds = deriveReviewerIds(t.graphJson);
-  const reviewerControls: FlowReviewerControls | undefined = hasMultiReviewShape(t.graphJson)
-    ? {
-        reviewerIds,
-        canDelete: reviewerIds.size > 1,
-        pending: addReviewer.isPending || removeReviewer.isPending,
-        onAdd: () => addReviewer.mutate(),
-        onDelete: (nodeId) =>
-          removeReviewer.mutate(
-            { nodeId },
-            {
-              onSuccess: () => {
-                if (selectedNodeId === nodeId) setSelectedNodeId(null);
-              },
-            },
-          ),
-      }
-    : undefined;
+  const nodeDisplays = buildFlowNodeDisplays(t.graphJson.nodes, settings, agents, prompts);
 
   return (
     <div className="space-y-6">
@@ -98,8 +67,7 @@ export function FlowTemplateDetailPage() {
       <FlowGraph
         nodes={t.graphJson.nodes}
         edges={t.graphJson.edges}
-        labelOverrides={labelOverrides}
-        reviewerControls={reviewerControls}
+        nodeDisplays={nodeDisplays}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
 
@@ -111,6 +79,46 @@ export function FlowTemplateDetailPage() {
         prompts={prompts}
         onClose={() => setSelectedNodeId(null)}
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-medium">
+            Project overrides
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {overrides.length === 0
+                ? "every project follows this flow"
+                : `${overrides.length} project${overrides.length === 1 ? "" : "s"} diverge`}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Projects use this account-scope flow by default — graph and per-node agent
+            pools / prompts alike. A project listed here has chosen to override part of
+            it; open it to see or revert the override.
+          </p>
+          {overrides.length > 0 && (
+            <ul className="divide-y rounded-md border">
+              {overrides.map((o) => (
+                <li key={o.projectId} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <Link
+                    to={`/projects/${o.projectId}/flows/${t.slug}`}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {o.owner}/{o.name}
+                  </Link>
+                  {o.graphCustomized && <Badge variant="secondary">own graph</Badge>}
+                  {o.nodeOverrides.map((n) => (
+                    <Badge key={n} variant="outline">
+                      {n}
+                    </Badge>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

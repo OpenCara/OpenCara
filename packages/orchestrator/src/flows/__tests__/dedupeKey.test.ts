@@ -137,6 +137,64 @@ describe("computeEventDedupeKey", () => {
     assert.equal(key, "issue_comment:42:created");
   });
 
+  it("scopes an Azure comment by its thread, since the id is a per-thread ordinal", () => {
+    const key = computeEventDedupeKey(
+      ev("issue_comment", { action: "created", comment: { id: 1, thread_id: 97 } }),
+    );
+    assert.equal(key, "issue_comment:97:1:created");
+  });
+
+  // THE BUG (2026-08-17): every thread's first comment is id 1, so the bare-id
+  // key made the first one ever received claim `issue_comment:1:created` — and
+  // the unique index behind it has no time bound, so every later `@opencara
+  // review` was dropped before a flow run row was even created. Distinct
+  // threads must produce distinct keys.
+  it("does not collide two threads whose first comment is both id 1", () => {
+    const first = computeEventDedupeKey(
+      ev("issue_comment", { action: "created", comment: { id: 1, thread_id: 18 } }),
+    );
+    const second = computeEventDedupeKey(
+      ev("issue_comment", { action: "created", comment: { id: 1, thread_id: 97 } }),
+    );
+    assert.notEqual(first, second);
+    assert.notEqual(first, null);
+    assert.notEqual(second, null);
+  });
+
+  it("still collapses a redelivery of the same Azure comment", () => {
+    const payload = { action: "created", comment: { id: 2, thread_id: 90 } };
+    assert.equal(
+      computeEventDedupeKey(ev("issue_comment", payload, "delivery-a")),
+      computeEventDedupeKey(ev("issue_comment", payload, "delivery-b")),
+    );
+  });
+
+  // Fails OPEN. Over-deduping is unrecoverable here (a claimed key never
+  // expires); an extra run is not.
+  it("returns null for an Azure comment whose thread is unknown", () => {
+    assert.equal(
+      computeEventDedupeKey(
+        ev("issue_comment", { action: "created", comment: { id: 1, thread_id: null } }),
+      ),
+      null,
+    );
+  });
+
+  // GitHub ids are already globally unique — the scoped form must not leak
+  // into their keys, or in-flight dedup would break across the deploy.
+  it("leaves the GitHub key shape untouched", () => {
+    assert.equal(
+      computeEventDedupeKey(
+        ev("issue_comment", {
+          action: "created",
+          comment: { id: 2894735820 },
+          issue: { number: 147 },
+        }),
+      ),
+      "issue_comment:2894735820:created",
+    );
+  });
+
   it("returns null for event types without a stable identity", () => {
     assert.equal(
       computeEventDedupeKey(

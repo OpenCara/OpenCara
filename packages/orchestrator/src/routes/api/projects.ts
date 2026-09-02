@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
+  azureDevopsConnections,
   agents,
   flowRuns,
   flowRunSteps,
@@ -18,8 +19,14 @@ import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import {
   loadOwnedProject,
   loadOwnedProjectWithInstallation,
+  loadOwnedProjectWithConnection,
 } from "../../auth/ownership.js";
 import type { GithubAppClient } from "../../github/app.js";
+import {
+  clientForConnection,
+  type AzureDevopsClientDeps,
+} from "../../azure/client.js";
+import { deleteSubscriptions } from "../../azure/hooks.js";
 import {
   backfillIssues,
   pushIssueBodyToGithub,
@@ -30,6 +37,81 @@ import {
 interface ProjectRoutesDeps {
   db: Db;
   app?: GithubAppClient;
+  /** Required to tear down Azure DevOps service hooks on project removal. */
+  azure?: AzureDevopsClientDeps;
+}
+
+/**
+ * Best-effort teardown of a project's Azure DevOps service hooks.
+ *
+ * Never throws: a project the user asked to remove must still be removed even
+ * if the remote call fails (revoked consent, dead connection, Azure outage).
+ * Failures are logged loudly with the subscription ids, because the leftovers
+ * then need manual cleanup in the Azure DevOps project's Service Hooks page —
+ * nothing will retry this.
+ */
+async function removeAzureSubscriptions(
+  deps: ProjectRoutesDeps,
+  project: {
+    id: string;
+    platform: string;
+    azdoConnectionId: string | null;
+    azdoSubscriptionIds: string[];
+  },
+): Promise<void> {
+  if (project.platform !== "azure_devops") return;
+  const ids = project.azdoSubscriptionIds ?? [];
+  if (ids.length === 0 || !project.azdoConnectionId) return;
+
+  if (!deps.azure) {
+    console.error(
+      `[projects] cannot delete Azure DevOps subscriptions for ${project.id} — AZDO_ENTRA_* not configured. Remove these by hand: ${ids.join(", ")}`,
+    );
+    return;
+  }
+  try {
+    const client = await clientForConnection(deps.azure, project.azdoConnectionId);
+    if (!client) {
+      console.error(
+        `[projects] Azure DevOps connection ${project.azdoConnectionId} is gone; subscriptions left behind for ${project.id}: ${ids.join(", ")}`,
+      );
+      return;
+    }
+    await deleteSubscriptions(client, ids);
+  } catch (err) {
+    console.error(
+      `[projects] Azure DevOps subscription teardown failed for ${project.id}; remove these by hand: ${ids.join(", ")}`,
+      err,
+    );
+  }
+}
+
+const GITHUB_ONLY_ROUTE =
+  "this endpoint is GitHub-only; the project is on a different platform";
+
+/**
+ * Narrow a project row to the GitHub-backed shape the issue-mirroring helpers
+ * in `github/issues.ts` require.
+ *
+ * `projects.installation_id` became nullable when Azure DevOps projects landed
+ * (migration 0043). Returns null for anything that isn't a GitHub project so
+ * the caller can answer 400, instead of passing a null installation id into an
+ * Octokit call and failing with something unrelated-looking.
+ */
+function requireGithubProject(project: {
+  id: string;
+  owner: string;
+  name: string;
+  platform: string;
+  installationId: string | null;
+}): { id: string; owner: string; name: string; installationId: string } | null {
+  if (project.platform !== "github" || !project.installationId) return null;
+  return {
+    id: project.id,
+    owner: project.owner,
+    name: project.name,
+    installationId: project.installationId,
+  };
 }
 
 export function projectRoutes(deps: ProjectRoutesDeps) {
@@ -47,10 +129,15 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         private: projects.private,
         addedAt: projects.addedAt,
         removedAt: projects.removedAt,
+        platform: projects.platform,
+        webUrl: projects.webUrl,
         installationId: projects.installationId,
         installationAccountLogin: githubInstallations.accountLogin,
         installationAccountType: githubInstallations.accountType,
         installationSuspendedAt: githubInstallations.suspendedAt,
+        // Azure DevOps display equivalent. Deliberately only the org name —
+        // this row carries encrypted tokens that must never be serialized.
+        azdoOrgName: azureDevopsConnections.orgName,
         lastEventAt: sql<Date | null>`(
           SELECT MAX(${platformEvents.receivedAt})
           FROM ${platformEvents}
@@ -63,9 +150,15 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         )`,
       })
       .from(projects)
-      .innerJoin(
+      // LEFT, not INNER: an Azure DevOps project has no GitHub installation, and
+      // an inner join silently drops it from the list entirely.
+      .leftJoin(
         githubInstallations,
         eq(projects.installationId, githubInstallations.id),
+      )
+      .leftJoin(
+        azureDevopsConnections,
+        eq(projects.azdoConnectionId, azureDevopsConnections.id),
       )
       .where(and(eq(projects.addedByUserId, user.id), isNull(projects.removedAt)))
       .orderBy(desc(projects.addedAt));
@@ -109,10 +202,19 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
   r.get("/:id", async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
-    // Single inner join instead of project lookup + installation lookup.
-    const owned = await loadOwnedProjectWithInstallation(deps.db, id, user.id);
+    // Platform-neutral: the GitHub-only variant inner-joins the installation
+    // and would 404 every Azure DevOps project.
+    const owned = await loadOwnedProjectWithConnection(deps.db, id, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
-    return c.json({ project: owned.project, installation: owned.installation });
+    return c.json({
+      project: owned.project,
+      installation: owned.installation,
+      // Never serialize the connection row itself — it holds encrypted tokens
+      // and the webhook secret.
+      azureConnection: owned.azureConnection
+        ? { id: owned.azureConnection.id, orgName: owned.azureConnection.orgName, authMode: owned.azureConnection.authMode }
+        : null,
+    });
   });
 
   r.delete("/:id", async (c) => {
@@ -120,6 +222,16 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const user = c.get("user")!;
     const owned = await loadOwnedProject(deps.db, id, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
+
+    // Azure DevOps service hooks live in the CUSTOMER's organization, not in
+    // our database, so dropping the row does not remove them. Left behind they
+    // are permanent: the webhook handler answers 200 for an unmatched repo (so
+    // Azure never auto-disables them), meaning they would keep firing forever,
+    // leak which repos were once connected, and consume the org's subscription
+    // quota. Tear them down BEFORE the row goes, since the ids and the
+    // connection both live on it.
+    await removeAzureSubscriptions(deps, owned);
+
     // Hard delete: FK cascade drops issues, flows, flow runs, flow node
     // settings, and projectV2 links; platform_events and agent_runs are
     // ON DELETE SET NULL, so their rows survive as an orphaned audit
@@ -356,15 +468,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       );
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await pushIssueBodyToGithub(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         bodyMd,
         deps.db,
@@ -463,15 +572,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       agentName = agent.name;
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await setIssueAgentLabel(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         agentName,
         deps.db,
@@ -530,15 +636,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
       promptName = prompt.name;
     }
 
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const refreshed = await setIssuePromptLabel(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         number,
         promptName,
         deps.db,
@@ -567,15 +670,12 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
     const user = c.get("user")!;
     const project = await loadOwnedProject(deps.db, id, user.id);
     if (!project) return c.json({ error: "project not found" }, 404);
+    const gh = requireGithubProject(project);
+    if (!gh) return c.json({ error: GITHUB_ONLY_ROUTE }, 400);
     try {
       const stats = await backfillIssues(
         deps.app,
-        {
-          id: project.id,
-          owner: project.owner,
-          name: project.name,
-          installationId: project.installationId,
-        },
+        gh,
         deps.db,
       );
       return c.json({ ok: true, ...stats });
@@ -676,7 +776,7 @@ export function projectRoutes(deps: ProjectRoutesDeps) {
         })
         .from(flowRunSteps)
         .where(inArray(flowRunSteps.flowRunId, activeRunIds))
-        .orderBy(desc(flowRunSteps.idx));
+        .orderBy(desc(flowRunSteps.idx), desc(flowRunSteps.attempt));
       // Group by run, then prefer a currently-running step; otherwise fall
       // back to the latest (highest-idx) step so the panel can still say
       // "Working (…)" while the engine is between steps.

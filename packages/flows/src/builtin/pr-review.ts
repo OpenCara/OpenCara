@@ -1,17 +1,38 @@
 import type { FlowDefinition } from "../types.js";
 
+const reviewerContext = {
+  env: [
+    "OPENCARA_REPO",
+    "OPENCARA_PR_NUMBER",
+    "OPENCARA_PR_HEAD_SHA",
+    "OPENCARA_PR_BASE_SHA",
+  ],
+  stdinJson: true,
+};
+
+// Stage 2b: the lighter single-reviewer pass on follow-up pushes
+// (synchronize) — so the review → fix loop iterates with one cheap review —
+// or on demand via `@opencara review`. First open / reopen is handled by
+// `pr-review-multi`, so `opened` is intentionally NOT in this trigger's
+// actions. (`@opencara review` is not a substring of `@opencara mreview`, so
+// the two comment phrases don't collide.)
+//
+// The reviewer is an agent-pool node like any other: leave it at one slot for
+// plain failover, or raise "run in parallel" to get several opinions here too.
+// Node ids match the legacy unified graph's stage so account-scope settings
+// carry over 1:1.
 export const prReviewFlow: FlowDefinition = {
   slug: "pr-review",
   name: "Pull request review",
   description:
-    "On PR opened/synchronize, fetch the diff, run a reviewer agent, and post the agent output as a PR review comment.",
+    "On PR synchronize (or `@opencara review`), run the single reviewer agent pool and post its review. Set the trigger's grace period to cancel the review if the PR is merged or gets an ignored label first.",
   nodes: [
     {
-      id: "t1",
-      kind: "github.pull_request",
+      id: "single_review_trigger",
+      kind: "scm.pull_request",
       position: { x: 0, y: 0 },
       config: {
-        actions: ["opened", "synchronize", "reopened", "commented"],
+        actions: ["synchronize", "commented"],
         branches: [],
         branchesIgnore: [],
         paths: [],
@@ -20,36 +41,28 @@ export const prReviewFlow: FlowDefinition = {
         labelsIgnore: [],
         ignoreDrafts: false,
         commentPhrase: "@opencara review",
+        delaySeconds: 0,
       },
     },
     {
-      id: "a1",
+      id: "single_reviewer",
       kind: "agent",
-      position: { x: 280, y: 0 },
+      position: { x: 320, y: 0 },
       config: {
-        label: "Reviewer agent",
+        label: "Single reviewer",
         draftPr: false,
-        contextInjection: {
-          env: [
-            "OPENCARA_REPO",
-            "OPENCARA_PR_NUMBER",
-            "OPENCARA_PR_HEAD_SHA",
-            "OPENCARA_PR_BASE_SHA",
-          ],
-          stdinJson: true,
-        },
-
+        contextInjection: reviewerContext,
       },
     },
     {
-      id: "x1",
-      kind: "github.post_review",
-      position: { x: 560, y: 0 },
+      id: "single_post_review",
+      kind: "scm.post_review",
+      position: { x: 640, y: 0 },
       config: { event: "COMMENT" },
     },
   ],
   edges: [
-    { id: "e1", source: "t1", target: "a1" },
-    { id: "e2", source: "a1", target: "x1" },
+    { id: "e_single_review", source: "single_review_trigger", target: "single_reviewer" },
+    { id: "e_single_post", source: "single_reviewer", target: "single_post_review" },
   ],
 };

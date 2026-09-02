@@ -29,7 +29,7 @@ export const flowRunDetailBuilder: PageSkillBuilder = async (ctx) => {
 
   const steps = await ctx.db.query.flowRunSteps.findMany({
     where: eq(flowRunSteps.flowRunId, run.id),
-    orderBy: [flowRunSteps.idx],
+    orderBy: [flowRunSteps.idx, flowRunSteps.attempt],
   });
   const stepIds = steps.map((s) => s.id);
   const linkedAgentRuns = stepIds.length

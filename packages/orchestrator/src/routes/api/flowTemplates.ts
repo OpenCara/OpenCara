@@ -1,7 +1,15 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, eq } from "drizzle-orm";
-import { builtinFlows, FlowDefinitionSchema, type FlowDefinition } from "@opencara/flows";
+import { KEEP as POOL_KEEP, parseAgentPoolPatch } from "./agentPoolBody.js";
+import { foldLegacyReviewerPoolForTemplate, syncInheritedFlowGraphs } from "../../flows/builtin.js";
+import { listTemplateOverrides } from "../../flows/nodeSettings.js";
+import { and, eq, inArray } from "drizzle-orm";
+import {
+  builtinFlows,
+  FlowDefinitionSchema,
+  cloneAndNormalizeGraph,
+  type FlowDefinition,
+} from "@opencara/flows";
 import type { Db } from "../../db/client.js";
 import {
   agents,
@@ -44,7 +52,12 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     if (!def) return c.json({ error: "not found" }, 404);
 
     const draft = await loadDraft(deps.db, user.id, def.slug);
-    const graph = draft ? (draft.graphJson as MutableGraph) : codeGraph(def);
+    // `draft.graphJson` is drizzle's cached row reference — clone before
+    // normalizing so it isn't mutated in place.
+    const graph = draft
+      ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
+      : codeGraph(def);
+    await foldLegacyReviewerPoolForTemplate(deps.db, user.id, slug, graph.nodes);
     const settings = await deps.db
       .select()
       .from(templateNodeSettings)
@@ -55,6 +68,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ),
       );
 
+    const overrides = await listTemplateOverrides(deps.db, user.id, slug);
+
     return c.json({
       template: {
         ...toSummary(def),
@@ -63,13 +78,22 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       hasDraft: !!draft,
       customizedAt: draft?.customizedAt ?? null,
       settings,
+      // Projects that diverge from this account-scope template (own graph
+      // and/or per-node overrides). Fully inheriting projects are omitted.
+      overrides,
     });
   });
 
   r.get("/flow-templates/:slug/node-settings", auth, async (c) => {
     const user = c.get("user")!;
     const slug = c.req.param("slug");
-    if (!builtinFlows[slug]) return c.json({ error: "not found" }, 404);
+    const def = builtinFlows[slug];
+    if (!def) return c.json({ error: "not found" }, 404);
+    const draft = await loadDraft(deps.db, user.id, slug);
+    const graph = draft
+      ? cloneAndNormalizeGraph(draft.graphJson as MutableGraph)
+      : codeGraph(def);
+    await foldLegacyReviewerPoolForTemplate(deps.db, user.id, slug, graph.nodes);
     const rows = await deps.db
       .select()
       .from(templateNodeSettings)
@@ -102,6 +126,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     if (!validation.ok) return c.json({ error: validation.error }, 400);
 
     await persistDraft(deps.db, user.id, def.slug, graph);
+    // Projects that inherit this template pick the change up right away.
+    await syncInheritedFlowGraphs(deps.db, user.id, def.slug, graph);
     return c.json({
       template: { ...toSummary(def), graphJson: graph },
       hasDraft: true,
@@ -118,6 +144,8 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const promptId = parseKeepable(body.promptId);
     const agentId = parseKeepable(body.agentId);
     const label = parseKeepable(body.label);
+    const pool = parseAgentPoolPatch(body);
+    if ("error" in pool) return c.json({ error: pool.error }, 400);
 
     if (promptId !== KEEP && promptId !== null) {
       const p = await deps.db.query.prompts.findFirst({
@@ -130,6 +158,15 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
       });
       if (!a) return c.json({ error: "agent not found" }, 404);
+    }
+    if (pool.fallbackAgentIds !== POOL_KEEP && pool.fallbackAgentIds.length > 0) {
+      const owned = await deps.db.query.agents.findMany({
+        where: and(inArray(agents.id, pool.fallbackAgentIds), eq(agents.userId, user.id)),
+        columns: { id: true },
+      });
+      if (owned.length !== pool.fallbackAgentIds.length) {
+        return c.json({ error: "agent not found" }, 404);
+      }
     }
 
     const existing = await deps.db.query.templateNodeSettings.findFirst({
@@ -147,6 +184,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       if (promptId !== KEEP) patch.promptId = promptId;
       if (agentId !== KEEP) patch.agentId = agentId;
       if (label !== KEEP) patch.label = label;
+      if (pool.fallbackAgentIds !== POOL_KEEP) patch.fallbackAgentIds = pool.fallbackAgentIds;
+      if (pool.retrySame !== POOL_KEEP) patch.retrySame = pool.retrySame;
+        if (pool.concurrency !== POOL_KEEP) patch.concurrency = pool.concurrency;
+        if (pool.quorum !== POOL_KEEP) patch.quorum = pool.quorum;
       await deps.db
         .update(templateNodeSettings)
         .set(patch)
@@ -156,6 +197,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ...(promptId !== KEEP ? { promptId } : {}),
         ...(agentId !== KEEP ? { agentId } : {}),
         ...(label !== KEEP ? { label } : {}),
+        ...(pool.fallbackAgentIds !== POOL_KEEP ? { fallbackAgentIds: pool.fallbackAgentIds } : {}),
+        ...(pool.retrySame !== POOL_KEEP ? { retrySame: pool.retrySame } : {}),
+          ...(pool.concurrency !== POOL_KEEP ? { concurrency: pool.concurrency } : {}),
+          ...(pool.quorum !== POOL_KEEP ? { quorum: pool.quorum } : {}),
         updatedAt: now.toISOString(),
       };
       return c.json({ setting: merged });
@@ -170,6 +215,10 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       promptId: promptId === KEEP ? null : promptId,
       agentId: agentId === KEEP ? null : agentId,
       label: label === KEEP ? null : label,
+      fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
+      retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
+        concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
       updatedAt: now,
     });
     return c.json(
@@ -182,66 +231,15 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
           promptId: promptId === KEEP ? null : promptId,
           agentId: agentId === KEEP ? null : agentId,
           label: label === KEEP ? null : label,
+          fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
+          retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
+        concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
           updatedAt: now.toISOString(),
         },
       },
       201,
     );
-  });
-
-  r.post("/flow-templates/:slug/reviewers", auth, async (c) => {
-    const user = c.get("user")!;
-    const slug = c.req.param("slug");
-    const def = builtinFlows[slug];
-    if (!def) return c.json({ error: "not found" }, 404);
-
-    const graph = await currentGraph(deps.db, user.id, def);
-    const result = addReviewer(graph);
-    if (!result.ok) return c.json({ error: result.error }, 400);
-
-    const validation = validateGraph(def, graph);
-    if (!validation.ok) return c.json({ error: validation.error }, 400);
-
-    await persistDraft(deps.db, user.id, def.slug, graph);
-    return c.json({
-      template: { ...toSummary(def), graphJson: graph },
-      addedNodeId: result.addedNodeId,
-      hasDraft: true,
-    });
-  });
-
-  r.delete("/flow-templates/:slug/reviewers/:nodeId", auth, async (c) => {
-    const user = c.get("user")!;
-    const slug = c.req.param("slug");
-    const nodeId = c.req.param("nodeId");
-    const def = builtinFlows[slug];
-    if (!def) return c.json({ error: "not found" }, 404);
-
-    const graph = await currentGraph(deps.db, user.id, def);
-    const result = removeReviewer(graph, nodeId);
-    if (!result.ok) return c.json({ error: result.error }, 400);
-
-    const validation = validateGraph(def, graph);
-    if (!validation.ok) return c.json({ error: validation.error }, 400);
-
-    await persistDraft(deps.db, user.id, def.slug, graph);
-
-    // Mirror project route: clear per-node settings for the orphaned node so
-    // a re-added node with the same id starts clean.
-    await deps.db
-      .delete(templateNodeSettings)
-      .where(
-        and(
-          eq(templateNodeSettings.userId, user.id),
-          eq(templateNodeSettings.templateSlug, slug),
-          eq(templateNodeSettings.nodeId, nodeId),
-        ),
-      );
-
-    return c.json({
-      template: { ...toSummary(def), graphJson: graph },
-      hasDraft: true,
-    });
   });
 
   return r;
@@ -284,6 +282,12 @@ async function loadDraft(
  * Snapshot the user's current working graph for a template — their draft if
  * one exists, otherwise a deep clone of the code template. Returned graph is
  * safe to mutate; nothing is persisted until persistDraft is called.
+ *
+ * Unlike project flows, a draft is served straight from `template_drafts`
+ * without going through `FlowDefinitionSchema`, so it is the one path that
+ * would hand pre-rename `github.*` node kinds to the client. Normalize here so
+ * the API only ever emits canonical `scm.*` kinds; the draft row itself is
+ * rewritten the next time the user saves.
  */
 async function currentGraph(
   db: Db,
@@ -292,7 +296,7 @@ async function currentGraph(
 ): Promise<MutableGraph> {
   const draft = await loadDraft(db, userId, def.slug);
   if (draft) {
-    return JSON.parse(JSON.stringify(draft.graphJson)) as MutableGraph;
+    return cloneAndNormalizeGraph(draft.graphJson as MutableGraph);
   }
   return codeGraph(def);
 }
@@ -346,104 +350,6 @@ function validateGraph(
     ok: false,
     error: `invalid graph: ${issue?.path.join(".") ?? ""} ${issue?.message ?? "validation failed"}`,
   };
-}
-
-interface ReviewerOk {
-  ok: true;
-  addedNodeId: string;
-}
-interface ReviewerErr {
-  ok: false;
-  error: string;
-}
-function addReviewer(graph: MutableGraph): ReviewerOk | ReviewerErr {
-  // Anchor on the synthesizer: reviewers are the agents feeding it. Robust to
-  // graphs with more than one PR trigger (e.g. development-lifecycle's
-  // independent single-review component is ignored).
-  const synth = graph.nodes.find(
-    (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-  );
-  if (!synth) {
-    return { ok: false, error: "flow shape not supported (need a synthesizer node)" };
-  }
-  const reviewerNodes = graph.nodes.filter(
-    (n) =>
-      n.kind === "agent" &&
-      graph.edges.some((e) => e.source === n.id && e.target === synth.id),
-  );
-  const template = reviewerNodes[0];
-  if (!template) {
-    return {
-      ok: false,
-      error: "no reviewer node to clone — add the first one in code",
-    };
-  }
-  // Wire the new reviewer to the SAME PR trigger that feeds the existing ones.
-  const triggerEdge = graph.edges.find((e) => e.target === template.id);
-  const trigger = triggerEdge
-    ? graph.nodes.find(
-        (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
-      )
-    : undefined;
-  if (!trigger) {
-    return {
-      ok: false,
-      error: "flow shape not supported (no PR trigger feeding the reviewers)",
-    };
-  }
-  const newId = `reviewer_${ulid().slice(-8).toLowerCase()}`;
-  const newNode = {
-    ...JSON.parse(JSON.stringify(template)),
-    id: newId,
-    position: {
-      x: template.position.x,
-      y: Math.max(...reviewerNodes.map((r) => r.position.y)) + 160,
-    },
-  };
-  if (newNode.config && typeof newNode.config === "object") {
-    newNode.config.label = `Reviewer ${reviewerNodes.length + 1}`;
-  }
-  graph.nodes.push(newNode);
-  graph.edges.push(
-    { id: `e_t_${newId}`, source: trigger.id, target: newId },
-    { id: `e_${newId}_s`, source: newId, target: synth.id },
-  );
-  return { ok: true, addedNodeId: newId };
-}
-
-function removeReviewer(
-  graph: MutableGraph,
-  nodeId: string,
-): { ok: true } | ReviewerErr {
-  const synth = graph.nodes.find(
-    (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-  );
-  if (!synth) {
-    return { ok: false, error: "flow shape not supported" };
-  }
-  const reviewerIds = new Set(
-    graph.nodes
-      .filter(
-        (n) =>
-          n.kind === "agent" &&
-          graph.edges.some((e) => e.source === n.id && e.target === synth.id),
-      )
-      .map((n) => n.id),
-  );
-  if (!reviewerIds.has(nodeId)) {
-    return { ok: false, error: "node is not a reviewer in this flow" };
-  }
-  if (reviewerIds.size <= 1) {
-    return {
-      ok: false,
-      error: "cannot remove the last reviewer — synthesizer would have no input",
-    };
-  }
-  graph.nodes = graph.nodes.filter((n) => n.id !== nodeId);
-  graph.edges = graph.edges.filter(
-    (e) => e.source !== nodeId && e.target !== nodeId,
-  );
-  return { ok: true };
 }
 
 interface MutableGraph {

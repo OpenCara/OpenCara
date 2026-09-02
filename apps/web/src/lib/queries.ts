@@ -5,28 +5,69 @@ import {
   useQueryClient,
   type Query,
 } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, ApiError } from "./api";
+
+// The global default is `retry: false`, which is right for most queries but
+// wrong for the session probe: the orchestrator returns a transient 503 (with
+// Retry-After) when an auth session lookup races past its deadline under DB
+// pool pressure. Without a retry that blip becomes a permanent "Failed to load
+// session." screen until a manual reload. Retry server (5xx) and network errors
+// a few times with backoff; never retry a real client error like 401 (logged
+// out) — that must fall straight through to the /login redirect.
+function retryOnServerError(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status < 500) return false;
+  return failureCount < 3;
+}
+
+function serverErrorRetryDelay(attemptIndex: number, error: unknown): number {
+  if (error instanceof ApiError && error.retryAfterMs !== undefined) {
+    return error.retryAfterMs;
+  }
+  // Exponential backoff, capped, when the server gives no Retry-After hint.
+  return Math.min(1000 * 2 ** attemptIndex, 4000);
+}
 
 export interface User {
   id: string;
-  githubLogin: string;
+  /** Null for a user who signed in with Microsoft Entra — use `displayLogin`. */
+  githubLogin: string | null;
   name: string | null;
   avatarUrl: string | null;
   email: string | null;
+}
+
+/**
+ * Best available handle for a user, across sign-in providers. Mirrors
+ * `displayLogin` in the orchestrator's auth/session.ts — falls back through
+ * GitHub login → name → email local-part → a short id so nothing renders as
+ * "@undefined".
+ */
+export function displayLogin(user: Partial<User> | null | undefined): string {
+  if (!user) return "";
+  if (user.githubLogin) return user.githubLogin;
+  if (user.name) return user.name;
+  const local = user.email?.split("@")[0];
+  if (local) return local;
+  return user.id ? `user-${user.id.slice(-6)}` : "";
 }
 
 export interface ProjectListItem {
   id: string;
   owner: string;
   name: string;
+  platform: "github" | "azure_devops";
+  webUrl: string | null;
   defaultBranch: string | null;
   private: boolean;
   addedAt: string;
   removedAt: string | null;
-  installationId: string;
-  installationAccountLogin: string;
-  installationAccountType: "User" | "Organization";
+  // Null on an Azure DevOps project — there is no GitHub installation behind it.
+  installationId: string | null;
+  installationAccountLogin: string | null;
+  installationAccountType: "User" | "Organization" | null;
   installationSuspendedAt: string | null;
+  /** Azure DevOps organization; null on a GitHub project. */
+  azdoOrgName: string | null;
   lastEventAt: string | null;
   recentRunsCount: number;
 }
@@ -93,6 +134,8 @@ export interface FlowSummary {
   name: string;
   graphJson: FlowGraph;
   enabled: boolean;
+  /** Set once the project edits its graph; null = inherits the account template. */
+  customizedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -131,6 +174,8 @@ export interface FlowRunStep {
   nodeId: string;
   nodeKind: string;
   idx: number;
+  /** Agent-pool attempt ordinal; attempts of one node share idx. */
+  attempt: number;
   status: "pending" | "running" | "succeeded" | "failed" | "skipped";
   inputJson: unknown;
   outputJson: unknown;
@@ -149,9 +194,20 @@ export interface AgentRunRow {
   exitCode: number | null;
 }
 
+export interface LinkedIdentity {
+  provider: "github" | "entra";
+  login: string | null;
+  createdAt: string;
+}
+
 export const meQuery = () => ({
   queryKey: ["me"] as const,
-  queryFn: () => api.get<{ user: User }>("/api/me"),
+  // Also carries the account's linked identities, which drive the settings
+  // page. Kept on this one query rather than a second endpoint: two queries
+  // sharing the ["me"] key with different fetchers would race each other.
+  queryFn: () => api.get<{ user: User; identities: LinkedIdentity[] }>("/api/me"),
+  retry: retryOnServerError,
+  retryDelay: serverErrorRetryDelay,
 });
 
 export const projectsQuery = () => ({
@@ -175,7 +231,17 @@ export const projectQuery = (id: string) => ({
          *  (default `AGENTS.md`, empty disables injection). See #130. */
         instructionsFile: string;
       };
-      installation: InstallationSummary;
+      // Null for an Azure DevOps project — there is no GitHub installation.
+      // Declared nullable so the compiler enforces guards at call sites;
+      // api.get<T> is a type ASSERTION, so a wrong shape here fails silently
+      // at runtime rather than at build time.
+      installation: InstallationSummary | null;
+      /** Present for Azure DevOps projects; never includes credentials. */
+      azureConnection: {
+        id: string;
+        orgName: string;
+        authMode: "entra" | "pat";
+      } | null;
     }>(`/api/projects/${id}`),
 });
 
@@ -543,8 +609,14 @@ export interface TemplateNodeSetting {
   nodeId: string;
   promptId: string | null;
   agentId: string | null;
+  fallbackAgentIds: string[];
+  retrySame: number;
+  concurrency: number;
+  quorum: number;
   label: string | null;
   updatedAt: string;
+  /** Never set on template rows; present so the union with FlowNodeSetting narrows cleanly. */
+  source?: "project" | "template";
 }
 
 export const flowTemplatesQuery = () => ({
@@ -561,6 +633,7 @@ export const flowTemplateDetailQuery = (slug: string) => ({
       hasDraft: boolean;
       customizedAt: string | null;
       settings: TemplateNodeSetting[];
+      overrides?: TemplateOverrideSummary[];
     }>(`/api/flow-templates/${slug}`),
 });
 
@@ -576,6 +649,136 @@ export const availableReposQuery = (installationId: string) => ({
       `/api/installations/${installationId}/available-repos`,
     ),
 });
+
+export function useUnlinkIdentity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: LinkedIdentity["provider"]) =>
+      api.delete<void>(`/api/auth/identities/${provider}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me"] });
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
+/** Which sign-in providers this deployment has configured. */
+export interface AuthProviders {
+  github: boolean;
+  entra: boolean;
+}
+
+/**
+ * Drives both the login buttons and the Add-project source tabs.
+ *
+ * Anything gated on a platform must consult this rather than assume both are
+ * available: a deployment configures GitHub, Azure DevOps, or both, and the
+ * corresponding routes only mount for what is configured. Rendering an
+ * Azure DevOps affordance on a GitHub-only deployment produces a 404 from a
+ * route that was never mounted.
+ *
+ * Unauthenticated and cheap; safe to keep fresh for a whole session.
+ */
+export const authProvidersQuery = () => ({
+  queryKey: ["auth", "providers"] as const,
+  queryFn: () => api.get<{ providers: AuthProviders }>("/api/auth/providers"),
+  staleTime: 5 * 60 * 1000,
+});
+
+// --- Azure DevOps ---------------------------------------------------------
+
+export interface AzureOrganization {
+  id: string;
+  name: string;
+  url: string;
+  /** Non-null once this org has been connected by the signed-in user. */
+  connectionId: string | null;
+}
+
+export interface AzureRepository {
+  id: string;
+  name: string;
+  projectName: string;
+  projectId: string;
+  defaultBranch: string | null;
+  webUrl: string;
+  isPrivate: boolean;
+  added: boolean;
+}
+
+export const azureOrganizationsQuery = () => ({
+  queryKey: ["azure", "organizations"] as const,
+  queryFn: () =>
+    api.get<{ organizations: AzureOrganization[] }>("/api/azure/organizations"),
+  // A 409 here means "signed in with GitHub, so no Microsoft credentials" —
+  // an expected state with a UI affordance, not a transient failure to retry.
+  retry: false,
+});
+
+export interface AzureConnection {
+  id: string;
+  orgName: string;
+  orgId: string | null;
+  authMode: "entra" | "pat";
+  patExpiresAt: string | null;
+  createdAt: string;
+}
+
+export const azureConnectionsQuery = () => ({
+  queryKey: ["azure", "connections"] as const,
+  queryFn: () => api.get<{ connections: AzureConnection[] }>("/api/azure/connections"),
+});
+
+export function useConnectAzurePat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { orgName: string; pat: string }) =>
+      api.post<{ connection: { id: string; orgName: string } }>(
+        "/api/azure/connections/pat",
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
+export const azureRepositoriesQuery = (connectionId: string) => ({
+  queryKey: ["azure", "connections", connectionId, "repositories"] as const,
+  queryFn: () =>
+    api.get<{ repositories: AzureRepository[] }>(
+      `/api/azure/connections/${connectionId}/repositories`,
+    ),
+});
+
+export function useConnectAzureOrg() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orgName: string) =>
+      api.post<{ connection: { id: string; orgName: string } }>(
+        "/api/azure/connections",
+        { orgName },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
+
+export function useAddAzureProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { connectionId: string; repositoryId: string }) =>
+      api.post<{ project: { id: string } }>(
+        `/api/azure/connections/${vars.connectionId}/projects`,
+        { repositoryId: vars.repositoryId },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["azure"] });
+    },
+  });
+}
 
 export const activityQuery = () => ({
   queryKey: ["activity"] as const,
@@ -620,16 +823,47 @@ export const promptsQuery = () => ({
 });
 
 export interface FlowNodeSetting {
-  id: string;
+  /** Project override row id; null when the row is inherited from the template. */
+  id: string | null;
   flowId: string;
   nodeId: string;
   promptId: string | null;
   agentId: string | null;
+  /** Ordered failover list tried after `agentId` (same prompt). */
+  fallbackAgentIds: string[];
+  /** Extra attempts on the same agent before moving to the next. */
+  retrySame: number;
+  /** Parallel slots (also the target number of successes). */
+  concurrency: number;
+  /** Minimum successes for the node to succeed. */
+  quorum: number;
   label: string | null;
   updatedAt: string;
+  /**
+   * "project" = this project overrides the node; "template" = inherited from
+   * the account-scope template (no project row; `id` is null then).
+   */
+  source?: "project" | "template";
 }
 
-export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "custom";
+/** A project that diverges from an account-scope flow template. */
+export interface TemplateOverrideSummary {
+  projectId: string;
+  owner: string;
+  name: string;
+  flowId: string;
+  graphCustomized: boolean;
+  nodeOverrides: string[];
+}
+
+export type AgentKind =
+  | "claude"
+  | "codex"
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "cursor"
+  | "custom";
 
 export interface AgentRow {
   id: string;
@@ -640,8 +874,23 @@ export interface AgentRow {
   kind: AgentKind;
   command: string;
   args: string[];
+  /** Full ACP adapter args override. null = use the kind default
+   *  (`defaultAcpArgs`). When set, used verbatim as the adapter args. */
+  acpArgs: string[] | null;
+  /** Computed (read-only): the fixed adapter executable for this kind,
+   *  e.g. `npx` / `claude-acp`. The command is not user-editable. */
+  acpCommand: string;
+  /** Computed (read-only): the adapter args that run by default for this
+   *  kind (incl. per-kind model translation of `args`). The editor pre-fills
+   *  the editable args field with `acpArgs ?? defaultAcpArgs`. */
+  defaultAcpArgs: string[];
   env: Record<string, string>;
   cwd: string | null;
+  /** Whether the agent's reasoning stream is captured into the run logs.
+   *  false = the device drops thought chunks at the source, so there is no
+   *  `[think]` block to show and nothing stored to turn back on later.
+   *  Only the reasoning adapters (omp, pi, cursor) emit thoughts at all. */
+  captureThinking: boolean;
   /** Pin to a specific agent_host (device). null = "any idle device". */
   hostId: string | null;
   createdAt: string;
@@ -667,6 +916,11 @@ export function useCreateAgent() {
        *  (e.g. `--provider kimi-coding --model kimi-k2-thinking` for pi).
        *  Free-form string — server tokenizes the same way as Command. */
       extraArgs?: string;
+      /** Full ACP adapter args override as a shell string (server tokenizes).
+       *  Omit or null to use the kind default. */
+      acpArgs?: string | null;
+      /** Omit to capture the agent's reasoning (the default). */
+      captureThinking?: boolean;
       env?: Record<string, string>;
       cwd?: string | null;
       /** Specific device id; null/undefined = "any idle device". */
@@ -679,8 +933,18 @@ export function useCreateAgent() {
 export function useUpdateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; patch: Partial<Omit<AgentRow, "id" | "userId" | "createdAt" | "updatedAt">> }) =>
-      api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
+    mutationFn: (vars: {
+      id: string;
+      patch: Partial<
+        Omit<
+          AgentRow,
+          "id" | "userId" | "createdAt" | "updatedAt" | "acpArgs" | "acpCommand" | "defaultAcpArgs"
+        >
+      > & {
+        /** Override as a shell string (server tokenizes); null resets to default. */
+        acpArgs?: string | string[] | null;
+      };
+    }) => api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }

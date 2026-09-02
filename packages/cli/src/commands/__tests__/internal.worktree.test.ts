@@ -16,7 +16,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,6 +388,532 @@ describe("internal worktree create — concurrent cache-prep", () => {
             .map((f) => `  - ${f.branch} (exit ${f.status}): ${f.stderr.trim()}`)
             .join("\n"),
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression: a single flow run fans sibling agent nodes out in parallel
+// (on 2026-08-28: "Correctness reviewer" and "Reviewer 2", started in the
+// same millisecond), and both resolve the same worktree branch template —
+// so two `worktree create` processes open on ONE checkout directory at
+// once. Nothing serialized them, and they destroyed each other two ways:
+//
+//   1. Both took the repair path and both `rm -rf`'d the tree; the loser
+//      of the walk race died on `ENOTEMPTY: rmdir …/checkout/.git`, which
+//      escaped as an unhandled exception (flow run
+//      01M13SNHM4Y4JGTY4HPKVXW32X).
+//   2. One re-created the dir and started `git clone` in it while the
+//      other's `rm -rf` deleted that dir underneath, so the clone's own
+//      cwd vanished mid-flight: "sh: 0: getcwd() failed", "could not lock
+//      config file …/.git/config" (flow run 01M13SNSCY6YTFANP1SPEC7TM0).
+//
+// Allocation now holds a per-key lock across the whole
+// reuse-or-repair-or-clone section, so the second process waits and then
+// simply reuses what the first produced.
+describe("internal worktree create — concurrent same-key allocation", () => {
+  // The cases below need the re-clone path to work offline. The CLI
+  // builds `https://github.com/<repo>.git` itself, so point that exact
+  // URL at a local bare origin with git's `insteadOf` rewrite — these
+  // tests already own HOME, so a global gitconfig there is picked up.
+  function seedOrigin(root: string, home: string, repo: string): string {
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    writeFileSync(
+      join(home, ".gitconfig"),
+      `[url "${origin}"]\n\tinsteadOf = https://github.com/${repo}.git\n`,
+    );
+    return origin;
+  }
+
+  const BRANCH = "opencara/pr-57";
+  const KEY = "octo/repo/branch-opencara_pr-57";
+  const REPO = "octo/repo";
+
+  function allocate(home: string, extra: string[] = []) {
+    return runInternalAsync(
+      { ...process.env, HOME: home, GH_TOKEN: "ghs_test123" },
+      [
+        "worktree", "create",
+        "--repo", REPO,
+        "--branch", BRANCH,
+        "--from-branch", "main",
+        "--key", KEY,
+        ...extra,
+      ],
+    );
+  }
+
+  /** Wraps a pending allocation so the test can ask whether it is still running. */
+  function watch(pending: ReturnType<typeof allocate>) {
+    const state = { done: false, result: null as Awaited<typeof pending> | null };
+    const settled = pending.then((r) => {
+      state.done = true;
+      state.result = r;
+      return r;
+    });
+    return { state, settled };
+  }
+
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("waits for an allocation already in flight on the same key", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-lockwait-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      // Stand in for a sibling agent node mid-allocation: take the lock
+      // and name a process that is definitely alive (this test runner) as
+      // its owner, so the staleness probe can't decide it's abandoned.
+      const lock = `${checkout}.lock`;
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "owner"), `${process.pid}\n`);
+
+      // Stands in for work the lock holder's agent has already put in the
+      // tree. `clean -fdx` on the reuse path deletes untracked files, so
+      // this surviving is direct evidence the blocked allocation has not
+      // touched the checkout — a state assertion rather than a purely
+      // timing-based one, which keeps the test meaningful on a loaded
+      // runner where the elapsed-time margin below is less comfortable.
+      const sentinel = join(checkout, "holder-was-here.txt");
+      writeFileSync(sentinel, "in use\n");
+
+      const { state, settled } = watch(allocate(home));
+      // Comfortably longer than an uncontended allocation against a local
+      // origin (~1.5s, most of it tsx boot). Pre-fix this walked straight
+      // into the held checkout and finished well inside the window; on a
+      // slower box the pre-fix run is slower too, so the flake direction
+      // is the benign one — and the sentinel catches it either way.
+      await wait(4000);
+      assert.equal(
+        state.done,
+        false,
+        "expected the second allocation to block while the key was locked",
+      );
+      assert.ok(
+        existsSync(sentinel),
+        "blocked allocation reached `clean -fdx` on a checkout it had not locked",
+      );
+
+      rmSync(lock, { recursive: true, force: true });
+      const r = await settled;
+      assert.equal(r.status, 0, `expected exit 0 once released, got ${r.status}\n${r.stderr}`);
+      assert.equal(existsSync(lock), false, "allocation lock leaked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("breaks a lock whose owner is gone", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-lockstale-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      // A lock left behind by an allocator that was killed outright —
+      // mkdir(2) locks can't be released by the kernel, so without a
+      // staleness path this key would be poisoned forever.
+      const dead = spawnSync("node", ["-e", ""]);
+      const lock = `${checkout}.lock`;
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "owner"), `${dead.pid}\n`);
+      // Backdate past the grace window that protects a just-taken lock,
+      // so the test doesn't have to sit through it.
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(lock, old, old);
+
+      const r = await allocate(home);
+      assert.equal(r.status, 0, `expected the stale lock to be broken, got ${r.status}\n${r.stderr}`);
+      assert.equal(existsSync(lock), false, "allocation lock leaked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-clones a half-built checkout (.git without HEAD) instead of repairing it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-halfclone-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      seedOrigin(root, home, REPO);
+
+      // Deliberately no `--cache-repo`: nothing about the `.git/HEAD`
+      // probe needs the shared cache, and cache-prep routes through
+      // `flock(1)` — the util-linux binary this lock exists precisely to
+      // avoid depending on. Without it this case also runs on a stock
+      // macOS, the platform the mkdir lock is written to protect.
+      //
+      // The production precondition: a crashed earlier clone left `.git/`
+      // populated enough to look like a repo but with no HEAD, so every
+      // git command against it fails. Pre-fix, `existsSync('.git')` sent
+      // this down the repair path — which cannot possibly work — and only
+      // the failure handler got it back to a clone.
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(join(checkout, ".git", "objects"), { recursive: true });
+      mkdirSync(join(checkout, ".git", "refs"), { recursive: true });
+      writeFileSync(
+        join(checkout, ".git", "config"),
+        "[core]\n\trepositoryformatversion = 0\n",
+      );
+
+      const r = await allocate(home);
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\n${r.stderr}`);
+      assert.ok(
+        !r.stderr.includes("[worktree] reuse of"),
+        `expected the half-built checkout to be recognised as unusable up ` +
+          `front, not sent through repair-then-recover:\n${r.stderr}`,
+      );
+
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(head, BRANCH);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("survives a real fan-out of allocations against one checkout", async () => {
+    // End-to-end cover for the shape that produced the outage: sibling
+    // agent nodes of one flow run, same branch template, same key, all
+    // launched together. Timing-dependent by nature (whether they overlap
+    // depends on process startup), so it backstops the deterministic
+    // cases above rather than replacing them — what it does prove is that
+    // the lock neither deadlocks nor leaves a corrupt tree.
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-fanout-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const origin = seedOrigin(root, home, REPO);
+
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const N = 4;
+      const results = await Promise.all(
+        Array.from({ length: N }, () => allocate(home)),
+      );
+
+      const failures = results.filter((r) => r.status !== 0);
+      assert.equal(
+        failures.length,
+        0,
+        `expected all ${N} same-key allocations to succeed; failures:\n` +
+          failures.map((f) => `  - exit ${f.status}: ${f.stderr.trim()}`).join("\n"),
+      );
+
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(head, BRANCH);
+      assert.equal(existsSync(`${checkout}.lock`), false, "allocation lock leaked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression: GitHub is rolling out a second installation-token format
+// alongside the classic 40-char `ghs_`+alphanumerics one — a ~390-char
+// `ghs_<48>.<254>.<86>` (three dot-separated segments, JWT-shaped). Both
+// authenticate fine and which one a mint returns varies per call, so the
+// old alphanumerics-only guard (`/^[\w-]+$/`) rejected a growing random
+// share of valid runs with "GH_TOKEN contains unexpected characters"
+// (flow run 01KYS8NYV68M2P2TAP1K97AFAJ, node review_synthesizer).
+describe("internal worktree create — GH_TOKEN shape validation", () => {
+  // Mirrors the real shape: ghs_ + 48/254/86 dot-separated segments.
+  const dottedToken =
+    "ghs_" +
+    "a".repeat(44) +
+    "." +
+    "b".repeat(254) +
+    "." +
+    "c".repeat(86);
+
+  function seedOrigin(root: string): { origin: string; home: string } {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+    mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    return { origin, home };
+  }
+
+  it("accepts the new dot-separated installation token format", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-dottok-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+
+      const repo = "talespark-git/bank-heist";
+      const branch = "opencara/pr-dotted";
+      const key = "talespark-git/bank-heist/branch-opencara_pr-dotted";
+      const checkout = join(home, ".opencara", "work", key, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const r = runInternal(
+        { ...process.env, HOME: home, GH_TOKEN: dottedToken },
+        [
+          "worktree", "create",
+          "--repo", repo,
+          "--branch", branch,
+          "--from-branch", "main",
+          "--key", key,
+        ],
+      );
+
+      assert.doesNotMatch(
+        r.stderr,
+        /SCM token contains unexpected characters/,
+        "dot-separated installation tokens must not be rejected",
+      );
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The guard is defense-in-depth for the credential-helper string —
+  // widening it to allow `.` must not let shell metachars through.
+  for (const [label, bad] of [
+    ["semicolon", "ghs_abc;rm -rf /"],
+    ["command substitution", "ghs_abc`id`"],
+    ["dollar", "ghs_abc$FOO"],
+    ["whitespace", "ghs_abc def"],
+    ["quote", "ghs_abc'\"x"],
+    ["newline", "ghs_abc\nx"],
+  ] as const) {
+    it(`still rejects a token containing a ${label}`, () => {
+      const root = mkdtempSync(join(tmpdir(), "opencara-wt-badtok-"));
+      try {
+        const { home } = seedOrigin(root);
+        const r = runInternal(
+          { ...process.env, HOME: home, GH_TOKEN: bad },
+          [
+            "worktree", "create",
+            "--repo", "talespark-git/bank-heist",
+            "--branch", "opencara/pr-bad",
+            "--from-branch", "main",
+            "--key", "talespark-git/bank-heist/branch-opencara_pr-bad",
+          ],
+        );
+        assert.notEqual(r.status, 0, "expected a non-zero exit");
+        assert.match(r.stderr, /SCM token contains unexpected characters/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+// Azure DevOps repositories live at org/project/_git/repo — three segments,
+// which the GitHub-shaped `--repo OWNER/NAME` cannot express. `--clone-url`
+// carries the full remote instead, and `--auth-user` the basic-auth username
+// (GitHub demands the literal "x-access-token"; Azure DevOps accepts anything).
+describe("internal worktree create — platform-neutral clone flags", () => {
+  function seedOrigin(root: string): { origin: string; home: string } {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+    mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+
+    const origin = join(root, "origin.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+      stdio: "ignore",
+    });
+
+    const seed = join(root, "seed");
+    mkdirSync(seed);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "t@example.com"]);
+    git(seed, ["config", "user.name", "t"]);
+    writeFileSync(join(seed, "README"), "hi\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "init"]);
+    git(seed, ["remote", "add", "origin", origin]);
+    git(seed, ["push", "origin", "main"]);
+
+    return { origin, home };
+  }
+
+  const KEY = "contoso/widgets/branch-opencara_pr-1";
+
+  it("accepts OPENCARA_SCM_TOKEN in place of GH_TOKEN", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-scmtok-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+      const checkout = join(home, ".opencara", "work", KEY, "checkout");
+      mkdirSync(checkout, { recursive: true });
+      git(checkout, ["clone", origin, "."]);
+
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" };
+      delete env.GH_TOKEN;
+      const r = runInternal(env, [
+        "worktree", "create",
+        "--repo", "contoso/widgets",
+        "--branch", "opencara/pr-1",
+        "--from-branch", "main",
+        "--key", KEY,
+      ]);
+
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails clearly when neither token variable is set", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-notok-"));
+    try {
+      const { home } = seedOrigin(root);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+      delete env.GH_TOKEN;
+      delete env.OPENCARA_SCM_TOKEN;
+      const r = runInternal(env, [
+        "worktree", "create",
+        "--repo", "contoso/widgets",
+        "--branch", "opencara/pr-1",
+        "--key", KEY,
+      ]);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /GH_TOKEN or OPENCARA_SCM_TOKEN/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clones from --clone-url, with a --repo that is not OWNER/NAME shaped", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-cloneurl-"));
+    try {
+      const { origin, home } = seedOrigin(root);
+      // A file:// origin stands in for the real remote; the point under test is
+      // that --clone-url is used verbatim and --repo is not shape-validated.
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--repo", "contoso/Team",
+          "--clone-url", `https://example.invalid/contoso/Team/_git/widgets`,
+          "--branch", "opencara/pr-1",
+          "--from-branch", "main",
+          "--key", KEY,
+        ],
+      );
+      // The clone itself cannot succeed against example.invalid — what matters
+      // is that it got as far as attempting the URL we passed, rather than
+      // rejecting --repo's shape or falling back to github.com.
+      assert.doesNotMatch(r.stderr, /expected OWNER\/NAME/);
+      assert.doesNotMatch(r.stderr, /github\.com/);
+      void origin;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a non-https clone url", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-badurl-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--clone-url", "ssh://git@example.com/x/y",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /expected an https:\/\/ URL/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The clone URL lands in a `git clone` argv; a value shaped like a flag would
+  // be argument injection.
+  it("rejects a clone url that could be read as a git option", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-injurl-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--clone-url", "--upload-pack=touch /tmp/pwned",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /expected an https:\/\/ URL/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an --auth-user containing shell metacharacters", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-badauthuser-"));
+    try {
+      const { home } = seedOrigin(root);
+      const r = runInternal(
+        { ...process.env, HOME: home, OPENCARA_SCM_TOKEN: "abc123" },
+        [
+          "worktree", "create",
+          "--repo", "contoso/widgets",
+          "--auth-user", "x`id`",
+          "--branch", "b",
+          "--key", KEY,
+        ],
+      );
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /--auth-user contains unexpected characters/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

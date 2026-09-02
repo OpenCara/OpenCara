@@ -35,15 +35,9 @@ import {
   type FlowRunSummary,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
-import { FlowGraph, type FlowReviewerControls } from "@/components/flow/FlowGraph";
-import {
-  NodeEditor,
-  deriveReviewerIds,
-  hasMultiReviewShape,
-  useAddReviewer,
-  useRemoveReviewer,
-  type EditorScope,
-} from "@/components/flow/NodeEditor";
+import { FlowGraph } from "@/components/flow/FlowGraph";
+import { buildFlowNodeDisplays } from "@/lib/flowNodeLabels";
+import { NodeEditor, type EditorScope } from "@/components/flow/NodeEditor";
 
 export function ProjectFlowDetailPage() {
   const { id, slug } = useParams();
@@ -60,17 +54,12 @@ export function ProjectFlowDetailPage() {
   const setEnabled = useSetFlowEnabled(projectId, slug!);
   const resetFlow = useResetFlow(projectId, slug!);
   const [resetOpen, setResetOpen] = useState(false);
-  // Scope built before the early returns so the reviewer mutation hooks below
-  // are called unconditionally (flowId is empty until the flow loads — fine,
-  // the mutations are only invoked on user action after load).
   const scope: EditorScope = {
     kind: "project",
     projectId,
     slug: slug!,
     flowId: q.data?.flow.id ?? "",
   };
-  const addReviewer = useAddReviewer(scope);
-  const removeReviewer = useRemoveReviewer(scope);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   if (q.isLoading) return <Skeleton className="h-64 w-full" />;
@@ -84,31 +73,7 @@ export function ProjectFlowDetailPage() {
     ? flow.graphJson.nodes.find((n) => n.id === selectedNodeId) ?? null
     : null;
 
-  const labelOverrides = Object.fromEntries(
-    settings.filter((s) => s.label).map((s) => [s.nodeId, s.label as string]),
-  );
-
-  // Structural, not slug-based: any flow whose graph has the
-  // trigger → reviewers → synthesizer shape gets the add/remove-reviewer
-  // controls — including the development-lifecycle review stage.
-  const reviewerIds = deriveReviewerIds(flow.graphJson);
-  const reviewerControls: FlowReviewerControls | undefined = hasMultiReviewShape(flow.graphJson)
-    ? {
-        reviewerIds,
-        canDelete: reviewerIds.size > 1,
-        pending: addReviewer.isPending || removeReviewer.isPending,
-        onAdd: () => addReviewer.mutate(),
-        onDelete: (nodeId) =>
-          removeReviewer.mutate(
-            { nodeId },
-            {
-              onSuccess: () => {
-                if (selectedNodeId === nodeId) setSelectedNodeId(null);
-              },
-            },
-          ),
-      }
-    : undefined;
+  const nodeDisplays = buildFlowNodeDisplays(flow.graphJson.nodes, settings, agents, prompts);
 
   const onRun = () => {
     trigger.mutate(flow.slug, {
@@ -135,6 +100,17 @@ export function ProjectFlowDetailPage() {
                 disabled
               </Badge>
             )}
+            <Badge
+              variant={flow.customizedAt ? "secondary" : "outline"}
+              className="ml-2 align-middle"
+              title={
+                flow.customizedAt
+                  ? "This project keeps its own graph; reset to follow your account-scope flow again"
+                  : "Graph follows your account-scope flow"
+              }
+            >
+              {flow.customizedAt ? "own graph" : "inherits account flow"}
+            </Badge>
           </h2>
           <p className="text-sm text-muted-foreground">
             {flow.graphJson.description ?? "—"}
@@ -158,10 +134,9 @@ export function ProjectFlowDetailPage() {
                   <DialogTitle>Reset “{flow.name}” to the template?</DialogTitle>
                   <DialogDescription>
                     Replaces this project's flow graph (nodes, edges, layout, trigger
-                    config) with the global template. Any reviewer add/remove or node
-                    edits made in this project are discarded, and the flow will track
-                    future template changes again. Agent/prompt assignments on nodes are
-                    kept.
+                    config) with your account-scope flow, and the graph follows future
+                    changes to it again. Per-node agent pool / prompt overrides made in
+                    this project are kept — revert those from each node's panel.
                   </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
@@ -233,8 +208,7 @@ export function ProjectFlowDetailPage() {
       <FlowGraph
         nodes={flow.graphJson.nodes}
         edges={flow.graphJson.edges}
-        labelOverrides={labelOverrides}
-        reviewerControls={reviewerControls}
+        nodeDisplays={nodeDisplays}
         onNodeClick={(nid) => setSelectedNodeId(nid)}
       />
 

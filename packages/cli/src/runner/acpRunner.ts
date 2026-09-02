@@ -12,6 +12,7 @@
 //   4. Stream `session/update` events through `createUpdateTranslator`
 //      so they land on the existing log-frame pipeline. The translator
 //      is stateful — it fences runs of `agent_thought_chunk` deltas
+//      (or drops them, when the agent has captureThinking off)
 //      between `[think]` / `[/think]` markers (see the function doc
 //      for the opencode-stream-of-deltas motivation). The chat panel
 //      SSE tail is unchanged.
@@ -46,6 +47,7 @@ import {
   isMessageChunk,
   isToolCallProgress,
   isToolCallStart,
+  type AcpConfigOption,
   type ContentBlock,
   type SessionUpdate,
 } from "../acp/types.js";
@@ -151,8 +153,17 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   // (see createUpdateTranslator). Lives for the run; flushed in the
   // finally below so any trailing [/think] reaches the chat panel
   // even when the prompt resolves with `cancelled` or throws.
-  const translator = createUpdateTranslator(handlers.onLog);
-  client.onSessionUpdate((p) => translator.handle(p.update));
+  const translator = createUpdateTranslator(handlers.onLog, {
+    captureThinking: spec.acp?.captureThinking,
+  });
+  // ACP `session/load` requires the agent to REPLAY the prior conversation
+  // as session/update notifications before it answers. cursor-agent does
+  // (claude-acp deliberately doesn't). Without this gate the replayed
+  // agent_message_chunks were logged as this run's output, so a resumed
+  // re-review re-posted the whole previous review body with the old
+  // verdict line still in it (ParadiseEngine#214 review 5087773518).
+  const replayGate = createLoadReplayGate(translator, handlers.onLog);
+  client.onSessionUpdate((p) => replayGate.handle(p.update));
   client.onStderr((chunk) => handlers.onLog("stderr", chunk));
 
   // Mutable handle the cancel() method reads. We can't capture the
@@ -235,20 +246,43 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
         : {};
       let sessionId: string;
       let resumed = false;
+      let configOptions: AcpConfigOption[] | undefined;
       if (acpSpec.priorSessionId && shimSupportsLoad) {
-        await client.loadSession({
-          sessionId: acpSpec.priorSessionId,
-          cwd,
-          mcpServers,
-          ...instructionsExtra,
-        });
+        replayGate.beginLoad();
+        let loaded;
+        try {
+          loaded = await client.loadSession({
+            sessionId: acpSpec.priorSessionId,
+            cwd,
+            mcpServers,
+            ...instructionsExtra,
+          });
+        } finally {
+          replayGate.endLoad();
+        }
         sessionId = acpSpec.priorSessionId;
         resumed = true;
+        configOptions = loaded.configOptions;
       } else {
         const session = await client.newSession({ cwd, mcpServers, ...instructionsExtra });
         sessionId = session.sessionId;
+        configOptions = session.configOptions;
       }
       activeSessionId = sessionId;
+      // Model selection over ACP. Adapters like pi-acp ignore `--model` on argv
+      // and instead advertise the model as a session config option; select it
+      // here via session/set_config_option. Best-effort — a miss or the agent's
+      // "model not found" is logged and the run continues on the adapter default,
+      // never failing the job on a model-name typo.
+      if (acpSpec.model) {
+        await selectAcpModel(
+          client,
+          sessionId,
+          acpSpec.model,
+          configOptions,
+          handlers.onLog,
+        );
+      }
       // Cancel arrived before the session was minted. Forward the
       // notification so the agent's bookkeeping records a cancel, then
       // skip session/prompt outright — without this, we'd spawn the
@@ -355,6 +389,86 @@ export function buildPromptContent(acp: {
 
 export type LogSink = (stream: "stdout" | "stderr", chunk: string) => void;
 
+/**
+ * Pick the config-option value that best matches a requested model. ACP model
+ * option values are "provider/id" (e.g. "volcengine-ark/glm-5.2"). Tries exact,
+ * then case-insensitive, then a suffix match so a bare id ("glm-5.2") resolves
+ * to "volcengine-ark/glm-5.2". Returns the actual value to send, or undefined.
+ */
+export function matchModelValue(
+  requested: string,
+  values: readonly string[],
+): string | undefined {
+  const want = requested.trim();
+  if (!want) return undefined;
+  const exact = values.find((v) => v === want);
+  if (exact) return exact;
+  const ci = values.find((v) => v.toLowerCase() === want.toLowerCase());
+  if (ci) return ci;
+  const suffix = `/${want.toLowerCase()}`;
+  return values.find((v) => v.toLowerCase().endsWith(suffix));
+}
+
+/**
+ * Select the requested model via ACP `session/set_config_option`. Best-effort:
+ * logs a note and returns when the agent advertised no model option or the
+ * model can't be matched, and swallows the agent's error (e.g. "Model not
+ * found") so a bad model name degrades to the adapter default instead of
+ * failing the run.
+ */
+export async function selectAcpModel(
+  client: AcpClient,
+  sessionId: string,
+  requested: string,
+  configOptions: AcpConfigOption[] | undefined,
+  onLog: LogSink,
+): Promise<void> {
+  const modelOption = configOptions?.find(
+    (o) => o.id === "model" || o.category === "model",
+  );
+  if (!modelOption) {
+    onLog(
+      "stderr",
+      `[acp] model "${requested}" requested but the agent advertised no model option; using its default\n`,
+    );
+    return;
+  }
+  const values = (modelOption.options ?? []).map((o) => o.value);
+  const target = matchModelValue(requested, values);
+  if (!target) {
+    // Some agents (claude-acp) accept freeform model ids beyond the
+    // advertised list — attempt the raw value before giving up. Agents
+    // that validate (pi) reject it and we degrade to their default,
+    // same as before but with one extra round trip.
+    try {
+      await client.setConfigOption({
+        sessionId,
+        configId: modelOption.id,
+        value: requested.trim(),
+      });
+      onLog("stderr", `[acp] selected model ${requested.trim()} (freeform)\n`);
+    } catch {
+      onLog(
+        "stderr",
+        `[acp] model "${requested}" not among available models [${values.join(", ")}]; using the default\n`,
+      );
+    }
+    return;
+  }
+  if (modelOption.currentValue === target) return; // already the active model
+  try {
+    await client.setConfigOption({
+      sessionId,
+      configId: modelOption.id,
+      value: target,
+    });
+    onLog("stderr", `[acp] selected model ${target}\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);
+  }
+}
+
 export interface UpdateTranslator {
   /** Route one session/update onto the log-frame pipeline. */
   handle(update: SessionUpdate): void;
@@ -383,8 +497,83 @@ export interface UpdateTranslator {
  * Unknown variants still flow to stderr so operators can find them
  * without polluting the chat.
  */
-export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
+/**
+ * Flatten a tool title to exactly one line.
+ *
+ * Titles are agent-supplied and routinely contain newlines: cursor titles a
+ * shell tool call with the FULL command, so `gh api graphql -f query='…'`
+ * arrives as thirty lines of GraphQL. Emitting that verbatim makes `[tool]` a
+ * multi-line marker, and a marker that spans lines cannot be removed by any
+ * line-based consumer — the orchestrator's stripper took out the `[tool] `
+ * line and left the remaining twenty-nine sitting in the PR review body it
+ * posted to Azure DevOps.
+ *
+ * So the invariant is the emitter's to hold, not the reader's to guess:
+ * one marker, one line. Whitespace runs collapse to a single space, and the
+ * result is capped — these lines exist to identify a call, not to archive it,
+ * and a 2 KB single-line GraphQL query is no more readable than the thirty.
+ */
+const TOOL_TITLE_MAX = 200;
+
+export function flattenToolTitle(title: string): string {
+  const flat = title.replace(/\s+/g, " ").trim();
+  if (flat.length === 0) return "(tool)";
+  return flat.length > TOOL_TITLE_MAX ? `${flat.slice(0, TOOL_TITLE_MAX - 1)}…` : flat;
+}
+
+/**
+ * Drops every session/update that arrives while `session/load` is in flight.
+ * Per the ACP spec those notifications are the agent replaying history the
+ * orchestrator already captured on the run that produced it; only updates
+ * after the load response belong to this run. Counts what it dropped and
+ * logs one stderr line so a resumed run's transcript says why it is short.
+ *
+ * Exported for unit tests.
+ */
+export function createLoadReplayGate(
+  inner: { handle(update: SessionUpdate): void },
+  onLog: (stream: "stdout" | "stderr", chunk: string) => void,
+): { handle(update: SessionUpdate): void; beginLoad(): void; endLoad(): void } {
+  let loading = false;
+  let dropped = 0;
+  return {
+    handle(update) {
+      if (loading) {
+        dropped++;
+        return;
+      }
+      inner.handle(update);
+    },
+    beginLoad() {
+      loading = true;
+      dropped = 0;
+    },
+    endLoad() {
+      loading = false;
+      if (dropped > 0) {
+        onLog("stderr", `[acp] session/load replayed ${dropped} history update(s); not captured as output\n`);
+      }
+    },
+  };
+}
+
+export function createUpdateTranslator(
+  onLog: LogSink,
+  opts: { captureThinking?: boolean } = {},
+): UpdateTranslator {
+  // Absent = capture, so a spec from an older orchestrator (no such field)
+  // keeps today's behaviour rather than silently going quiet.
+  const captureThinking = opts.captureThinking !== false;
   let inThought = false;
+  // toolCallId → best title seen so far. ACP sends the title once, on the
+  // `tool_call` start; every `tool_call_update` afterwards carries ONLY the
+  // fields that changed, so `title` is absent on nearly all of them. The
+  // earlier code read `update.title` directly and fell back to the literal
+  // "(tool)", which is how a real cursor run ended up with 64 lines of
+  // `[tool] (tool) → in_progress` and 64 more of `→ completed` — 128 of its
+  // 244 tool lines naming nothing at all. Resolving through the id restores
+  // the name; see the emit rule below for why most updates now print nothing.
+  const toolTitles = new Map<string, string>();
 
   const enterThought = () => {
     if (!inThought) {
@@ -411,6 +600,11 @@ export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
         const text = textOfContent(update.content);
         if (!text) return;
         if (update.sessionUpdate === "agent_thought_chunk") {
+          // Dropped entirely when the agent opts out — no fence either, or
+          // an empty `[think]`/`[/think]` pair would render as a thinking
+          // block with nothing in it. Fence state is untouched, so this
+          // can't strand an open fence.
+          if (!captureThinking) return;
           enterThought();
           onLog("stdout", text);
           return;
@@ -422,15 +616,28 @@ export function createUpdateTranslator(onLog: LogSink): UpdateTranslator {
       }
       if (isToolCallStart(update)) {
         leaveThought();
-        const status = update.status ?? "?";
-        onLog("stdout", `\n[tool] ${update.title} (${status})\n`);
+        const startTitle = flattenToolTitle(update.title);
+        toolTitles.set(update.toolCallId, startTitle);
+        // No status here: a start is always pending/in_progress, so printing
+        // it added a column that never varied.
+        onLog("stdout", `\n[tool] ${startTitle}\n`);
         return;
       }
       if (isToolCallProgress(update)) {
         leaveThought();
-        const status = update.status ?? "?";
-        const title = update.title ?? "(tool)";
-        onLog("stdout", `\n[tool] ${title} → ${status}\n`);
+        // A title on an update REFINES the start's ("Read File" becomes
+        // "Read /abs/path.md" once the agent resolves the argument), so keep
+        // the newest one for the closing line.
+        if (update.title) toolTitles.set(update.toolCallId, flattenToolTitle(update.title));
+        // Only terminal transitions are news. pending → in_progress says
+        // nothing the start line didn't, and agents emit it repeatedly.
+        if (update.status !== "completed" && update.status !== "failed") return;
+        const title =
+          toolTitles.get(update.toolCallId) ??
+          (update.title ? flattenToolTitle(update.title) : "(tool)");
+        // Bounded: one entry per in-flight call, dropped as each finishes.
+        toolTitles.delete(update.toolCallId);
+        onLog("stdout", `\n[tool] ${title} → ${update.status}\n`);
         return;
       }
       // Unknown variant — log to stderr so it shows up in the device

@@ -11,22 +11,25 @@ import type { Db } from "../db/client.js";
 import {
   agentRunLogs,
   agentRuns,
-  flowNodeSettings,
+  agents,
   flowRuns,
   flowRunSteps,
   flows,
+  azureDevopsConnections,
   githubInstallations,
   platformEvents,
   pmWaveItems,
   pmWaves,
   projects,
 } from "../db/schema.js";
-import { and, asc, not } from "drizzle-orm";
+import { and, asc, inArray, not } from "drizzle-orm";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
+import { requireGithubApp } from "../github/app.js";
 import type { GithubAppClient } from "../github/app.js";
 import {
   buildIssueStatusContext,
   buildManualIssueContext,
+  buildAzurePullRequestContext,
   buildPullRequestContext,
   buildScheduleContext,
   type IssueStatusContext,
@@ -35,11 +38,24 @@ import {
 } from "./context.js";
 import {
   actionRunner,
-  agentRunner,
+  resolveAgentPool,
+  runAgentAttempt,
   triggerRunner,
   SkipFlowError,
   type NodeRunCtx,
+  type NodeRunResult,
+  type PlatformRunCtx,
+  type ResolvedAgentPool,
 } from "./nodeRunners.js";
+import { runWithAgentPool } from "./agentPool.js";
+import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
+import { cancelPreemptedReviewRuns } from "./preempt.js";
+import { flowMayMatchEvent } from "./eventMatch.js";
+import { ReviewGate, reviewGateKeyFor } from "./reviewGate.js";
+import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
+import { clientForConnection } from "../azure/client.js";
+import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
+import type { AzureDevopsClientDeps } from "../azure/client.js";
 import { extractAgentResultText } from "../agents/output.js";
 import {
   FLOW_RUNS_CHANNEL,
@@ -56,7 +72,10 @@ export interface PlatformEventInput {
 export interface FlowEngineDeps {
   db: Db;
   pg: Sql;
-  app: GithubAppClient;
+  /** Absent on an Azure-DevOps-only deployment. */
+  app?: GithubAppClient;
+  /** Present when AZDO_ENTRA_* is configured. */
+  azure?: AzureDevopsClientDeps;
   dispatcher: AgentDispatcher;
   /** Base URL the agent uses to call back into /api/agent/* — threaded
    * down to NodeRunCtx so the agent runner can stamp it onto env vars. */
@@ -64,15 +83,25 @@ export interface FlowEngineDeps {
 }
 
 export class FlowEngine {
+  /** Serialises review runs per PR (flows/reviewGate.ts). */
+  private readonly reviewGate = new ReviewGate();
+
   constructor(private deps: FlowEngineDeps) {}
 
   /** Fire-and-forget: webhook caller should NOT await this. */
   onPlatformEvent(event: PlatformEventInput): void {
     if (!event.projectId) return;
     setImmediate(() => {
-      this.dispatchEvent(event).catch((err) => {
-        console.error("[flow-engine] dispatch error", { eventId: event.id, err });
-      });
+      // Pre-empt first: a merge / close / ignored label must stop an in-flight
+      // review before this same event gets a chance to start anything new.
+      cancelPreemptedReviewRuns(this.deps, event)
+        .catch((err) => {
+          console.error("[flow-engine] review pre-emption error", { eventId: event.id, err });
+        })
+        .then(() => this.dispatchEvent(event))
+        .catch((err) => {
+          console.error("[flow-engine] dispatch error", { eventId: event.id, err });
+        });
     });
   }
 
@@ -157,7 +186,7 @@ export class FlowEngine {
         id: ev.id,
         type: ev.type,
         projectId: ev.projectId,
-        payload: ev.payload,
+        payload: replayPayload(ev.platform, ev.type, ev.payload),
       };
     } else {
       throw new Error("original run has no trigger event to replay");
@@ -210,8 +239,11 @@ export class FlowEngine {
     }
     const downstream = computeDownstreamSet(def, failedStep.nodeId);
 
+    // Deterministic order: idx then attempt, so a multi-success pool's
+    // fan-in sections come out in a stable order on every rerun.
     const allSteps = await this.deps.db.query.flowRunSteps.findMany({
       where: eq(flowRunSteps.flowRunId, originalRunId),
+      orderBy: [asc(flowRunSteps.idx), asc(flowRunSteps.attempt)],
     });
 
     // Note: worktree state used to invalidate reuse (the per-run
@@ -221,7 +253,11 @@ export class FlowEngine {
     // model), the workdir is still around, so descendant reuse is
     // safe — the rerun fetches + checks out the same branch and the
     // agent re-executes against current state.
-    const outputs = new Map<string, string | undefined>();
+    const outputs = new Map<string, NodeOutput>();
+    // Agent-pool nodes can have SEVERAL succeeded attempts (concurrency > 1);
+    // collect them per node so the rerun's fan-in sees the same per-agent
+    // sections the original run produced.
+    const partsByNode = new Map<string, PoolOutputPart[]>();
     const reused: ReusedStep[] = [];
     for (const s of allSteps) {
       if (s.status !== "succeeded") continue;
@@ -247,14 +283,20 @@ export class FlowEngine {
       // text. Without this, fan-in to a synthesizer overflows context
       // (codex's --json output runs to >1MB on tool-use turns; claude's
       // single-JSON envelope adds ~500B of metadata per call).
-      outputs.set(
-        s.nodeId,
-        stdoutCaptured !== undefined ? extractAgentResultText(stdoutCaptured) : undefined,
-      );
+      const text = stdoutCaptured !== undefined ? extractAgentResultText(stdoutCaptured) : undefined;
+      const agentName = readAgentName(s.inputJson);
+      const parts = partsByNode.get(s.nodeId) ?? [];
+      parts.push({ agentName: agentName ?? s.nodeId, text: text ?? "" });
+      partsByNode.set(s.nodeId, parts);
+      outputs.set(s.nodeId, parts.length > 1 ? parts : text);
       reused.push({
         nodeId: s.nodeId,
         nodeKind: s.nodeKind,
+        attempt: s.attempt,
         outputJson: s.outputJson,
+        agentName,
+        agentId: readStringField(s.inputJson, "agentId"),
+        pool: readField(s.inputJson, "pool"),
         startedAt: s.startedAt,
         finishedAt: s.finishedAt,
         originalStepId: s.id,
@@ -288,6 +330,12 @@ export class FlowEngine {
       if (triggers.length > 0 && triggers.every((t) => t.kind === "schedule.cron")) {
         continue;
       }
+      // Same idea for the stage flows: an event whose type / action / comment
+      // phrase can't satisfy ANY trigger of this flow gets no run at all,
+      // instead of a cancelled `trigger_skip` one. Filters that need PR
+      // context (branches, paths, labels, drafts) still run — and record
+      // their skip — inside the trigger step.
+      if (!flowMayMatchEvent(def, event)) continue;
 
       try {
         const prepared = await this.prepareRun(row.id, event, dedupeKey);
@@ -308,6 +356,62 @@ export class FlowEngine {
   //     benign; the caller should drop the event quietly.
   // Distinguishing the two keeps a permanently-broken schedule from looking
   // identical to a routine duplicate fire (PR #164 review).
+  /**
+   * Build the `PlatformRunCtx` for a project, or null when the run cannot
+   * proceed (connection row deleted, platform not configured on this
+   * deployment). Null is treated as "missing" by callers — same as a deleted
+   * project — because in every case there is nothing left to run against.
+   */
+  private async resolvePlatformCtx(
+    project: InferSelectModel<typeof projects>,
+  ): Promise<PlatformRunCtx | null> {
+    if (project.platform === "github") {
+      if (!project.installationId || project.githubRepoId === null) {
+        console.warn(
+          `[flow-engine] project ${project.id} is marked github but has no installation/repo id`,
+        );
+        return null;
+      }
+      const installation = await this.deps.db.query.githubInstallations.findFirst({
+        where: eq(githubInstallations.id, project.installationId),
+      });
+      if (!installation) return null;
+      return {
+        platform: "github",
+        installation,
+        githubRepoId: project.githubRepoId,
+      };
+    }
+
+    if (!project.azdoConnectionId) {
+      console.warn(
+        `[flow-engine] project ${project.id} is marked azure_devops but has no connection`,
+      );
+      return null;
+    }
+    const connection = await this.deps.db.query.azureDevopsConnections.findFirst({
+      where: eq(azureDevopsConnections.id, project.azdoConnectionId),
+    });
+    if (!connection) return null;
+    // `owner` is the "org/project" label; the clone URL and API paths need the
+    // team project on its own.
+    const parsed = parseAzureOwnerLabel(project.owner);
+    if (!parsed) {
+      console.warn(
+        `[flow-engine] project ${project.id} owner '${project.owner}' is not "org/project"`,
+      );
+      return null;
+    }
+    return {
+      platform: "azure_devops",
+      connectionId: connection.id,
+      orgName: parsed.orgName,
+      projectName: parsed.projectName,
+      externalRepoId: project.externalRepoId,
+      cloneUrl: azureCloneUrl(parsed.orgName, parsed.projectName, project.name),
+    };
+  }
+
   private async prepareRun(
     flowId: string,
     event: PlatformEventInput,
@@ -317,10 +421,11 @@ export class FlowEngine {
       where: eq(projects.id, event.projectId!),
     });
     if (!project) return "missing";
-    const installation = await this.deps.db.query.githubInstallations.findFirst({
-      where: eq(githubInstallations.id, project.installationId),
-    });
-    if (!installation) return "missing";
+    // Resolve the platform-specific identity + credentials for this run. The
+    // rest of the pipeline consumes the resulting discriminated union and never
+    // re-checks the platform.
+    const scm = await this.resolvePlatformCtx(project);
+    if (!scm) return "missing";
 
     // Insert with ON CONFLICT DO NOTHING + RETURNING, targeting ONLY the
     // partial dedupe index flow_runs_flow_dedupe_uq (flow_id, dedupe_key)
@@ -356,12 +461,16 @@ export class FlowEngine {
       });
       return "dedupe";
     }
-    await this.deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
-    );
-
-    return { flowRunId, flowId, project, installation };
+    // NOTE: intentionally NO flow_runs notify here. The run row exists but its
+    // trigger hasn't been evaluated yet, so we don't know if it's a real run or
+    // an about-to-be `trigger_skip`. Notifying at creation woke every open
+    // kanban board (which LISTENs on `flow_runs`) for EVERY dispatched flow on
+    // EVERY webhook — and most are trigger_skips — a rebuild firehose that
+    // starved the DB pool and shed auth 503s (2026-06-24). executeFlow emits
+    // the "run started" notify once a trigger actually matches; trigger_skips
+    // never notify. The run-scoped SSE stream (/flow-runs/:id/events/stream)
+    // doesn't need this notify — it loads its own initial snapshot on connect.
+    return { flowRunId, flowId, project, scm };
   }
 
   private async executeFlow(
@@ -371,7 +480,7 @@ export class FlowEngine {
     preloaded?: PreloadedRun,
     opts: { rerun?: boolean } = {},
   ): Promise<void> {
-    const { flowRunId, flowId, project, installation } = prepared;
+    const { flowRunId, flowId, project, scm } = prepared;
 
     // Pre-build PR context once if it's a pull_request event (cheap optimization;
     // avoids re-fetching the diff for every agent node in the chain).
@@ -394,12 +503,33 @@ export class FlowEngine {
       isCommentOnPr
     ) {
       try {
-        prContext = await buildPullRequestContext(
-          this.deps.app,
-          installation,
-          project,
-          event.payload as never,
-        );
+        prContext =
+          scm.platform === "github"
+            ? await buildPullRequestContext(
+                requireGithubApp(this.deps.app),
+                scm.installation,
+                project,
+                event.payload as never,
+              )
+            : // PR events carry the pull request inline; the COMMENT event does
+              // not carry one at all, so a fetcher is supplied for that case.
+              await buildAzurePullRequestContext(
+                event.payload as never,
+                project,
+                async (prNumber) => {
+                  if (scm.platform !== "azure_devops" || !this.deps.azure) return undefined;
+                  const client = await clientForConnection(
+                    this.deps.azure,
+                    scm.connectionId,
+                  );
+                  if (!client) return undefined;
+                  const raw = await client.request<Record<string, unknown>>(
+                    `${client.orgUrl}/${encodeURIComponent(scm.projectName)}/_apis/git/repositories/${encodeURIComponent(scm.externalRepoId)}/pullRequests/${prNumber}`,
+                  );
+                  return (pullRequestPayload(raw as never) as { pull_request?: never })
+                    .pull_request;
+                },
+              );
       } catch (err) {
         console.error("[flow-engine] pr context fetch failed", err);
       }
@@ -449,22 +579,36 @@ export class FlowEngine {
       }
     }
 
-    // Per-node custom labels (rename feature). Used by buildFanInInput so
-    // synthesizer prompts read "## From Correctness reviewer" rather than
-    // the raw node id.
-    const settingsRows = await this.deps.db.query.flowNodeSettings.findMany({
-      where: eq(flowNodeSettings.flowId, flowId),
-    });
-    const labels = new Map<string, string>();
-    for (const r of settingsRows) {
-      if (r.label) labels.set(r.nodeId, r.label);
+    // Per-node display names. Used by buildFanInInput so synthesizer prompts
+    // read "## From opus-reviewer" rather than the raw node id. Agent nodes
+    // are named by the AGENT that runs them (see buildNodeLabels); the
+    // per-node rename only survives on nodes with no linked agent.
+    const settingsRows = await loadEffectiveNodeSettings(this.deps.db, flowId);
+    const linkedAgentIds = [
+      ...new Set(settingsRows.map((r) => r.agentId).filter((id): id is string => !!id)),
+    ];
+    const agentNamesById = new Map<string, string>();
+    if (linkedAgentIds.length > 0) {
+      const agentRows = await this.deps.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, linkedAgentIds));
+      for (const a of agentRows) agentNamesById.set(a.id, a.name);
+    }
+    const labels = buildNodeLabels(def.nodes, settingsRows, agentNamesById);
+    // A rerun reuses upstream steps without re-executing them, so their
+    // runtime-resolved agent never comes back through runNodeStep. Recover it
+    // from the original step row instead, or the rerun's headings would name
+    // the linked agent while the reused output came from another one.
+    for (const r of preloaded?.reused ?? []) {
+      if (r.agentName) labels.set(r.nodeId, r.agentName);
     }
 
     // For rerun-from-failed: preload the upstream nodes' captured stdout.
     // The layer loop below skips any node whose id is already in `outputs`,
     // so those upstream nodes don't re-execute and their previousOutput
     // values still flow into the failed/downstream nodes correctly.
-    const outputs = new Map<string, string | undefined>(preloaded?.outputs);
+    const outputs = new Map<string, NodeOutput>(preloaded?.outputs);
     let nodeIdx = 0;
 
     // Materialise a flow_run_steps row for each reused upstream node so the
@@ -474,14 +618,25 @@ export class FlowEngine {
     // untouched on the source run; we just stamp a "reused" marker into
     // inputJson with the originals' ids for traceability.
     if (preloaded) {
+      // A pool node with several successes reuses several rows: they share
+      // ONE idx (like the original attempts did) and keep their attempt
+      // ordinal + agent/pool stamps so the run page renders the same attempt
+      // strip and steering chat targets the right agent.
+      const reusedIdxByNode = new Map<string, number>();
       for (const r of preloaded.reused) {
         const stepId = ulid();
+        let idx = reusedIdxByNode.get(r.nodeId);
+        if (idx === undefined) {
+          idx = nodeIdx++;
+          reusedIdxByNode.set(r.nodeId, idx);
+        }
         await this.deps.db.insert(flowRunSteps).values({
           id: stepId,
           flowRunId,
           nodeId: r.nodeId,
           nodeKind: r.nodeKind,
-          idx: nodeIdx++,
+          idx,
+          attempt: r.attempt,
           status: "succeeded",
           startedAt: r.startedAt ?? new Date(),
           finishedAt: r.finishedAt ?? new Date(),
@@ -490,6 +645,9 @@ export class FlowEngine {
             reusedFromRunId: r.originalRunId,
             reusedFromStepId: r.originalStepId,
             reusedAgentRunId: r.originalAgentRunId,
+            ...(r.agentName ? { agentName: r.agentName } : {}),
+            ...(r.agentId ? { agentId: r.agentId } : {}),
+            ...(r.pool !== undefined ? { pool: r.pool } : {}),
           },
         });
         await this.deps.pg.notify("flow_run_steps", flowRunId);
@@ -497,6 +655,9 @@ export class FlowEngine {
     }
     let failed = false;
     let errorMsg: string | undefined;
+    /** Specific `cancel_reason` for a skip that should stay visible (grace
+     *  period, review queue) instead of the default `trigger_skip`. */
+    let skipCancelReason: string | undefined;
     let skipped = false;
 
     let layers: FlowNode[][];
@@ -551,12 +712,12 @@ export class FlowEngine {
           this.runNodeStep(
             prepared,
             def,
-            { node, idx: nodeIdx++, previousOutput: undefined },
+            { node, idx: nodeIdx++, previousOutput: undefined, previousAgentName: undefined },
             event,
             prContext,
             issueContext,
             scheduleContext,
-            opts,
+            { ...opts, nodeSettings: settingsRows },
           ),
         ),
       );
@@ -577,6 +738,7 @@ export class FlowEngine {
         if (r.value.skipped) {
           // A skipped trigger deactivates ONLY its own subgraph; it does
           // not fail/cancel the run.
+          if (r.value.skipCancelReason) skipCancelReason ??= r.value.skipCancelReason;
           return { id: node.id, status: "skipped", skipReason: r.value.skipReason };
         }
         return { id: node.id, status: "matched", stdoutCaptured: r.value.stdoutCaptured };
@@ -611,6 +773,28 @@ export class FlowEngine {
       }
     }
 
+    // Whether this run is "real" — at least one trigger matched (or it's a
+    // defensive no-trigger flow that runs everything). A run that matched
+    // nothing becomes a `trigger_skip` and must NOT wake any board: those are
+    // the bulk of dispatches (every unrelated webhook hits every flow's trigger
+    // and is rejected) and rebuilding open kanban boards for them is what
+    // starved the DB pool. See the prepareRun note above.
+    const triggerMatched = runNotifiesBoard({
+      hasTriggers: allTriggers.length > 0,
+      matchedTriggerCount: matchedTriggerIds.size,
+    });
+
+    // "Run started" board signal: now that we know a trigger matched, tell the
+    // kanban board (and any run-scoped SSE) the run is live so cards can show
+    // "Implementing…". A trigger-phase hard failure skips this — the terminal
+    // notify below carries the failed state instead.
+    if (triggerMatched && !failed) {
+      await this.deps.pg.notify(
+        FLOW_RUNS_CHANNEL,
+        serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+      );
+    }
+
     // Nodes reachable from a matched trigger are the only ones that run.
     // A graph with no trigger nodes at all (defensive — none ship today)
     // runs every node, preserving the prior "execute the whole graph"
@@ -625,8 +809,72 @@ export class FlowEngine {
     // already done (their ids are in `outputs`); pruned nodes — not
     // downstream of any matched trigger — are filtered out, so they get
     // no step row and don't affect the run's status.
+    // ── Review gate ─────────────────────────────────────────────────
+    // One review per PR at a time across BOTH review flows; one more may
+    // wait behind it (status `pending`); any further request is discarded —
+    // the queued run reviews the PR's newest state anyway.
+    const reviewGateKey =
+      !failed && !skipped ? reviewGateKeyFor(def, matchedTriggerIds, event, project.id) : null;
+    let reviewGateHeld = false;
+    if (reviewGateKey) {
+      const verdict = await this.reviewGate.acquire(reviewGateKey, flowRunId, {
+        onQueued: async (aheadRunId) => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "pending", error: `queued: waiting for review run ${aheadRunId} on this PR to finish` })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "running")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        onResumed: async () => {
+          await this.deps.db
+            .update(flowRuns)
+            .set({ status: "running", error: null })
+            .where(and(eq(flowRuns.id, flowRunId), eq(flowRuns.status, "pending")));
+          await this.deps.pg.notify(
+            FLOW_RUNS_CHANNEL,
+            serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+          );
+        },
+        isCancelled: async () => {
+          const row = await this.deps.db.query.flowRuns.findFirst({
+            where: eq(flowRuns.id, flowRunId),
+            columns: { status: true },
+          });
+          return !row || (row.status !== "pending" && row.status !== "running");
+        },
+      });
+      if (verdict === "run") {
+        reviewGateHeld = true;
+      } else {
+        skipped = true;
+        errorMsg ??=
+          verdict === "superseded"
+            ? "superseded: a newer review request for this PR took the queue slot"
+            : "cancelled while queued behind another review of this PR";
+        skipCancelReason =
+          verdict === "superseded" ? "review_superseded" : "review_queue_cancelled";
+      }
+    }
+
+    try {
     if (!failed && !skipped) {
       outer: for (const layer of layers) {
+        // A cancel from outside (UI stop, review pre-emption on merge / ignored
+        // label) flips flow_runs.status; agents in flight get killed, but a
+        // run between layers would otherwise march on into post_review. Check
+        // once per layer so nothing new starts after the run was cancelled.
+        const live = await this.deps.db.query.flowRuns.findFirst({
+          where: eq(flowRuns.id, flowRunId),
+          columns: { status: true },
+        });
+        if (!live || (live.status !== "running" && live.status !== "pending")) {
+          skipped = true;
+          errorMsg ??= `run ${live?.status ?? "deleted"} externally; no further nodes started`;
+          break outer;
+        }
         // Snapshot idx per node before launching the layer so step rows
         // have stable, sequential idx even when siblings run
         // concurrently. Skip nodes whose output is already in the map
@@ -638,6 +886,7 @@ export class FlowEngine {
             node,
             idx: nodeIdx++,
             previousOutput: buildFanInInput(node, def.edges, outputs, labels),
+            previousAgentName: upstreamAgentName(node, def, outputs, labels),
           }));
         if (layerJobs.length === 0) continue;
 
@@ -651,7 +900,7 @@ export class FlowEngine {
               prContext,
               issueContext,
               scheduleContext,
-              opts,
+              { ...opts, nodeSettings: settingsRows },
             ),
           ),
         );
@@ -668,14 +917,33 @@ export class FlowEngine {
               errorMsg ??= r.value.skipReason;
               continue;
             }
+            // Runtime agent resolution outranks the flow-node link (issue/PR
+            // `agent:<name>` label, project default implement agent), so the
+            // heading downstream nodes see must name the agent that actually
+            // ran, not the one the graph was configured with.
+            if (r.value.agentName) labels.set(node.id, r.value.agentName);
             // Same envelope/JSONL extraction as the recovery path above —
-            // see comment there for why.
-            outputs.set(
-              node.id,
-              r.value.stdoutCaptured !== undefined
-                ? extractAgentResultText(r.value.stdoutCaptured)
-                : undefined,
-            );
+            // see comment there for why. A pool that finished with several
+            // successes hands downstream one section per agent.
+            if (r.value.poolOutputs) {
+              outputs.set(
+                node.id,
+                r.value.poolOutputs.map((o) => ({
+                  agentName: o.agentName,
+                  text:
+                    o.stdoutCaptured !== undefined
+                      ? extractAgentResultText(o.stdoutCaptured)
+                      : "",
+                })),
+              );
+            } else {
+              outputs.set(
+                node.id,
+                r.value.stdoutCaptured !== undefined
+                  ? extractAgentResultText(r.value.stdoutCaptured)
+                  : undefined,
+              );
+            }
           } else {
             failed = true;
             errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
@@ -685,6 +953,9 @@ export class FlowEngine {
         if (failed || skipped) break outer;
       }
     }
+    } finally {
+      if (reviewGateKey && reviewGateHeld) this.reviewGate.release(reviewGateKey, flowRunId);
+    }
 
     // Worktrees no longer get cleaned up at end-of-run — they
     // persist across iterations on the same PR branch (implementer
@@ -693,7 +964,13 @@ export class FlowEngine {
     // routes/webhooks.ts + worktrees/cleanup.ts.
 
     const flowStatus = failed ? "failed" : skipped ? "cancelled" : "succeeded";
-    await this.deps.db
+    // Guarded terminal write: the cancel endpoint (and the reaper) may have
+    // already flipped this run to `cancelled` while the layers were still
+    // executing. Overwriting that would erase the user's cancel — and null
+    // its cancel_reason — the moment the in-flight agent finished. Zero rows
+    // updated means "someone else terminated this run first"; their status
+    // wins, including for wave settlement below.
+    const terminal = await this.deps.db
       .update(flowRuns)
       .set({
         status: flowStatus,
@@ -702,15 +979,38 @@ export class FlowEngine {
         // skipped → trigger_skip so the Flow runs page can hide these by
         // default. (Other 'cancelled' rows come from the reaper, which
         // sets cancel_reason='abandoned'.)
-        cancelReason: skipped ? "trigger_skip" : null,
+        // A specific reason set for this skip (grace period, review queue)
+        // wins over the generic marker; the runs page hides trigger_skip.
+        cancelReason: skipped ? (skipCancelReason ?? "trigger_skip") : null,
       })
-      .where(eq(flowRuns.id, flowRunId));
-    await this.deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
-    );
+      .where(
+        and(
+          eq(flowRuns.id, flowRunId),
+          inArray(flowRuns.status, ["pending", "running"]),
+        ),
+      )
+      .returning({ id: flowRuns.id });
+    const terminalWriteApplied = terminal.length > 0;
+    // Only notify for runs the board ever saw. A pure `trigger_skip` (no
+    // trigger matched) never emitted a "run started" notify, so emitting a
+    // terminal one here would wake every board for a no-op — the exact
+    // firehose we're killing. A run that matched then skipped a node mid-flow
+    // (skipped === true but triggerMatched) DID start, so it still notifies so
+    // the card clears. settleWaveItem still runs unconditionally — PM wave
+    // bookkeeping is independent of board notifications.
+    if (triggerMatched && terminalWriteApplied) {
+      await this.deps.pg.notify(
+        FLOW_RUNS_CHANNEL,
+        serializeFlowRunsNotify({ flowRunId, projectId: project.id }),
+      );
+    }
 
-    await this.settleWaveItem(flowRunId, flowStatus);
+    // If the guarded write lost (user cancel / reaper won), settle the wave
+    // item as cancelled — mirroring the status that actually stuck on the run.
+    await this.settleWaveItem(
+      flowRunId,
+      terminalWriteApplied ? flowStatus : "cancelled",
+    );
   }
 
   /**
@@ -757,12 +1057,15 @@ export class FlowEngine {
   }
 
   /**
-   * Run a single node: insert the step row, dispatch to its runner, persist
-   * the outcome. Returns the captured stdout (for downstream fan-in) and a
-   * skipped flag (SkipFlowError = the run should cancel cleanly).
+   * Run a single node. Non-agent nodes get exactly one step row. Agent nodes
+   * resolve their candidate pool once, then run ONE attempt per step row —
+   * retries on the same agent and failovers to the next candidate each get
+   * their own row sharing `nodeId`/`idx`, ordered by `attempt`.
    *
-   * Throws on any non-skip failure so the caller's Promise.allSettled marks
-   * the layer as failed.
+   * Returns the captured stdout (for downstream fan-in) and a skipped flag
+   * (SkipFlowError = the run should cancel cleanly). Throws on any non-skip
+   * failure so the caller's Promise.allSettled marks the layer as failed;
+   * for an agent node that's the pool-exhausted error carrying the trail.
    */
   private async runNodeStep(
     prepared: PreparedRun,
@@ -771,22 +1074,19 @@ export class FlowEngine {
       node: FlowNode;
       idx: number;
       previousOutput: string | undefined;
+      previousAgentName: string | undefined;
     },
     event: PlatformEventInput,
     prContext: PullRequestContext | undefined,
     issueContext: IssueStatusContext | undefined,
     scheduleContext: ScheduleContext | undefined,
-    opts: { rerun?: boolean },
-  ): Promise<{
-    stdoutCaptured?: string;
-    skipped: boolean;
-    skipReason?: string;
-  }> {
-    const { flowRunId, flowId, project, installation } = prepared;
-    const { node, idx, previousOutput } = job;
+    opts: { rerun?: boolean; nodeSettings?: readonly EffectiveNodeSetting[] },
+  ): Promise<StepOutcome> {
+    const { flowRunId, flowId, project, scm } = prepared;
+    const { node, idx, previousOutput, previousAgentName } = job;
 
     // Reviewer-agent verdict contract: when this node's outputs flow
-    // (transitively) into a `github.post_review` action, the agent
+    // (transitively) into a `scm.post_review` action, the agent
     // runner auto-injects the verdict-line skill so the post-review
     // parser can drive GitHub's review `event` enum from the agent
     // body. See agents/verdict.ts + skills/prReviewVerdict.ts.
@@ -795,47 +1095,25 @@ export class FlowEngine {
     for (const id of downstreamIds) {
       if (id === node.id) continue;
       const n = def.nodes.find((x) => x.id === id);
-      if (n?.kind === "github.post_review") {
+      if (n?.kind === "scm.post_review") {
         hasDownstreamPostReview = true;
         break;
       }
     }
 
-    const stepId = ulid();
-    await this.deps.db.insert(flowRunSteps).values({
-      id: stepId,
-      flowRunId,
-      nodeId: node.id,
-      nodeKind: node.kind,
-      idx,
-      status: "running",
-      startedAt: new Date(),
-      inputJson: {
-        nodeKind: node.kind,
-        nodeConfig: node.config,
-        previousOutput: previousOutput ? truncate(previousOutput, 4000) : null,
-        eventType: event.type,
-      },
-    });
-    await this.deps.pg.notify("flow_run_steps", flowRunId);
-
-    const baseCtx: NodeRunCtx = {
+    const baseCtx: StepBaseCtx = {
       db: this.deps.db,
       pg: this.deps.pg,
       app: this.deps.app,
+      azure: this.deps.azure,
       dispatcher: this.deps.dispatcher,
       flowId,
       flowRunId,
-      flowRunStepId: stepId,
       projectId: project.id,
-      installation: {
-        id: installation.id,
-        githubInstallationId: installation.githubInstallationId,
-      },
+      scm,
       project: {
         owner: project.owner,
         name: project.name,
-        githubRepoId: project.githubRepoId,
         defaultBranch: project.defaultBranch,
         instructionsFile: project.instructionsFile,
       },
@@ -844,20 +1122,131 @@ export class FlowEngine {
       issueContext,
       scheduleContext,
       previousOutput,
+      previousAgentName,
       publicBaseUrl: this.deps.publicBaseUrl,
       hasDownstreamPostReview,
       rerun: opts.rerun ?? false,
+      nodeSettings: opts.nodeSettings,
     };
+    const meta = { node, idx, previousOutput, event };
 
+    if (node.kind !== "agent") {
+      return this.runStepAttempt(baseCtx, { ...meta, attempt: 0 }, (ctx) =>
+        isTriggerKind(node.kind)
+          ? triggerRunner(ctx, node as never)
+          : actionRunner(ctx, node as never),
+      );
+    }
+
+    // Agent node: resolve the pool ONCE (settings, labels, project default,
+    // shared prompt). A resolution failure happens before any attempt can
+    // start, so materialise it as attempt 0 — the run page then shows the
+    // same failed/skipped step the single-agent runner used to produce.
+    let pool: ResolvedAgentPool;
     try {
-      let result;
-      if (isTriggerKind(node.kind)) {
-        result = await triggerRunner(baseCtx, node as never);
-      } else if (node.kind === "agent") {
-        result = await agentRunner(baseCtx, node);
-      } else {
-        result = await actionRunner(baseCtx, node as never);
-      }
+      pool = await resolveAgentPool(baseCtx, node);
+    } catch (err) {
+      return this.runStepAttempt(baseCtx, { ...meta, attempt: 0 }, async () => {
+        throw err;
+      });
+    }
+
+    const { successes } = await runWithAgentPool({
+      candidates: pool.candidates,
+      retrySame: pool.retrySame,
+      concurrency: pool.concurrency,
+      quorum: pool.quorum,
+      describe: (agent) => agent.name,
+      onAttemptFailed: (rec) => {
+        console.warn("[flow-engine] agent pool attempt failed", {
+          flowRunId,
+          nodeId: node.id,
+          attempt: rec.info.attempt,
+          agent: rec.candidate.name,
+          disposition: rec.disposition,
+          error: rec.error instanceof Error ? rec.error.message : String(rec.error),
+        });
+      },
+      attempt: (agent, info) =>
+        this.runStepAttempt(
+          baseCtx,
+          {
+            ...meta,
+            attempt: info.attempt,
+            pool: {
+              agentId: agent.id,
+              agentName: agent.name,
+              candidateIndex: info.candidateIndex,
+              retryIndex: info.retryIndex,
+              candidateCount: info.candidateCount,
+              retrySame: pool.retrySame,
+              concurrency: pool.concurrency,
+              quorum: pool.quorum,
+            },
+          },
+          (ctx) => runAgentAttempt(ctx, node, agent, pool.promptBody),
+        ),
+    });
+    // A skip (maxIterations etc.) is decided per node, not per agent — any
+    // attempt reporting it means the run should cancel cleanly.
+    const skipped = successes.find((s) => s.value.skipped);
+    if (skipped) return skipped.value;
+    if (successes.length === 1) return successes[0]!.value;
+    return {
+      skipped: false,
+      agentName: successes[0]!.value.agentName ?? successes[0]!.candidate.name,
+      poolOutputs: successes.map((s) => ({
+        agentName: s.value.agentName ?? s.candidate.name,
+        stdoutCaptured: s.value.stdoutCaptured,
+      })),
+    };
+  }
+
+  /**
+   * One step row, start to finish: insert as `running`, invoke the runner
+   * with a ctx bound to that row, persist succeeded / skipped / failed.
+   * Throws on any non-skip failure (after recording it) so the caller — the
+   * layer loop or the agent-pool loop — decides what happens next.
+   */
+  private async runStepAttempt(
+    baseCtx: StepBaseCtx,
+    meta: {
+      node: FlowNode;
+      idx: number;
+      previousOutput: string | undefined;
+      event: PlatformEventInput;
+      attempt: number;
+      pool?: StepPoolMeta;
+    },
+    invoke: (ctx: NodeRunCtx) => Promise<NodeRunResult>,
+  ): Promise<StepOutcome> {
+    const { flowRunId } = baseCtx;
+    const { node, idx, previousOutput, event, attempt, pool } = meta;
+    const stepId = ulid();
+    await this.deps.db.insert(flowRunSteps).values({
+      id: stepId,
+      flowRunId,
+      nodeId: node.id,
+      nodeKind: node.kind,
+      idx,
+      attempt,
+      status: "running",
+      startedAt: new Date(),
+      inputJson: {
+        nodeKind: node.kind,
+        nodeConfig: node.config,
+        previousOutput: previousOutput ? truncate(previousOutput, 4000) : null,
+        eventType: event.type,
+        // Stamp the candidate up front so the run page can name the agent
+        // (and its position in the pool) while the attempt is still queued.
+        ...(pool ? { agentName: pool.agentName, agentId: pool.agentId, pool } : {}),
+      },
+    });
+    await this.deps.pg.notify("flow_run_steps", flowRunId);
+
+    const ctx: NodeRunCtx = { ...baseCtx, flowRunStepId: stepId };
+    try {
+      const result = await invoke(ctx);
 
       await this.deps.db
         .update(flowRunSteps)
@@ -872,6 +1261,7 @@ export class FlowEngine {
       return {
         stdoutCaptured: result.stdoutCaptured,
         skipped: false,
+        agentName: result.agentName,
       };
     } catch (err) {
       if (err instanceof SkipFlowError) {
@@ -880,7 +1270,11 @@ export class FlowEngine {
           .set({ status: "skipped", finishedAt: new Date(), error: err.message })
           .where(eq(flowRunSteps.id, stepId));
         await this.deps.pg.notify("flow_run_steps", flowRunId);
-        return { skipped: true, skipReason: err.message };
+        return {
+          skipped: true,
+          skipReason: err.message,
+          ...(err.cancelReason ? { skipCancelReason: err.cancelReason } : {}),
+        };
       }
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.db
@@ -893,17 +1287,67 @@ export class FlowEngine {
   }
 }
 
+/** Everything a step's runner ctx needs except the step row id. */
+type StepBaseCtx = Omit<NodeRunCtx, "flowRunStepId">;
+
+/** Pool bookkeeping stamped into an agent attempt's `inputJson`. */
+interface StepPoolMeta {
+  agentId: string;
+  agentName: string;
+  candidateIndex: number;
+  retryIndex: number;
+  candidateCount: number;
+  retrySame: number;
+  concurrency: number;
+  quorum: number;
+}
+
+interface StepOutcome {
+  stdoutCaptured?: string;
+  skipped: boolean;
+  skipReason?: string;
+  /** `SkipFlowError.cancelReason` when the skip named one. */
+  skipCancelReason?: string;
+  /** Set by agent nodes: the agent that was actually resolved and run. */
+  agentName?: string;
+  /**
+   * Set when an agent pool finished with MORE than one success: one entry per
+   * agent, in completion order. `stdoutCaptured` is then unset.
+   */
+  poolOutputs?: Array<{ agentName: string; stdoutCaptured?: string }>;
+}
+
+/** One agent's contribution when a pool node produced several outputs. */
+export interface PoolOutputPart {
+  agentName: string;
+  text: string;
+}
+
+/** What a node leaves in the run's outputs map for downstream fan-in. */
+export type NodeOutput = string | undefined | PoolOutputPart[];
+
 interface PreparedRun {
   flowRunId: string;
   flowId: string;
   project: InferSelectModel<typeof projects>;
-  installation: InferSelectModel<typeof githubInstallations>;
+  /**
+   * Platform identity + credentials, resolved once in `prepareRun`. Consumers
+   * switch on `scm.platform` rather than re-reading nullable project columns.
+   */
+  scm: PlatformRunCtx;
 }
 
 interface ReusedStep {
   nodeId: string;
   nodeKind: string;
+  /** Original attempt ordinal (pool nodes reuse one row per success). */
+  attempt: number;
   outputJson: unknown;
+  /** `inputJson.agentName` of the original step, when it was an agent node. */
+  agentName: string | null;
+  /** `inputJson.agentId` / `inputJson.pool` stamps of a pool attempt, if any. */
+  agentId: string | null;
+  pool: unknown;
   startedAt: Date | null;
   finishedAt: Date | null;
   originalStepId: string;
@@ -912,7 +1356,7 @@ interface ReusedStep {
 }
 
 interface PreloadedRun {
-  outputs: Map<string, string | undefined>;
+  outputs: Map<string, NodeOutput>;
   reused: ReusedStep[];
 }
 
@@ -941,7 +1385,10 @@ interface PreloadedRun {
  *     and only a redelivery collides.
  *   - issue_comment: the comment id + action (covers the `@opencara fix`
  *     review-fix path). A comment is created once; only a redelivery repeats
- *     (id, created).
+ *     (id, created). GitHub comment ids are globally unique; Azure DevOps ones
+ *     are per-thread ordinals, so those are keyed on (thread id, comment id) —
+ *     see the `thread_id` branch below for why getting this wrong is
+ *     unrecoverable rather than merely noisy.
  * Other event types return null and keep today's GUID-only behavior — they're
  * either cheap mirror upkeep (projects_v2_item) or lack a single stable id, and
  * over-deduping legitimately-distinct events there would be worse than the
@@ -959,7 +1406,7 @@ export function computeEventDedupeKey(event: PlatformEventInput): string | null 
     action?: unknown;
     pull_request?: { number?: unknown; head?: { sha?: unknown } };
     review?: { id?: unknown };
-    comment?: { id?: unknown };
+    comment?: { id?: unknown; thread_id?: unknown };
   };
   const action = typeof payload.action === "string" ? payload.action : "";
 
@@ -979,13 +1426,73 @@ export function computeEventDedupeKey(event: PlatformEventInput): string | null 
       return `pull_request_review:${id}:${action}`;
     }
     case "issue_comment": {
-      const id = payload.comment?.id;
+      const comment = payload.comment;
+      const id = comment?.id;
       if (typeof id !== "number") return null;
+      // A comment id is only an identity on platforms that number comments
+      // globally. Azure DevOps numbers them WITHIN their thread, so the first
+      // comment of every new thread is id 1 — and because this key feeds a
+      // unique index with no time bound, the first such comment to arrive
+      // claims `issue_comment:1:created` and permanently mutes every later
+      // one. That is exactly what happened: `@opencara review` stopped
+      // starting flows entirely, with no run row to show for it.
+      // `thread_id` is set by normalizeAzureEvent and absent on GitHub, so
+      // its presence — not the platform — selects the scoped key.
+      if (comment && "thread_id" in comment) {
+        const thread = comment.thread_id;
+        // Azure comment whose thread we couldn't determine: no identity, so
+        // fall back to GUID-only dedup. Over-deduping here is unrecoverable
+        // (a burned key never expires); under-deduping costs one extra run.
+        if (typeof thread !== "number") return null;
+        // Thread ids are repository-scoped and dedupe keys are already scoped
+        // per flow, so (thread, id) is unique everywhere this is compared.
+        return `issue_comment:${thread}:${id}:${action}`;
+      }
       return `issue_comment:${id}:${action}`;
     }
     default:
       return null;
   }
+}
+
+/**
+ * The payload a stored delivery must be replayed with.
+ *
+ * `platform_events.payload` is not uniformly the shape the engine consumes.
+ * The GitHub handler inserts and dispatches the same object, so replaying its
+ * row is faithful. The Azure DevOps handler deliberately stores the RAW
+ * service hook body for forensics and dispatches `normalizeAzureEvent`'s
+ * GitHub-shaped translation instead — so replaying an Azure row verbatim hands
+ * the engine a body with no `action`, no `pull_request`, no `comment`. Every
+ * trigger then skips with "action '' not in trigger filter" and Restart Flow
+ * appears to do nothing, on a run that worked the first time.
+ *
+ * Re-normalizing here (rather than storing the normalized payload) keeps the
+ * raw body authoritative on disk and needs no backfill, so runs recorded before
+ * this fix replay correctly too.
+ *
+ * NOT re-applied: `refinePullRequestAction`'s metadata-only demotion. It
+ * compares against the PR's *previous* delivery, and at replay time that
+ * neighbour is no longer the one it was at ingest — re-running it could demote
+ * a legitimate rerun to `edited` and reproduce the very silence this fixes. A
+ * rerun is explicitly user-initiated, so failing open (the review runs) is the
+ * right side to err on.
+ *
+ * Falls back to the stored payload whenever normalization can't produce one;
+ * that is no worse than today's behaviour.
+ */
+export function replayPayload(
+  platform: string,
+  type: string,
+  stored: unknown,
+): unknown {
+  if (platform !== "azure_devops") return stored;
+  const normalized = normalizeAzureEvent(stored);
+  if (!normalized) {
+    console.warn("[flow-engine] azure replay could not be normalized", { type });
+    return stored;
+  }
+  return normalized.payload;
 }
 
 function parseFlowDefinition(row: {
@@ -1010,6 +1517,27 @@ function parseFlowDefinition(row: {
     console.error("[flow-engine] invalid flow graph", { slug: row.slug, err });
     return null;
   }
+}
+
+/**
+ * `agentName` off a persisted step's inputJson (written by agentRunner before
+ * dispatch). Null for non-agent steps and for rows written before the field
+ * existed.
+ */
+function readField(inputJson: unknown, key: string): unknown {
+  if (!inputJson || typeof inputJson !== "object") return undefined;
+  return (inputJson as Record<string, unknown>)[key];
+}
+
+function readStringField(inputJson: unknown, key: string): string | null {
+  const v = readField(inputJson, key);
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function readAgentName(inputJson: unknown): string | null {
+  if (!inputJson || typeof inputJson !== "object") return null;
+  const name = (inputJson as { agentName?: unknown }).agentName;
+  return typeof name === "string" && name.length > 0 ? name : null;
 }
 
 function truncate(s: string, n: number): string {
@@ -1053,6 +1581,24 @@ export interface TriggerOutcome {
 }
 
 /**
+ * Should a flow run's lifecycle transitions wake project boards (the kanban
+ * `flow_runs` LISTENers)? Only runs that actually started are board-relevant:
+ * a trigger matched, or the run belongs to a defensive no-trigger flow that
+ * executes every node. A pure `trigger_skip` run — dispatched then rejected by
+ * every trigger — must never notify, otherwise every unrelated webhook
+ * (issue_comment, push, pull_request, a status move to an unwatched column…)
+ * rebuilds every open board and starves the DB pool. This is the seam that the
+ * 2026-06-24 auth-503 incident traced back to, extracted so the rule is
+ * unit-tested without standing up the DB-backed engine.
+ */
+export function runNotifiesBoard(opts: {
+  hasTriggers: boolean;
+  matchedTriggerCount: number;
+}): boolean {
+  return !opts.hasTriggers || opts.matchedTriggerCount > 0;
+}
+
+/**
  * Pick which trigger nodes to evaluate for a run.
  * - Drops triggers already satisfied this run (rerun-from-failed preload).
  * - Manual runs tied to an issue (kanban dispatch, `hasIssueContext`) are
@@ -1072,7 +1618,7 @@ export function selectTriggersToEvaluate(
 ): FlowNode[] {
   let toEval = triggers.filter((t) => !opts.isAlreadyMatched(t.id));
   if (opts.eventType === "manual" && opts.hasIssueContext) {
-    toEval = toEval.filter((t) => t.kind === "github.projects_v2_item");
+    toEval = toEval.filter((t) => t.kind === "scm.board_item");
   }
   return toEval;
 }
@@ -1187,25 +1733,125 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 }
 
 /**
+ * Display name per node id, used as the `## From <heading>` section title when
+ * a node's output is pasted into a downstream agent (see buildFanInInput).
+ *
+ * An agent node is named by the AGENT that runs it, not by a per-node rename:
+ * a fan-out of "Reviewer 1 / Reviewer 2 / Reviewer 3" tells the synthesizer
+ * (and the operator reading the graph) nothing about what actually produced
+ * each section, while the agent's name does. So a linked agent's name wins
+ * over `flow_node_settings.label`; the stored label only survives on nodes
+ * with no agent linked (legacy renames, non-agent nodes). Nodes with neither
+ * fall through to their raw id in buildFanInInput.
+ *
+ * The link is the flow-node default. Runtime agent resolution can override it
+ * (an `agent:<name>` label on the issue/PR, or the project default implement
+ * agent — see agentRunner), so the engine re-stamps the label with the agent
+ * that actually ran once the step completes.
+ *
+ * Exported for unit tests.
+ */
+export function buildNodeLabels(
+  nodes: readonly { id: string; kind: string }[],
+  settings: readonly { nodeId: string; label: string | null; agentId: string | null }[],
+  agentNamesById: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const kindByNodeId = new Map(nodes.map((n) => [n.id, n.kind]));
+  const labels = new Map<string, string>();
+  for (const s of settings) {
+    const agentName =
+      kindByNodeId.get(s.nodeId) === "agent" && s.agentId
+        ? agentNamesById.get(s.agentId)
+        : undefined;
+    const label = agentName ?? s.label;
+    if (label) labels.set(s.nodeId, label);
+  }
+  return labels;
+}
+
+/**
+ * Name of the agent whose output feeds `node`, when there is exactly one such
+ * upstream. `scm.post_review` stamps it on the published review so a PR with
+ * several reviewer flows still says which agent wrote which review. Undefined
+ * for fan-in (a synthesizer agent sits between the reviewers and the post) and
+ * for non-agent upstreams.
+ *
+ * Exported for unit tests.
+ */
+export function upstreamAgentName(
+  node: FlowNode,
+  def: Pick<FlowDefinition, "nodes" | "edges">,
+  outputs: Map<string, NodeOutput>,
+  labels: Map<string, string>,
+): string | undefined {
+  const incoming = def.edges.filter((e) => e.target === node.id);
+  if (incoming.length !== 1) return undefined;
+  const source = incoming[0]!.source;
+  if (def.nodes.find((n) => n.id === source)?.kind !== "agent") return undefined;
+  const out = outputs.get(source);
+  if (Array.isArray(out)) return out.length === 1 ? out[0]!.agentName : undefined;
+  return labels.get(source);
+}
+
+/**
  * Compose a node's previousOutput from its upstream nodes' captured stdout.
  * - 0 incoming: undefined (e.g. trigger nodes)
- * - 1 incoming: that node's output verbatim — preserves the linear chain that
- *   single-agent flows expect
+ * - 1 incoming into an action node: that node's output verbatim — post_review
+ *   and add_comment publish the body as-is, so a section header would leak
+ *   into the posted review and unseat the verdict line
+ * - 1 incoming into an agent node: labeled section. An unlabeled pasted
+ *   review reads as the agent's own completed work and produces "I've
+ *   completed my review" stub replies (ParadiseGodot#25 review 4618560289)
  * - 2+ incoming: markdown sections so a synthesizer agent can parse them
+ *
+ * Exported for unit tests.
  */
-function buildFanInInput(
+export function buildFanInInput(
   node: FlowNode,
   edges: FlowDefinition["edges"],
-  outputs: Map<string, string | undefined>,
+  outputs: Map<string, NodeOutput>,
   labels: Map<string, string>,
 ): string | undefined {
   const incoming = edges.filter((e) => e.target === node.id);
   if (incoming.length === 0) return undefined;
-  if (incoming.length === 1) return outputs.get(incoming[0]!.source);
-  return incoming
-    .map((e) => {
-      const heading = labels.get(e.source) ?? e.source;
-      return `## From ${heading}\n\n${outputs.get(e.source) ?? ""}`;
+  if (incoming.length === 1 && !Array.isArray(outputs.get(incoming[0]!.source))) {
+    const output = outputs.get(incoming[0]!.source) as string | undefined;
+    // Empty/absent upstream (trigger sources) must stay undefined so the
+    // agent runner's "(no upstream output)" sentinel still fires.
+    if (node.kind !== "agent" || !output?.trim()) return output;
+    const heading = labels.get(incoming[0]!.source) ?? incoming[0]!.source;
+    return `## From ${heading}\n\n${output}`;
+  }
+  // One section per upstream contribution. A pool node that finished with
+  // several successful attempts contributes one section PER AGENT (its
+  // parts carry the agent names); every other upstream contributes one
+  // section under its node label.
+  const sections: Array<{ heading: string; suffix: string; text: string }> = [];
+  for (const e of incoming) {
+    const out = outputs.get(e.source);
+    if (Array.isArray(out)) {
+      for (const part of out) {
+        sections.push({ heading: part.agentName, suffix: e.source, text: part.text });
+      }
+    } else {
+      sections.push({
+        heading: labels.get(e.source) ?? e.source,
+        suffix: e.source,
+        text: out ?? "",
+      });
+    }
+  }
+  // Now that agent nodes are named by their agent (buildNodeLabels), two
+  // siblings can legitimately resolve to the SAME heading — one agent wired
+  // into two reviewer nodes with different prompts. Suffix the node id on the
+  // collisions only, so the synthesizer can still tell the sections apart
+  // without the common case getting noisier.
+  const seen = new Map<string, number>();
+  for (const sct of sections) seen.set(sct.heading, (seen.get(sct.heading) ?? 0) + 1);
+  return sections
+    .map((sct) => {
+      const heading = seen.get(sct.heading)! > 1 ? `${sct.heading} (${sct.suffix})` : sct.heading;
+      return `## From ${heading}\n\n${sct.text}`;
     })
     .join("\n\n---\n\n");
 }

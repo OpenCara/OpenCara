@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
-import { flowNodeSettings, flowRuns, flows } from "../../db/schema.js";
+import { flowRuns, flows } from "../../db/schema.js";
+import { loadEffectiveNodeSettings } from "../nodeSettings.js";
 import type { PageSkillBuilder } from "../skills.js";
 
 /**
@@ -25,10 +26,7 @@ export const projectFlowDetailBuilder: PageSkillBuilder = async (ctx) => {
       orderBy: [desc(flowRuns.createdAt)],
       limit: 10,
     }),
-    ctx.db
-      .select()
-      .from(flowNodeSettings)
-      .where(eq(flowNodeSettings.flowId, flow.id)),
+    loadEffectiveNodeSettings(ctx.db, flow.id),
   ]);
 
   const baseUrl = ctx.baseUrl.replace(/\/$/, "");
@@ -65,14 +63,17 @@ here does nothing).
 
 ## Out of scope
 
-Adding/removing nodes, adding reviewers, deleting reviewers, toggling
-\`enabled\` — those still go through the UI. The only mutation available
+Adding/removing nodes, editing a node's agent pool (the ordered agent
+list, parallelism, retries) or prompt link, toggling \`enabled\` — those
+still go through the UI. The only mutation available
 from this skill is \`opencara_flow_node_config_set\`.
 
 ## Hydrated stdin keys
 
 - \`flow\` — the flow row (id, slug, name, enabled, graphJson, customizedAt).
-- \`nodeSettings\` — per-node label/agent/prompt links currently configured.
+- \`nodeSettings\` — effective per-node agent pool / prompt / label per node;
+  \`source\` says whether the row is a project override or inherited from the
+  user's account-scope template.
 - \`recentRuns\` — the last 10 runs of this flow.
 `;
 

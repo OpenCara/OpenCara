@@ -2,9 +2,8 @@ name: ci
 
 # Required status check for PRs to OpenCara/OpenCara — the repo's
 # branch-protection rule wants a check literally named `ci` to land
-# before main moves. Keep this minimal (typecheck + build) so PRs
-# don't sit in queue for ages; deeper validation (lint, unit tests)
-# can layer on as separate jobs later if needed.
+# before main moves. Typecheck + tests + build; the test suite is
+# node:test with no external infra, so it adds ~15s, not minutes.
 
 on:
   push:
@@ -38,6 +37,11 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Test
+        # node:test via tsx — no DB or other infra required. Packages
+        # without a `test` script (web, flows, shared) are skipped.
+        run: pnpm -r test
 
       - name: Build
         # Builds every workspace (orchestrator, web, cli, shared,

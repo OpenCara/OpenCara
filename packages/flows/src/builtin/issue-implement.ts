@@ -1,14 +1,23 @@
 import type { FlowDefinition } from "../types.js";
 
+// Stage 1 of the development cycle: a Projects v2 issue moving to Ready
+// dispatches the implement agent in a per-issue-branch worktree. The agent
+// commits, pushes and opens the PR; the PR-opened webhook then wakes the
+// `pr-review-multi` flow. Node ids are shared with the (now legacy) unified
+// `development-lifecycle` graph so account-scope settings carry over 1:1.
+//
+// The fix stage (`pr-review-fix`) resolves the SAME per-(repo, branch)
+// worktree — the PR's head ref is `opencara/issue-<n>` — so it reuses this
+// checkout and resumes the implementer's conversation.
 export const issueImplementFlow: FlowDefinition = {
   slug: "issue-implement",
   name: "Issue → Implement",
   description:
-    "When a Projects v2 issue moves to Ready, dispatch the implement agent inside a per-PR-branch worktree. The agent reads the issue (title/body/labels/assignees on stdin) and is expected to: make changes, commit, push the branch, and run `gh pr create` to open the PR itself. Enable Create draft PR to have the agent open a draft first and the engine mark it ready after a successful run. The worktree persists across flow runs (so `pr-review-fix` reuses it) and is removed on `pull_request.closed`. Add an `agent:<name>` label to the issue (e.g. `agent:claude-impl`) to pick a specific agent per-issue; without that label, the agent linked on this node runs as the default.",
+    "A Projects v2 issue moving to Ready dispatches the implement agent in a per-issue-branch worktree; it commits, pushes, and opens the PR. Label the issue `agent:<name>` to pick a specific agent per item. Configure the agent pool (primary, fallbacks, retries) on the node.",
   nodes: [
     {
-      id: "t1",
-      kind: "github.projects_v2_item",
+      id: "implement_trigger",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -19,7 +28,7 @@ export const issueImplementFlow: FlowDefinition = {
       },
     },
     {
-      id: "a1",
+      id: "implement",
       kind: "agent",
       position: { x: 320, y: 0 },
       config: {
@@ -46,5 +55,5 @@ export const issueImplementFlow: FlowDefinition = {
       },
     },
   ],
-  edges: [{ id: "e1", source: "t1", target: "a1" }],
+  edges: [{ id: "e_impl", source: "implement_trigger", target: "implement" }],
 };

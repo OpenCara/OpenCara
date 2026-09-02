@@ -45,6 +45,9 @@ const DevicesPage = lazy(() =>
 const PromptsPage = lazy(() =>
   import("@/pages/PromptsPage").then((m) => ({ default: m.PromptsPage })),
 );
+const SettingsPage = lazy(() =>
+  import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 const AgentsPage = lazy(() =>
   import("@/pages/AgentsPage").then((m) => ({ default: m.AgentsPage })),
 );
@@ -96,6 +99,7 @@ export function App() {
           <Route path="flows" element={<FlowTemplatesPage />} />
           <Route path="flows/:slug" element={<FlowTemplateDetailPage />} />
           <Route path="prompts" element={<PromptsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

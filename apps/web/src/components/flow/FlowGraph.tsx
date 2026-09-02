@@ -39,33 +39,22 @@ export interface FlowGraphEdge {
 }
 
 /**
- * Enables in-canvas reviewer management on an editable flow. Omitted on the
- * read-only run view, so its delete buttons / add-reviewer node never render
- * there.
+ * Per-node display override. Agent nodes use it to show their prompt name as
+ * the title and their pool agents (priority order) as the rows beneath — see
+ * `buildFlowNodeDisplays`.
  */
-export interface FlowReviewerControls {
-  /** Node ids that are reviewers (from deriveReviewerIds). */
-  reviewerIds: Set<string>;
-  /** False when only one reviewer remains — hides the delete buttons. */
-  canDelete: boolean;
-  /** A reviewer add/remove mutation is in flight. */
-  pending: boolean;
-  onAdd: () => void;
-  onDelete: (nodeId: string) => void;
+export interface FlowNodeDisplay {
+  label?: string;
+  lines?: string[];
 }
-
-/** Synthetic node id for the "+ Add reviewer" affordance (not a real graph node). */
-export const ADD_REVIEWER_NODE_ID = "__add_reviewer__";
 
 interface FlowGraphProps {
   nodes: FlowGraphNode[];
   edges: FlowGraphEdge[];
   /** Map node id → step status (for run-coloured graph). Optional. */
   stepStatuses?: Record<string, StepStatus>;
-  /** Map node id → custom display label (rename). Optional. */
-  labelOverrides?: Record<string, string>;
-  /** When set, renders per-reviewer delete buttons + an add-reviewer node. */
-  reviewerControls?: FlowReviewerControls;
+  /** Map node id → display override, built by `buildFlowNodeDisplays`. Optional. */
+  nodeDisplays?: Record<string, FlowNodeDisplay>;
   onNodeClick?: (nodeId: string) => void;
 }
 
@@ -73,43 +62,13 @@ export function FlowGraph({
   nodes,
   edges,
   stepStatuses,
-  labelOverrides,
-  reviewerControls,
+  nodeDisplays,
   onNodeClick,
 }: FlowGraphProps) {
-  const rfNodes = useMemo<Node[]>(() => {
-    const mapped = nodes.map((n) => mapNode(n, stepStatuses, labelOverrides, reviewerControls));
-    const rc = reviewerControls;
-    if (rc && rc.reviewerIds.size > 0) {
-      const reviewers = nodes.filter((n) => rc.reviewerIds.has(n.id));
-      if (reviewers.length > 0) {
-        const maxY = Math.max(...reviewers.map((n) => n.position.y));
-        const firstReviewer = reviewers[0]!;
-        // The multi trigger is the PR node that actually feeds a reviewer (not
-        // any pull_request node — development-lifecycle has a second one for
-        // its single-review component).
-        const trigger = nodes.find(
-          (n) =>
-            n.kind === "github.pull_request" &&
-            edges.some((e) => e.source === n.id && rc.reviewerIds.has(e.target)),
-        );
-        // Sit just to the RIGHT of the "Pull request" trigger node, at its
-        // vertical level (x ≈ 64px left of the reviewer column); fall back to
-        // under the last reviewer if no feeding trigger is found.
-        const position = trigger
-          ? { x: firstReviewer.position.x - 64, y: trigger.position.y }
-          : { x: firstReviewer.position.x, y: maxY + 160 };
-        mapped.push({
-          id: ADD_REVIEWER_NODE_ID,
-          type: "addReviewer",
-          position,
-          selectable: false,
-          data: { label: "Add reviewer", pending: rc.pending, onAddReviewer: rc.onAdd },
-        });
-      }
-    }
-    return mapped;
-  }, [nodes, edges, stepStatuses, labelOverrides, reviewerControls]);
+  const rfNodes = useMemo<Node[]>(
+    () => nodes.map((n) => mapNode(n, stepStatuses, nodeDisplays)),
+    [nodes, stepStatuses, nodeDisplays],
+  );
   const rfEdges = useMemo<Edge[]>(
     () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false })),
     [edges],
@@ -140,48 +99,45 @@ export function FlowGraph({
 function mapNode(
   n: FlowGraphNode,
   statuses?: Record<string, StepStatus>,
-  overrides?: Record<string, string>,
-  reviewerControls?: FlowReviewerControls,
+  displays?: Record<string, FlowNodeDisplay>,
 ): Node {
   const type = nodeTypeFor(n.kind);
-  const label = overrides?.[n.id] ?? pickLabel(n);
-  const subtitle = pickSubtitle(n);
+  const display = displays?.[n.id];
+  const label = display?.label ?? pickLabel(n);
+  const lines = display?.lines;
+  // An agent node with a pool display reads "prompt / agent / agent…"; the
+  // branch-template subtitle would only crowd that, so it yields.
+  const subtitle = lines && lines.length > 0 ? undefined : pickSubtitle(n);
   const status = statuses?.[n.id] ?? "idle";
-  const data: Record<string, unknown> = { label, subtitle, status };
-  if (reviewerControls?.reviewerIds.has(n.id)) {
-    data.isReviewer = true;
-    data.canDelete = reviewerControls.canDelete;
-    data.pending = reviewerControls.pending;
-    data.onDeleteReviewer = reviewerControls.onDelete;
-  }
+  const data: Record<string, unknown> = { label, subtitle, lines, status };
   return { id: n.id, type, position: n.position, data };
 }
 
 function nodeTypeFor(kind: string): string {
   if (kind === "agent") return "agent";
-  if (kind === "github.post_review") return "postReview";
-  if (kind === "github.add_comment") return "addComment";
-  if (kind === "github.add_label") return "addLabel";
+  if (kind === "scm.post_review") return "postReview";
+  if (kind === "scm.add_comment") return "addComment";
+  if (kind === "scm.add_label") return "addLabel";
   return "trigger";
 }
 
 function pickLabel(n: FlowGraphNode): string {
   switch (n.kind) {
-    case "github.pull_request":
+    case "scm.pull_request":
       return "Pull request";
-    case "github.pull_request_review":
+    case "scm.pull_request_review":
       return "PR review submitted";
-    case "github.projects_v2_item":
+    case "scm.board_item":
       return "Project status change";
     case "schedule.cron":
       return n.config?.name ?? "Schedule";
     case "agent":
       return n.config?.label ?? "Agent";
-    case "github.post_review":
+    case "scm.post_review":
       return "Post PR review";
-    case "github.add_comment":
+    case "scm.add_comment":
       return "Add comment";
-    case "github.add_label":
+    case "scm.add_label":
       return "Add label";
     default:
       return n.kind;
@@ -190,11 +146,11 @@ function pickLabel(n: FlowGraphNode): string {
 
 function pickSubtitle(n: FlowGraphNode): string | undefined {
   switch (n.kind) {
-    case "github.pull_request":
+    case "scm.pull_request":
       return "trigger";
-    case "github.pull_request_review":
+    case "scm.pull_request_review":
       return "trigger";
-    case "github.projects_v2_item": {
+    case "scm.board_item": {
       // Compose `Status: Backlog → Ready` from from/to options. * for empty.
       const field = n.config?.fieldName ?? "Status";
       const fromList = n.config?.fromOptions ?? [];
@@ -213,9 +169,9 @@ function pickSubtitle(n: FlowGraphNode): string | undefined {
       // template instead of the (rarely-set) spec.command — the
       // branch is the more useful at-a-glance summary.
       return n.config?.worktree?.branchName ?? n.config?.spec?.command ?? undefined;
-    case "github.post_review":
+    case "scm.post_review":
       return n.config?.event;
-    case "github.add_label":
+    case "scm.add_label":
       return n.config?.labels?.join(", ");
     default:
       return undefined;

@@ -13,7 +13,7 @@ const twoTriggerFlow: FlowDefinition = {
   nodes: [
     {
       id: "tA",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -35,7 +35,7 @@ const twoTriggerFlow: FlowDefinition = {
     },
     {
       id: "tB",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 200 },
       config: {
         actions: ["opened"],
@@ -46,6 +46,7 @@ const twoTriggerFlow: FlowDefinition = {
         labels: [],
         labelsIgnore: [],
         ignoreDrafts: false,
+        delaySeconds: 0,
         commentPhrase: "",
       },
     },
@@ -100,14 +101,7 @@ describe("computeActiveSubgraph on the unified development-lifecycle flow", () =
     const active = computeActiveSubgraph(developmentLifecycleFlow, ["review_trigger"]);
     assert.deepEqual(
       [...active].sort(),
-      [
-        "post_review",
-        "review_synthesizer",
-        "review_trigger",
-        "reviewer_correctness",
-        "reviewer_performance",
-        "reviewer_style",
-      ],
+      ["post_review", "review_synthesizer", "review_trigger", "reviewer"],
     );
   });
 

@@ -1,7 +1,24 @@
 export class ApiError extends Error {
-  constructor(public status: number, public body: unknown) {
+  constructor(
+    public status: number,
+    public body: unknown,
+    // Parsed from the response's Retry-After header (ms), when present. The
+    // orchestrator sets it on the 503 it returns when a session lookup races
+    // past its deadline under DB pool pressure, so the client can back off for
+    // the server-suggested interval instead of guessing.
+    public retryAfterMs?: number,
+  ) {
     super(`API ${status}`);
   }
+}
+
+// Retry-After is seconds (the orchestrator sends a small integer). Returns
+// undefined for a missing/non-numeric header so callers fall back to backoff.
+function parseRetryAfterMs(res: Response): number | undefined {
+  const raw = res.headers.get("Retry-After");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : undefined;
 }
 
 async function request<T>(
@@ -22,7 +39,7 @@ async function request<T>(
   });
   const text = await res.text();
   const parsed = text ? safeJson(text) : undefined;
-  if (!res.ok) throw new ApiError(res.status, parsed ?? text);
+  if (!res.ok) throw new ApiError(res.status, parsed ?? text, parseRetryAfterMs(res));
   return parsed as T;
 }
 

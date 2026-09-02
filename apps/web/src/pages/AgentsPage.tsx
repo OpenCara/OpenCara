@@ -98,6 +98,24 @@ const KIND_HINTS: Record<
     argsHint:
       "Pass --provider X --model Y here. Adapter passes --mode json / --offline / --no-context-files.",
   },
+  omp: {
+    label: "omp (Oh My Pi)",
+    defaultCommand: "omp",
+    envHint:
+      "Authenticates from ~/.omp on the device (`omp auth`); provider keys set here are the fallback. The device also needs `bun` on PATH.",
+    argsPlaceholder: "--model volcengine-ark/kimi-k3",
+    argsHint:
+      "Model ids are provider-qualified — run `omp models` on the device for the list. Adapter passes the `acp` subcommand.",
+  },
+  cursor: {
+    label: "Cursor CLI",
+    defaultCommand: "cursor-agent",
+    envHint:
+      "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY here. The binary must already be installed on the device.",
+    argsPlaceholder: "--model grok-4.6[effort=high,fast=true]",
+    argsHint:
+      "Cursor's ACP model ids are parameterized and strictly validated; a rejected name is logged with the accepted list and the run falls back to Cursor's default.",
+  },
   custom: {
     label: "Custom (no resume)",
     defaultCommand: null,
@@ -107,10 +125,25 @@ const KIND_HINTS: Record<
   },
 };
 
+// Adapters that actually stream a reasoning channel (`agent_thought_chunk`).
+// Advisory only — "Capture agent thinking" is stored per agent whatever the
+// kind, so switching a quiet agent to a reasoning kind later needs no
+// migration. claude-acp and codex-acp emit no thoughts, so the switch is a
+// no-op for them.
+const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor"]);
+
 const COMMAND_OVERRIDE_HINT =
   "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
-const KIND_ORDER: AgentKind[] = ["claude", "codex", "opencode", "pi", "custom"];
+const KIND_ORDER: AgentKind[] = [
+  "claude",
+  "codex",
+  "opencode",
+  "pi",
+  "omp",
+  "cursor",
+  "custom",
+];
 
 interface KindPickerProps {
   value: AgentKind;
@@ -413,15 +446,18 @@ function AgentCard({ agent }: { agent: AgentRow }) {
         ? ""
         : agent.command,
   );
-  // Operator extras for named kinds (named-kind args column). Hidden
-  // for custom — extras are part of the Command field there.
-  const [extraArgs, setExtraArgs] = useState(
-    agent.kind === "custom" ? "" : agent.args.join(" "),
+  // Named kinds: the full editable ACP adapter args, pre-filled with the
+  // current override (`acpArgs`) or the kind default (`defaultAcpArgs`, which
+  // already includes the per-kind model translation). The command stays fixed
+  // by kind. custom keeps the Command field instead.
+  const [acpArgsText, setAcpArgsText] = useState(
+    agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
   );
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
   const [hostId, setHostId] = useState<string>(agent.hostId ?? ANY_DEVICE);
+  const [captureThinking, setCaptureThinking] = useState(agent.captureThinking);
   const devicesQ = useQuery(devicesQuery());
   const update = useUpdateAgent();
   const remove = useDeleteAgent();
@@ -436,9 +472,12 @@ function AgentCard({ agent }: { agent: AgentRow }) {
           ? ""
           : agent.command,
     );
-    setExtraArgs(agent.kind === "custom" ? "" : agent.args.join(" "));
+    setAcpArgsText(
+      agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
+    );
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
+    setCaptureThinking(agent.captureThinking);
   };
 
   return (
@@ -480,24 +519,30 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                   disabled={update.isPending}
                   onClick={() => {
                     const isCustom = kind === "custom";
+                    // Named kinds: the command is fixed by kind; the user owns
+                    // the adapter args. Saving the unchanged default (or empty)
+                    // sends null so the kind default + auto model-translation
+                    // keep applying; anything else is a verbatim override.
+                    const trimmedAcp = acpArgsText.trim();
+                    const acpArgs =
+                      trimmedAcp === "" ||
+                      trimmedAcp === agent.defaultAcpArgs.join(" ")
+                        ? null
+                        : trimmedAcp;
                     update.mutate(
                       {
                         id: agent.id,
                         patch: {
                           name: name.trim(),
                           kind,
-                          // For kind=custom: command field is the full
-                          // invocation (server tokenizes into command+args).
-                          // For named kinds: command is the optional binary
-                          // override (empty = adapter default), and
-                          // extraArgs goes into agents.args.
+                          // custom: Command field is the full invocation
+                          // (server tokenizes). Named: command is kind-fixed;
+                          // persist the adapter-args override instead.
                           ...(isCustom
-                            ? ({ command: command.trim() } as Record<string, string>)
-                            : ({
-                                command: command.trim(),
-                                extraArgs: extraArgs.trim(),
-                              } as Record<string, string>)),
+                            ? { command: command.trim() }
+                            : { acpArgs }),
                           env: parseEnv(envText),
+                          captureThinking,
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
@@ -556,43 +601,64 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               <KindPicker
                 value={kind}
                 onChange={(next) => {
-                  // Switching kind clears both fields — content shaped
+                  // Switching kind clears the args fields — content shaped
                   // for a different CLI almost never carries over.
                   if (next !== kind) {
                     setCommand("");
-                    setExtraArgs("");
+                    setAcpArgsText("");
                   }
                   setKind(next);
                 }}
               />
             </div>
-            <div>
-              <Label>Command</Label>
-              <Input
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder={
-                  kind === "custom"
-                    ? KIND_HINTS.custom.argsPlaceholder
-                    : KIND_HINTS[kind].defaultCommand ?? ""
-                }
-                className="font-mono text-xs"
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                {kind === "custom" ? KIND_HINTS.custom.argsHint : COMMAND_OVERRIDE_HINT}
-              </p>
-            </div>
-            {kind !== "custom" && (
+            {kind === "custom" ? (
               <div>
-                <Label>Extra args</Label>
+                <Label>Command</Label>
                 <Input
-                  value={extraArgs}
-                  onChange={(e) => setExtraArgs(e.target.value)}
-                  placeholder={KIND_HINTS[kind].argsPlaceholder}
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder={KIND_HINTS.custom.argsPlaceholder}
                   className="font-mono text-xs"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {KIND_HINTS[kind].argsHint}
+                  {KIND_HINTS.custom.argsHint}
+                </p>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor={`agent-acp-args-${agent.id}`}>Adapter args</Label>
+                  {acpArgsText.trim() !== agent.defaultAcpArgs.join(" ") && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => setAcpArgsText(agent.defaultAcpArgs.join(" "))}
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    $ {agent.acpCommand}
+                  </span>
+                  <Input
+                    id={`agent-acp-args-${agent.id}`}
+                    value={acpArgsText}
+                    onChange={(e) => setAcpArgsText(e.target.value)}
+                    placeholder={agent.defaultAcpArgs.join(" ")}
+                    className="font-mono text-xs"
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The command is fixed by kind. Edit the adapter args to fix
+                  adapter-specific quirks — e.g. codex needs{" "}
+                  <code>-c model=&quot;…&quot;</code> (not <code>--model</code>),
+                  and opencode&apos;s <code>acp</code> takes no model flag. Matches
+                  the default ⇒ no override (auto-handling stays on). A{" "}
+                  <code>--model</code> here always wins over the one in Extra
+                  args; for cursor it is selected over ACP only and never
+                  reaches <code>cursor-agent</code>&apos;s own flag.
                 </p>
               </div>
             )}
@@ -605,12 +671,47 @@ function AgentCard({ agent }: { agent: AgentRow }) {
               />
               <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].envHint}</p>
             </div>
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={captureThinking}
+                  onChange={(e) => setCaptureThinking(e.target.checked)}
+                  className="size-4 rounded border-input"
+                />
+                <span>Capture agent thinking</span>
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {THINKING_KINDS.has(kind) ? (
+                  <>
+                    Off means the device discards this agent&apos;s reasoning as it
+                    streams — nothing is stored, so there is no{" "}
+                    <code>[think]</code> block in the run logs and no way to get it
+                    back for a past run. Useful when the reasoning dwarfs the
+                    output.
+                  </>
+                ) : (
+                  <>
+                    No effect for <code>{kind}</code> — its adapter emits no
+                    reasoning stream. Applies to{" "}
+                    {[...THINKING_KINDS].join(", ")}.
+                  </>
+                )}
+              </p>
+            </div>
           </>
         ) : (
           <pre className="whitespace-pre-wrap rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
             {[
-              `[${KIND_HINTS[agent.kind].label}]`,
-              `$ ${agent.command}${agent.args.length ? " " : ""}${agent.args.join(" ")}`,
+              `[${KIND_HINTS[agent.kind].label}]${
+                agent.acpArgs ? " · custom args" : ""
+              }`,
+              // The effective ACP invocation: fixed command + the override or
+              // the kind default (incl. model translation).
+              (() => {
+                const effArgs = agent.acpArgs ?? agent.defaultAcpArgs;
+                return `$ ${agent.acpCommand}${effArgs.length ? " " : ""}${effArgs.join(" ")}`;
+              })(),
             ]
               .concat(
                 Object.entries(agent.env).length > 0

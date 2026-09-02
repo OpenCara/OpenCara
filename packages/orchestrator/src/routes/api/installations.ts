@@ -161,8 +161,11 @@ export function installationRoutes(deps: InstallationRoutesDeps) {
     const newId = ulid();
     await deps.db.insert(projects).values({
       id: newId,
+      platform: "github",
       installationId: id,
       githubRepoId: repo.id,
+      externalRepoId: String(repo.id),
+      webUrl: `https://github.com/${repo.owner}/${repo.name}`,
       owner: repo.owner,
       name: repo.name,
       defaultBranch: repo.defaultBranch,

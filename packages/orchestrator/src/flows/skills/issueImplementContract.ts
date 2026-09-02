@@ -18,21 +18,41 @@ export function buildIssueImplementContractSkill(opts: {
   issueNumber: number;
   defaultBranch: string;
   draftPr: boolean;
+  /** Defaults to github so existing callers keep the exact prompt they had. */
+  platform?: "github" | "azure_devops";
 }): SkillEnvelope {
   const baseUrl = opts.baseUrl.replace(/\/$/, "");
-  const prCreateCmd = opts.draftPr
-    ? `gh pr create --draft --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`
-    : `gh pr create --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`;
+  const isAzure = opts.platform === "azure_devops";
+  // `gh` cannot talk to Azure DevOps at all, and no Azure DevOps token is
+  // exposed as GH_TOKEN (that would make gh authenticate against github.com and
+  // fail confusingly). Agents on Azure DevOps use `az repos pr`, which reads
+  // AZURE_DEVOPS_EXT_PAT — injected by the same code that injects GH_TOKEN on
+  // the GitHub path.
+  const prCreateCmd = isAzure
+    ? `az repos pr create --repository "$OPENCARA_REPO_NAME" --source-branch "$OPENCARA_WORKTREE_BRANCH" --target-branch "${opts.defaultBranch}" --title "<title>" --description "<body>"${
+        opts.draftPr ? " --draft true" : ""
+      } --organization "https://dev.azure.com/$OPENCARA_AZDO_ORG" --project "$OPENCARA_AZDO_PROJECT"`
+    : opts.draftPr
+      ? `gh pr create --draft --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`
+      : `gh pr create --base "${opts.defaultBranch}" --head "$OPENCARA_WORKTREE_BRANCH" --title "<title>" --body "<body>"`;
   const draftNote = opts.draftPr
-    ? `The PR MUST be opened as a draft (\`--draft\` flag included above);
+    ? `The PR MUST be opened as a draft (the draft flag is included above);
    the engine will mark it ready for review after this run succeeds.`
-    : `Do NOT pass \`--draft\` — this flow opens the PR ready for review.`;
+    : `Do NOT open the PR as a draft — this flow opens it ready for review.`;
+  const platformName = isAzure ? "Azure DevOps" : "GitHub";
+  const cliName = isAzure ? "az" : "gh";
+  const tokenVar = isAzure ? "OPENCARA_SCM_TOKEN` / `AZURE_DEVOPS_EXT_PAT" : "GH_TOKEN";
+  const linkLine = isAzure
+    ? `Include the literal line \`AB#${opts.issueNumber}\` in the description so
+   Azure DevOps links the PR to its work item.`
+    : `Include the literal line \`Closes #${opts.issueNumber}\` in the body so
+   GitHub links the PR to the source issue.`;
   const instructions = `# Skill: opencara-issue-implement-contract
 
 You are running inside a per-PR-branch worktree to implement the issue
 described in the user prompt. Your job is not finished when the code
 edit lands on disk — it is finished only when a pull request exists on
-GitHub for the changes you made.
+${platformName} for the changes you made.
 
 ## Required completion contract
 
@@ -46,15 +66,14 @@ steps before exiting, in order:
    Empty commits are fine if a prior iteration already pushed the
    diff; the push below is still required.
 3. \`git push -u origin "$OPENCARA_WORKTREE_BRANCH"\` to publish the
-   branch. The orchestrator authenticated \`gh\` / \`git\` for you via
-   \`GH_TOKEN\` — no extra credentials needed.
+   branch. The orchestrator authenticated \`${cliName}\` / \`git\` for you via
+   \`${tokenVar}\` — no extra credentials needed.
 4. \`${prCreateCmd}\`
    to open the PR. ${draftNote}
-   Include the literal line \`Closes #${opts.issueNumber}\` in the body so
-   GitHub links the PR to the source issue.
+   ${linkLine}
 
 If a PR for this branch already exists (a re-run of the same flow on
-the same issue), \`gh pr create\` will fail with "already exists" —
+the same issue), the create command will fail with "already exists" —
 that's fine, treat it as success and skip to exiting. Do NOT close
 and re-open the PR.
 
@@ -65,9 +84,9 @@ and re-open the PR.
 - \`OPENCARA_WORKTREE_BRANCH\` — the branch to push and open the PR
   from (\`${opts.branchName}\`).
 - \`OPENCARA_ISSUE_NUMBER\` — the source issue (\`${opts.issueNumber}\`).
-- \`OPENCARA_REPO\` — \`<owner>/<repo>\`. \`gh\` already infers this
-  from the worktree's remote; you do not normally need to pass
-  \`--repo\`.
+- \`OPENCARA_REPO\` — \`<owner>/<repo>\`. \`${cliName}\` already infers this
+  from the worktree's remote; you do not normally need to pass it
+  explicitly.
 
 ## What NOT to do
 

@@ -22,7 +22,7 @@ import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { Octokit } from "@octokit/rest";
 import { ulid } from "ulid";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
@@ -55,6 +55,7 @@ import {
   FLOW_RUNS_CHANNEL,
   parseFlowRunsNotify,
 } from "../../flows/notify.js";
+import { normalizeNodeKind } from "@opencara/flows";
 
 interface KanbanRoutesDeps {
   db: Db;
@@ -162,6 +163,16 @@ async function loadImplementStatuses(
     .where(
       and(
         eq(flowRuns.flowId, defaultImplementFlowId),
+        // `trigger_skip` runs are status='cancelled' but represent a webhook
+        // the implement flow's trigger rejected — they never implemented
+        // anything. Without this they'd render "Cancelled" on the card for an
+        // hour (e.g. moving an issue to a column the trigger doesn't watch
+        // mints one with a resolvable content_node_id). Mirrors the same
+        // filter the /projects/:id/flow-runs listing uses.
+        or(
+          isNull(flowRuns.cancelReason),
+          ne(flowRuns.cancelReason, "trigger_skip"),
+        ),
         or(
           inArray(flowRuns.status, ["pending", "running"]),
           and(
@@ -195,7 +206,7 @@ async function loadImplementStatuses(
       })
       .from(flowRunSteps)
       .where(inArray(flowRunSteps.flowRunId, runningIds))
-      .orderBy(desc(flowRunSteps.idx));
+      .orderBy(desc(flowRunSteps.idx), desc(flowRunSteps.attempt));
     // Pick the first running step we encounter per run; fall back to the
     // highest-idx step otherwise. Iteration is desc by idx so first hit is
     // the most advanced step.
@@ -301,18 +312,22 @@ export function labelForImplementStatus(
   // step so this maps to "Implementing…" today; the other branches are here
   // so future multi-step implement flows light up the UI without server
   // changes on this side.
-  switch (runningNodeKind) {
+  //
+  // `runningNodeKind` is a PERSISTED string off `flow_run_steps.node_kind`, so
+  // rows written before the `github.*` → `scm.*` rename still carry the old
+  // spelling. Normalizing means one case arm per kind instead of two.
+  switch (runningNodeKind === null ? null : normalizeNodeKind(runningNodeKind)) {
     case "agent":
       return "Implementing…";
     case "git.create_pr":
       return "Creating PR…";
     case "git.create_worktree":
       return "Preparing worktree…";
-    case "github.post_review":
+    case "scm.post_review":
       return "Posting review…";
-    case "github.add_comment":
+    case "scm.add_comment":
       return "Commenting…";
-    case "github.add_label":
+    case "scm.add_label":
       return "Labelling…";
     default:
       return runningNodeKind ? "Working…" : "Starting…";

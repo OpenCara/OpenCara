@@ -8,19 +8,21 @@ import type {
   TriggerNode,
 } from "@opencara/flows";
 import type { AgentSpec } from "@opencara/shared";
-import { and } from "drizzle-orm";
+import { and, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   agentRunLogs,
   agentRuns,
   agents,
-  flowNodeSettings,
+  flowRuns,
   flowRunSteps as flowRunStepsTable,
   projects,
   prompts,
 } from "../db/schema.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
+import { requireGithubApp } from "../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
+import { clientForConnection, type AzureDevopsClientDeps } from "../azure/client.js";
 import {
   autoMergePullRequest,
   linkPrToIssueAndCopyAgentLabel,
@@ -34,8 +36,8 @@ import { buildIssueImplementContractSkill } from "./skills/issueImplementContrac
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
-import { isSelfReviewError } from "../github/errors.js";
-import type { AgentKind } from "../agents/kinds.js";
+import { providerFor } from "../scm/registry.js";
+import type { PullRequestState } from "../scm/types.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -43,26 +45,66 @@ import { worktreePins } from "../db/schema.js";
 import { cleanupClosedPrWorktree } from "../worktrees/cleanup.js";
 import { extractScopedLabelValues } from "./labelRouting.js";
 
-export class SkipFlowError extends Error {
-  constructor(reason: string) {
-    super(reason);
-  }
-}
+import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
+import {
+  effectivePoolShape,
+  clampRetrySame,
+  orderPoolCandidates,
+} from "./agentPool.js";
+import { loadEffectiveNodeSetting, type EffectiveNodeSetting } from "./nodeSettings.js";
+export { SkipFlowError };
+
+/**
+ * Everything platform-specific about the project a run belongs to, as a
+ * discriminated union so the compiler forces each consumer to say what it does
+ * on both platforms rather than silently assuming GitHub.
+ */
+export type PlatformRunCtx =
+  | {
+      platform: "github";
+      installation: { id: string; githubInstallationId: number };
+      /** Used to scope the ephemeral installation token to this repo. */
+      githubRepoId: number;
+    }
+  | {
+      platform: "azure_devops";
+      connectionId: string;
+      /** Azure DevOps organization, e.g. "contoso". */
+      orgName: string;
+      /** Team project — the segment between org and repo. */
+      projectName: string;
+      /** Repository GUID. */
+      externalRepoId: string;
+      /** HTTPS clone remote; the CLI takes this via --clone-url. */
+      cloneUrl: string;
+    };
 
 export interface NodeRunCtx {
   db: Db;
   pg: Sql;
-  app: GithubAppClient;
+  /**
+   * Optional since an Azure-DevOps-only deployment configures no GitHub App.
+   * GitHub-only paths call `requireGithubApp()` rather than asserting.
+   */
+  app?: GithubAppClient;
+  /** Present when AZDO_ENTRA_* is configured; required for Azure DevOps runs. */
+  azure?: AzureDevopsClientDeps;
   dispatcher: AgentDispatcher;
   flowId: string;
   flowRunId: string;
   flowRunStepId: string;
   projectId: string;
-  installation: { id: string; githubInstallationId: number };
+  /**
+   * Effective node settings for the whole flow, resolved once per run by the
+   * engine (flows/nodeSettings.ts). Runners read their node from here and
+   * only fall back to a fresh lookup when absent (tests, ad-hoc callers).
+   */
+  nodeSettings?: readonly EffectiveNodeSetting[];
+  /** Platform-specific identity + credentials for this run. */
+  scm: PlatformRunCtx;
   project: {
     owner: string;
     name: string;
-    githubRepoId: number;
     defaultBranch: string | null;
     /** Repo-relative path of the project's agent instructions file.
      *  Default '' (per migration 0030); empty disables injection.
@@ -74,9 +116,13 @@ export interface NodeRunCtx {
   issueContext?: IssueStatusContext;
   scheduleContext?: ScheduleContext;
   previousOutput?: string;
+  /** Name of the agent that produced `previousOutput`, when it came from a
+   *  single agent node (engine `upstreamAgentName`). `scm.post_review` stamps
+   *  it on the published review body. */
+  previousAgentName?: string;
   /** Base URL for the per-run callback API, e.g. "https://opencara.com". */
   publicBaseUrl: string;
-  /** True when this node's downstream graph contains a `github.post_review`
+  /** True when this node's downstream graph contains a `scm.post_review`
    *  action node. The agent runner uses this to auto-inject the verdict-line
    *  contract skill so the post-review parser can populate the GitHub
    *  review's `event` enum from the agent body. Computed by the engine via
@@ -86,10 +132,45 @@ export interface NodeRunCtx {
   rerun?: boolean;
 }
 
+/** Installation id for a run already known to be GitHub-backed. */
+function githubInstallationId(ctx: NodeRunCtx): number {
+  if (ctx.scm.platform !== "github") {
+    throw new Error(
+      `expected a GitHub project, got platform '${ctx.scm.platform}' — this is a missing platform guard, not a config problem`,
+    );
+  }
+  return ctx.scm.installation.githubInstallationId;
+}
+
+/**
+ * Log-and-skip for GitHub-only conveniences (PR↔issue linking, draft-PR
+ * ready-for-review, auto-merge) on an Azure DevOps run.
+ *
+ * These are enhancements layered on top of a successful agent step, not the
+ * step itself, so the honest behaviour is to skip them loudly rather than fail
+ * a run whose actual work succeeded. Each has an Azure DevOps equivalent that
+ * can be filled in later; until then an operator sees exactly what didn't run.
+ */
+function skipOnAzure(ctx: NodeRunCtx, feature: string): boolean {
+  if (ctx.scm.platform === "github") return false;
+  console.warn(
+    `[flows] ${feature} is not implemented for Azure DevOps yet — skipping for ${ctx.project.owner}/${ctx.project.name}`,
+  );
+  return true;
+}
+
 export interface NodeRunResult {
   output?: unknown;
   /** stdout captured from an agent node, used as the next step's input. */
   stdoutCaptured?: string;
+  /**
+   * Name of the agent an agent node actually resolved and dispatched. The
+   * engine stamps it onto the run's node-label map so downstream fan-in
+   * headings name the agent that really ran — which is not always the
+   * flow-node's linked agent (an `agent:<name>` label on the issue/PR and the
+   * project default implement agent both outrank it).
+   */
+  agentName?: string;
 }
 
 export type NodeRunner<N extends FlowNode = FlowNode> = (
@@ -125,13 +206,13 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
   if (ctx.event.type === "schedule") {
     throw new SkipFlowError("not a schedule trigger");
   }
-  if (node.kind === "github.projects_v2_item") {
+  if (node.kind === "scm.board_item") {
     return projectsV2ItemTrigger(ctx, node);
   }
-  if (node.kind === "github.pull_request_review") {
+  if (node.kind === "scm.pull_request_review") {
     return pullRequestReviewTrigger(ctx, node);
   }
-  if (node.kind !== "github.pull_request") {
+  if (node.kind !== "scm.pull_request") {
     throw new SkipFlowError(`unsupported trigger kind: ${(node as { kind: string }).kind}`);
   }
   const cfg = node.config;
@@ -246,8 +327,89 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
     }
   }
 
+  // Grace period: hold the run, then re-read the PR and bail if it was
+  // merged/closed or picked up an ignored label while we waited.
+  const delaySeconds = cfg.delaySeconds ?? 0;
+  const prNumber = (payload.pull_request as { number?: unknown } | undefined)?.number;
+  if (delaySeconds > 0 && typeof prNumber === "number") {
+    const recheck = await waitReviewGracePeriod(ctx, delaySeconds, prNumber, cfg.labelsIgnore);
+    return { output: { matched: true, delayedSeconds: delaySeconds, recheck: recheck ?? null } };
+  }
+
   return { output: { matched: true } };
 };
+
+/** Pure: why a re-read PR should no longer be reviewed, or null to proceed. */
+export function gracePeriodSkipReason(
+  state: PullRequestState,
+  labelsIgnore: readonly string[],
+): string | null {
+  if (state.merged) return "PR was merged during the review grace period";
+  if (state.state !== "open") return "PR was closed during the review grace period";
+  const hit = labelsIgnore.find((l) => state.labels.includes(l));
+  if (hit) return `PR received labels-ignore '${hit}' during the review grace period`;
+  return null;
+}
+
+/** How long to sleep between run-status checks while waiting out a grace period. */
+const GRACE_POLL_MS = 15_000;
+
+async function waitReviewGracePeriod(
+  ctx: NodeRunCtx,
+  delaySeconds: number,
+  prNumber: number,
+  labelsIgnore: readonly string[],
+): Promise<PullRequestState | undefined> {
+  const deadline = Date.now() + delaySeconds * 1000;
+  // Sleep in slices so a run cancelled from the UI (or by the reaper) stops
+  // waiting instead of dispatching reviewers minutes after the cancel.
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(GRACE_POLL_MS, deadline - Date.now())));
+    const run = await ctx.db.query.flowRuns.findFirst({
+      where: eq(flowRuns.id, ctx.flowRunId),
+      columns: { status: true },
+    });
+    if (run && run.status !== "running" && run.status !== "pending") {
+      throw new SkipFlowError(
+        `run ${run.status} during the review grace period`,
+        "review_grace_period",
+      );
+    }
+  }
+  const provider = await providerFor(
+    {
+      platform: ctx.scm.platform,
+      owner: ctx.project.owner,
+      name: ctx.project.name,
+      ...(ctx.scm.platform === "azure_devops"
+        ? { externalRepoId: ctx.scm.externalRepoId, azdoConnectionId: ctx.scm.connectionId }
+        : {}),
+    },
+    {
+      app: ctx.app,
+      ...(ctx.scm.platform === "github"
+        ? { githubInstallationId: ctx.scm.installation.githubInstallationId }
+        : {}),
+      azure: ctx.azure,
+    },
+  );
+  // Fail open: the re-check is an optimisation. A 5xx / rate limit here must
+  // not turn "review after a pause" into "no review at all".
+  let state: PullRequestState;
+  try {
+    state = await provider.getPullRequestState(prNumber);
+  } catch (err) {
+    console.error("[flows] grace-period PR re-check failed; reviewing anyway", {
+      flowRunId: ctx.flowRunId,
+      prNumber,
+      err,
+    });
+    return undefined;
+  }
+  const reason = gracePeriodSkipReason(state, labelsIgnore);
+  if (reason) throw new SkipFlowError(reason, "review_grace_period");
+  return state;
+}
 
 // Match a Projects v2 status-field change. Webhook payload reference:
 //   https://docs.github.com/en/webhooks/webhook-events-and-payloads#projects_v2_item
@@ -256,7 +418,7 @@ export const triggerRunner: NodeRunner<TriggerNode> = async (ctx, node) => {
 // we skip the option-name filters rather than blocking. projectNumber is not
 // yet enforced because the webhook only carries `project_node_id`; resolving
 // to a number would need GraphQL and isn't worth the complexity for MVP.
-// Match a github.pull_request_review event. Only fires on
+// Match a scm.pull_request_review event. Only fires on
 // `submitted` reviews (the "Submit review" button click); `edited` /
 // `dismissed` aren't useful wake-up signals for the review-fix loop
 // and would surprise operators by re-running the agent on a
@@ -265,7 +427,7 @@ async function pullRequestReviewTrigger(
   ctx: NodeRunCtx,
   node: TriggerNode,
 ): Promise<NodeRunResult> {
-  if (node.kind !== "github.pull_request_review") {
+  if (node.kind !== "scm.pull_request_review") {
     throw new SkipFlowError(`expected pull_request_review trigger, got ${node.kind}`);
   }
 
@@ -372,7 +534,7 @@ async function projectsV2ItemTrigger(
   ctx: NodeRunCtx,
   node: TriggerNode,
 ): Promise<NodeRunResult> {
-  if (node.kind !== "github.projects_v2_item") {
+  if (node.kind !== "scm.board_item") {
     throw new SkipFlowError(`expected projects_v2_item trigger, got ${node.kind}`);
   }
   if (ctx.event.type !== "projects_v2_item") {
@@ -519,53 +681,163 @@ function globToRegex(glob: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
-export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
-  await enforceMaxIterations(ctx, node);
+/**
+ * Pool resolution runs BEFORE any step row exists, so it takes the runner ctx
+ * minus the step id.
+ */
+export type AgentPoolCtx = Omit<NodeRunCtx, "flowRunStepId">;
 
-  // Resolve the linked agent — required because agent flow nodes carry
-  // no in-graph subprocess spec. The dispatched AgentSpec (command,
-  // args, env, cwd) is built from the linked agent's `kind` via
-  // `buildAcpSpec` below.
-  const setting = await ctx.db.query.flowNodeSettings.findFirst({
-    where: and(
-      eq(flowNodeSettings.flowId, ctx.flowId),
-      eq(flowNodeSettings.nodeId, node.id),
-    ),
-  });
+/** Everything the engine needs to drive an agent node's pool of candidates. */
+export interface ResolvedAgentPool {
+  /** Candidate agents in priority order (pinned → primary → fallbacks). */
+  candidates: Array<typeof agents.$inferSelect>;
+  /** Extra attempts on the same agent before failing over to the next. */
+  retrySame: number;
+  /** Parallel slots == target successes (see agentPool.ts). */
+  concurrency: number;
+  /** Minimum successes for the node to succeed. */
+  quorum: number;
+  /** The ONE prompt every candidate in the pool runs with (null = none). */
+  promptBody: string | null;
+}
+
+/**
+ * Resolve the agent pool + shared prompt for an agent node. Runs ONCE per
+ * node; the engine then calls {@link runAgentAttempt} per candidate/retry.
+ *
+ * Agent precedence (highest first) is unchanged from the single-agent days,
+ * the pool just extends the tail:
+ *   1. per-issue `agent:<name>` label — user picks a dispatcher from the
+ *      kanban card / GitHub without re-editing the flow.
+ *   2. project default implement agent — the project-settings pick the card
+ *      dropdowns pre-populate with (#158).
+ *   3. flow-node linked agent (`flow_node_settings.agent_id`) — the primary.
+ *   4. flow-node fallback agents (`fallback_agent_ids`), in stored order.
+ * Tiers 1 and 2 are mutually exclusive (a label replaces the project default,
+ * as before); whichever applies is pinned to the front of the pool. A label
+ * that names a missing agent is a hard error (masking a typo would silently
+ * run the wrong dispatcher); a fallback id whose agent row was deleted is
+ * skipped with a warning.
+ */
+export async function resolveAgentPool(
+  ctx: AgentPoolCtx,
+  node: AgentNode,
+): Promise<ResolvedAgentPool> {
+  // Agent flow nodes carry no in-graph subprocess spec; the dispatched
+  // AgentSpec (command, args, env, cwd) is built from the linked agent's
+  // `kind` via `buildAcpSpec` in runAgentAttempt.
+  // Effective = project override row, else the account-scope template row
+  // (flows/nodeSettings.ts).
+  const setting =
+    ctx.nodeSettings?.find((s) => s.nodeId === node.id) ??
+    (await loadEffectiveNodeSetting(ctx.db, ctx.flowId, node.id));
 
   // Project row carries the #158 implement defaults (agent + prompt) used as
-  // the middle fallback tier below. Both columns are null for legacy
-  // projects, so their presence never changes prior behaviour.
+  // the middle fallback tier. Both columns are null for legacy projects, so
+  // their presence never changes prior behaviour.
   const project = await ctx.db.query.projects.findFirst({
     where: eq(projects.id, ctx.projectId),
   });
 
-  // Agent resolution precedence (highest first):
-  //   1. per-issue `agent:<name>` label  — user picks a dispatcher from the
-  //      kanban card / GitHub without re-editing the flow.
-  //   2. project default implement agent — the project-settings pick the card
-  //      dropdowns pre-populate with (#158).
-  //   3. flow-node linked agent          — the advanced per-node default set
-  //      on the flow detail page.
-  // A label that names a missing agent is a hard error (masking a typo would
-  // silently run the wrong dispatcher).
-  let agent: typeof agents.$inferSelect | null = await resolveLabelRoutedAgent(ctx);
-  if (!agent) {
-    const fallbackAgentId =
-      project?.defaultImplementAgentId ?? setting?.agentId ?? null;
-    if (!fallbackAgentId) {
-      throw new Error(
-        `agent node '${node.id}' has no agent to run: no agent:<name> label on the issue/PR, no project default implement agent, and no linked agent on the flow node — set a default in project settings, label the issue/PR, or link one from the flow detail page`,
-      );
-    }
-    agent =
-      (await ctx.db.query.agents.findFirst({
-        where: eq(agents.id, fallbackAgentId),
-      })) ?? null;
-    if (!agent) {
-      throw new Error(`implement agent ${fallbackAgentId} not found (revoked or deleted)`);
+  const labelAgent = await resolveLabelRoutedAgent(ctx);
+  const candidateIds = orderPoolCandidates({
+    pinned: labelAgent?.id ?? project?.defaultImplementAgentId ?? null,
+    primary: setting?.agentId ?? null,
+    fallbacks: setting?.fallbackAgentIds ?? [],
+  });
+  if (candidateIds.length === 0) {
+    throw new Error(
+      `agent node '${node.id}' has no agent to run: no agent:<name> label on the issue/PR, no project default implement agent, and no linked agent on the flow node — set a default in project settings, label the issue/PR, or link one from the flow detail page`,
+    );
+  }
+
+  const rows = await ctx.db.query.agents.findMany({
+    where: inArray(agents.id, candidateIds),
+  });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const candidates: Array<typeof agents.$inferSelect> = [];
+  const missing: string[] = [];
+  for (const id of candidateIds) {
+    const row = byId.get(id);
+    if (row) candidates.push(row);
+    else missing.push(id);
+  }
+  if (candidates.length === 0) {
+    throw new Error(`implement agent ${candidateIds[0]} not found (revoked or deleted)`);
+  }
+  if (missing.length > 0) {
+    console.warn("[flows] agent pool: skipping deleted agents", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      missing,
+    });
+  }
+
+  // Prompt resolution mirrors the agent precedence (#158):
+  //   1. per-issue `prompt:<name>` label
+  //   2. project default implement prompt
+  //   3. flow-node linked prompt
+  // The prompt is optional at every tier — when none resolve the agents run
+  // without OPENCARA_PROMPT. It is resolved once and shared by the whole
+  // pool: failover swaps the agent, never the task. A label naming a missing
+  // prompt is a hard error, same rationale as the agent label.
+  let promptBody: string | null = await resolveLabelRoutedPrompt(ctx);
+  if (promptBody === null) {
+    const fallbackPromptId =
+      project?.defaultImplementPromptId ?? setting?.promptId ?? null;
+    if (fallbackPromptId) {
+      promptBody =
+        (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, fallbackPromptId) }))
+          ?.body ?? null;
     }
   }
+
+  // Persist the shape the pool will actually run with (see
+  // effectivePoolShape) — the run page reads quorum back from the attempt's
+  // pool meta to decide whether the node succeeded.
+  const shape = effectivePoolShape({
+    concurrency: setting?.concurrency ?? 1,
+    quorum: setting?.quorum ?? 1,
+    candidateCount: candidates.length,
+    worktree: !!node.config.worktree,
+  });
+  if (shape.forcedSingleSlot) {
+    console.warn("[flows] agent pool: worktree node forced to concurrency 1", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      requested: setting?.concurrency,
+    });
+  }
+  if (shape.quorumCapped) {
+    console.warn("[flows] agent pool: quorum capped to the slot count", {
+      flowId: ctx.flowId,
+      nodeId: node.id,
+      requested: setting?.quorum,
+      effective: shape.quorum,
+      concurrency: shape.concurrency,
+    });
+  }
+  return {
+    candidates,
+    retrySame: clampRetrySame(setting?.retrySame ?? 0),
+    concurrency: shape.concurrency,
+    quorum: shape.quorum,
+    promptBody,
+  };
+}
+
+/**
+ * Run ONE attempt of an agent node on a concrete candidate agent. The engine
+ * owns the surrounding step row (one per attempt) and the pool loop; this
+ * function is the old single-agent runner body from "agent resolved" onward.
+ */
+export async function runAgentAttempt(
+  ctx: NodeRunCtx,
+  node: AgentNode,
+  agent: typeof agents.$inferSelect,
+  promptBody: string | null,
+): Promise<NodeRunResult> {
+  await enforceMaxIterations(ctx, node);
 
   const env: Record<string, string> = { ...agent.env };
   if (ctx.rerun) {
@@ -589,24 +861,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       if (v !== undefined) env[key] = v;
     }
   }
-
-  // Prompt resolution mirrors the agent precedence (#158):
-  //   1. per-issue `prompt:<name>` label
-  //   2. project default implement prompt
-  //   3. flow-node linked prompt
-  // The prompt is optional at every tier — when none resolve the agent runs
-  // without OPENCARA_PROMPT. A label naming a missing prompt is a hard error,
-  // same rationale as the agent label.
-  let promptBody: string | null = await resolveLabelRoutedPrompt(ctx);
-  if (promptBody === null) {
-    const fallbackPromptId =
-      project?.defaultImplementPromptId ?? setting?.promptId ?? null;
-    if (fallbackPromptId) {
-      promptBody =
-        (await ctx.db.query.prompts.findFirst({ where: eq(prompts.id, fallbackPromptId) }))
-          ?.body ?? null;
-    }
-  }
   if (promptBody !== null) {
     env["OPENCARA_PROMPT"] = promptBody;
   }
@@ -621,14 +875,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // first iteration clones, every subsequent iteration on the same
   // (repo, branch) finds .git/ already present and just fetches +
   // checks out the branch. Pinning sticks the device that allocated
-  // first so the agent-session.json file (used for conversation
-  // resume) survives across iterations.
+  // first so the cached checkout is reused across iterations.
   let worktree: {
     workdir: string;
     branch: string;
+    /** Device-local dir surfaced to the agent as OPENCARA_SESSION_DIR. */
     sessionDir: string | null;
     hostId: string;
-    priorSession: { kind: AgentKind; id: string } | null;
   } | null = null;
   if (node.config.worktree) {
     const tplVars = collectTemplateVars(ctx);
@@ -639,7 +892,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       "agent.worktree.branchName",
     );
     if (branchName.length === 0) {
-      throw new Error(
+      throw new FlowConfigError(
         `agent.worktree.branchName template '${node.config.worktree.branchName}' rendered empty — fill in the template variables`,
       );
     }
@@ -713,6 +966,18 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       "--key",
       key,
     ];
+    if (ctx.scm.platform === "azure_devops") {
+      // Azure DevOps remotes are org/project/_git/repo — three segments, which
+      // `--repo OWNER/NAME` cannot express — and the basic-auth username must
+      // not be GitHub's literal "x-access-token". Both flags are additive, so
+      // GitHub runs keep dispatching exactly the argv they always have.
+      //
+      // A device on a CLI predating these flags will reject the unknown
+      // arguments and fail the allocation with a visible error, rather than
+      // silently cloning the wrong thing. `npm exec opencara@latest` on the
+      // paired hosts is the fix.
+      allocateArgs.push("--clone-url", ctx.scm.cloneUrl, "--auth-user", "opencara");
+    }
     const cacheRepo = node.config.worktree.cacheRepo;
     if (cacheRepo?.enabled) {
       allocateArgs.push("--cache-repo");
@@ -740,7 +1005,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       );
     }
 
-    // Parse {workdir, branch, sessionDir, priorSession} from the CLI's
+    // Parse {workdir, branch, sessionDir} from the CLI's
     // single-line JSON. Defensive last→first scan in case future
     // versions interleave progress lines.
     const lines = allocateResult.stdoutCaptured
@@ -750,7 +1015,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       workdir?: unknown;
       branch?: unknown;
       sessionDir?: unknown;
-      priorSession?: unknown;
     };
     let parsed: DevicePayload | null = null;
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -768,20 +1032,8 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       );
     }
 
-    const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
-    let priorSession: { kind: AgentKind; id: string } | null = null;
-    if (parsed.priorSession && typeof parsed.priorSession === "object") {
-      const ps = parsed.priorSession as { kind?: unknown; id?: unknown };
-      const knownKinds: AgentKind[] = ["claude", "codex", "opencode", "pi"];
-      if (
-        typeof ps.kind === "string" &&
-        typeof ps.id === "string" &&
-        (knownKinds as string[]).includes(ps.kind)
-      ) {
-        priorSession = { kind: ps.kind as AgentKind, id: ps.id };
-      }
-    }
 
+    const sessionDir = typeof parsed.sessionDir === "string" ? parsed.sessionDir : null;
     // Upsert the pin so the next iteration on this branch hits the
     // same device. lastRunAt drives the reaper's pruning later.
     await ctx.db
@@ -803,7 +1055,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       branch: parsed.branch,
       sessionDir,
       hostId: allocateResult.agentHostId,
-      priorSession,
     };
 
     // Surface to the agent's env so its scripts can see them without
@@ -839,6 +1090,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
           issueNumber: ctx.issueContext.stdin.issue.number,
           defaultBranch: ctx.project.defaultBranch ?? "main",
           draftPr: Boolean(node.config.draftPr),
+          platform: ctx.scm.platform,
         })
       : null;
   if (implementSkill && ctx.issueContext?.stdin.issue?.number) {
@@ -861,18 +1113,13 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // is gone; per-kind specifics now live inside the per-kind ACP
   // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
   //
-  // Session resume across iterations is wired via ACP `session/load`:
-  //   - `worktree-allocate` reads `<sessionDir>/agent-session.json`
-  //     (if any) and emits `priorSession: {kind, id}`.
-  //   - We forward that `id` as `acp.priorSessionId` only when the
-  //     persisted `kind` matches the current agent's kind — operators
-  //     can swap agents mid-PR via labels, and a Claude UUID must not
-  //     leak into a Codex session.
-  //   - After a successful run, we dispatch a best-effort `worktree
-  //     write-session` on the same pinned device to persist the new
-  //     session id for the next iteration. A failure logs and moves
-  //     on — losing resume next iteration is preferable to failing
-  //     this flow.
+  // Flow runs never resume a prior ACP session. Every attempt starts a
+  // cold `session/new`: the previous iteration's context reaches the agent
+  // through the PR/issue conversation and `previousOutput`, not through the
+  // adapter's transcript. Resuming by (repo, branch, agent kind) made a
+  // re-reviewer inherit the synthesizer's session and a synthesizer inherit
+  // the reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
+  // still resumes via the id recorded on the agent_runs row after the run.
   //
   // What we keep:
   //   - Worktree allocation (the per-(repo, branch) checkout on a
@@ -884,7 +1131,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   //   - PR / issue context-injection; surfaced via pageContextJson.
   const eligibility = checkAcpEligibility(agent.kind);
   if (eligibility.refuseReason) {
-    throw new Error(eligibility.refuseReason);
+    throw new AgentUnusableError(eligibility.refuseReason);
   }
 
   const systemPromptParts: string[] = [];
@@ -900,7 +1147,7 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     });
   }
   // Auto-injected when this agent's downstream graph contains a
-  // `github.post_review` node. Mandates the `verdict: <token>` first-line
+  // `scm.post_review` node. Mandates the `verdict: <token>` first-line
   // contract that the post-review parser reads to populate GitHub's
   // review `event` enum. Active for both standalone reviewers
   // (pr-review) and every agent in fan-in chains (pr-review-multi
@@ -956,10 +1203,19 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   // upstream output; surface a sentinel so ACP doesn't reject the
   // empty prompt.
   const upstream = ctx.previousOutput?.trim() ?? "";
+  // Review agents fed by other agents (the synthesizer position) get an
+  // explicit task directive above the pasted upstream sections. Without
+  // it, a single polished review starting with `verdict: ...` reads as
+  // the model's own completed turn and it replies with a wrap-up
+  // one-liner instead of doing the work (ParadiseGodot#25 review
+  // 4618560289).
   const userPromptMd =
-    upstream.length > 0
-      ? upstream
-      : "(no upstream output — proceed using the system prompt and any page context above.)";
+    upstream.length === 0
+      ? "(no upstream output — proceed using the system prompt and any page context above.)"
+      : ctx.hasDownstreamPostReview
+        ? "The sections below are outputs from upstream agents — input for you to verify, not your own prior work. Write your review now, following the format in the system prompt, starting with the `verdict:` line.\n\n" +
+          upstream
+        : upstream;
 
   // Flow-time pageContext = whatever stdin payloads the legacy path
   // would have stuffed into stdinJson. The agent gets the same data;
@@ -968,16 +1224,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   const pageContext: Record<string, unknown> = {};
   if (ctx.prContext) Object.assign(pageContext, ctx.prContext.stdin);
   if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
-
-  // Kind guard: only resume when the persisted session was for this
-  // agent kind. Two simultaneous reviews on the same branch can race
-  // here — second writer wins on the agent-session.json file. Same
-  // behavior as the pre-cutover path; the worktree pin serializes most
-  // real-world traffic.
-  const priorSessionId =
-    worktree?.priorSession && worktree.priorSession.kind === agent.kind.toLowerCase()
-      ? worktree.priorSession.id
-      : undefined;
 
   // Validate the project-level instructions file setting and forward the
   // relative path into the spec when it's safe + the agent will run in a
@@ -1004,12 +1250,14 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
       kind: agent.kind,
       name: agent.name,
       cwd: worktree?.workdir ?? agent.cwd ?? null,
+      args: agent.args,
+      acpArgs: agent.acpArgs,
+      captureThinking: agent.captureThinking,
     },
     env,
     systemPromptMd,
     userPromptMd,
     pageContext,
-    priorSessionId,
     instructionsFile: projectInstructionsFile,
   });
 
@@ -1029,54 +1277,6 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     throw new Error(`agent exited with code ${result.exitCode}`);
   }
 
-  // Persist the session id for next iteration on this (repo, branch).
-  // Runs on the same pinned device that just ran the agent, since the
-  // sessionDir is local to it. Best-effort: a write-session failure
-  // here disables resume for the NEXT run only — the parent flow's
-  // result is already determined by the agent's exit code above.
-  if (worktree?.sessionDir && result.acpSessionId) {
-    const writeRunId = ulid();
-    try {
-      // dispatchAgentRun returns RunResult and only throws on transport
-      // errors (device disconnect, mint-token failure, etc.) — a non-zero
-      // exitCode from the CLI itself comes back via the returned value,
-      // so we have to check it explicitly. Otherwise a failed
-      // write-session (disk full, permissions on sessionDir) would
-      // silently disable resume next iteration with no diagnostic.
-      const writeResult = await dispatchAgentRun(ctx, {
-        agentRunId: writeRunId,
-        kind: "internal:worktree-write-session",
-        command: "opencara",
-        args: [
-          "internal",
-          "worktree",
-          "write-session",
-          "--session-dir",
-          worktree.sessionDir,
-          "--kind",
-          agent.kind.toLowerCase(),
-          "--id",
-          result.acpSessionId,
-        ],
-        env: { OPENCARA_AGENT_RUN_ID: writeRunId },
-        hostId: worktree.hostId,
-        triggerEventId: ctx.event.id,
-        flowRunStepId: null,
-      });
-      if (writeResult.exitCode !== 0) {
-        console.error(
-          `[flows] worktree write-session exited ${writeResult.exitCode} ` +
-            `(resume disabled for next run on ${ctx.project.owner}/${ctx.project.name}@${worktree.branch})`,
-        );
-      }
-    } catch (err) {
-      console.error(
-        "[flows] worktree write-session dispatch failed (resume disabled for next run)",
-        err,
-      );
-    }
-  }
-
   // Post-step: when an issue-implement-shaped run succeeds (issue
   // context present, worktree allocated), link the PR the agent just
   // opened back to its source issue (Closes #N in body → populates
@@ -1092,11 +1292,16 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   //   - `transient-failure` (network / 5xx on the list call) → log
   //     and continue; the agent's work is unaffected and the PR may
   //     well exist.
-  if (issueImplementRun && ctx.issueContext?.stdin.issue?.number && worktree?.branch) {
+  if (
+    issueImplementRun &&
+    ctx.issueContext?.stdin.issue?.number &&
+    worktree?.branch &&
+    !skipOnAzure(ctx, "linking the PR to its issue")
+  ) {
     let linkResult: Awaited<ReturnType<typeof linkPrToIssueAndCopyAgentLabel>> | null = null;
     try {
-      const octokit = await ctx.app.forInstallation(
-        ctx.installation.githubInstallationId,
+      const octokit = await requireGithubApp(ctx.app).forInstallation(
+        githubInstallationId(ctx),
       );
       linkResult = await linkPrToIssueAndCopyAgentLabel({
         octokit,
@@ -1118,10 +1323,15 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
     }
   }
 
-  if (node.config.draftPr && issueImplementRun && worktree?.branch) {
+  if (
+    node.config.draftPr &&
+    issueImplementRun &&
+    worktree?.branch &&
+    !skipOnAzure(ctx, "marking the draft PR ready for review")
+  ) {
     try {
-      const octokit = await ctx.app.forInstallation(
-        ctx.installation.githubInstallationId,
+      const octokit = await requireGithubApp(ctx.app).forInstallation(
+        githubInstallationId(ctx),
       );
       await markDraftPrReadyByHead({
         octokit,
@@ -1139,8 +1349,9 @@ export const agentRunner: NodeRunner<AgentNode> = async (ctx, node) => {
   return {
     output: { exitCode: result.exitCode, ...(autoMergeOutput ? { autoMerge: autoMergeOutput } : {}) },
     stdoutCaptured: result.stdoutCaptured,
+    agentName: agent.name,
   };
-};
+}
 
 async function enforceMaxIterations(ctx: NodeRunCtx, node: AgentNode): Promise<void> {
   const cfg = node.config.maxIterations;
@@ -1234,7 +1445,7 @@ async function postMaxIterationsCommentOnce(
   body: string,
 ): Promise<void> {
   try {
-    const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+    const octokit = await requireGithubApp(ctx.app).forInstallation(githubInstallationId(ctx));
     const comments = await octokit.request(
       "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
       {
@@ -1266,12 +1477,16 @@ async function maybeAutoMergeAfterFix(
   const cfg = node.config.autoMerge;
   if (!cfg?.enabled) return null;
   if (!isPrReviewFixContext(ctx)) return null;
+  // Azure DevOps expresses this as `autoCompleteSetBy` on the PR plus branch
+  // policies, not as GitHub's merge-queue call. Skipping is the safe default:
+  // the fix landed, only the automatic merge didn't.
+  if (skipOnAzure(ctx, "auto-merging the pull request")) return null;
   const prNumber = getPrNumber(ctx);
   if (!prNumber) {
     throw new Error("autoMerge enabled but PR number is unavailable");
   }
 
-  const octokit = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
+  const octokit = await requireGithubApp(ctx.app).forInstallation(githubInstallationId(ctx));
   const result = await autoMergePullRequest({
     octokit,
     owner: ctx.project.owner,
@@ -1330,7 +1545,7 @@ async function maybeAutoMergeAfterFix(
 // reading PR labels would silently route them away from the operator's
 // linked reviewers.
 async function resolveLabelRoutedAgent(
-  ctx: NodeRunCtx,
+  ctx: AgentPoolCtx,
 ): Promise<typeof agents.$inferSelect | null> {
   const sources: string[] = [];
   for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
@@ -1380,7 +1595,7 @@ async function resolveLabelRoutedAgent(
  * defaults). Throws on multiple labels or a label naming a non-existent
  * prompt — same fail-loud rationale as the agent path (#158).
  */
-async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null> {
+async function resolveLabelRoutedPrompt(ctx: AgentPoolCtx): Promise<string | null> {
   const sources: string[] = [];
   for (const l of ctx.issueContext?.stdin.issue?.labels ?? []) {
     if (typeof l.name === "string") sources.push(l.name);
@@ -1419,10 +1634,43 @@ async function resolveLabelRoutedPrompt(ctx: NodeRunCtx): Promise<string | null>
   return found.body;
 }
 
+/** Prefix a review body with its author line. Exported for unit tests. */
+export function withReviewAuthor(body: string, agentName: string | undefined): string {
+  if (!agentName) return body;
+  return `_Reviewed by **${agentName}**_\n\n${body}`;
+}
+
+// Floor for a verdict-less review body before post_review refuses to
+// publish it. A contract-honoring agent always emits `verdict: <token>`,
+// so this only gates the fallback path; real reviews that merely forgot
+// the verdict line run far past this, while bail-out one-liners ("I've
+// completed my review of PR #25.") sit well under it.
+export const MIN_UNVERDICTED_REVIEW_BODY_CHARS = 200;
+
 export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
-  const oct = await ctx.app.forInstallation(ctx.installation.githubInstallationId);
-  const owner = ctx.project.owner;
-  const repo = ctx.project.name;
+  // All platform traffic goes through the provider seam (scm/registry.ts), so
+  // this runner stays platform-blind: the registry picks the implementation
+  // from `ctx.scm.platform` and everything below is identical on both.
+  const provider = await providerFor(
+    {
+      platform: ctx.scm.platform,
+      owner: ctx.project.owner,
+      name: ctx.project.name,
+      ...(ctx.scm.platform === "azure_devops"
+        ? {
+            externalRepoId: ctx.scm.externalRepoId,
+            azdoConnectionId: ctx.scm.connectionId,
+          }
+        : {}),
+    },
+    {
+      app: ctx.app,
+      ...(ctx.scm.platform === "github"
+        ? { githubInstallationId: ctx.scm.installation.githubInstallationId }
+        : {}),
+      azure: ctx.azure,
+    },
+  );
   const prPayload = ctx.event.payload as {
     pull_request?: { number: number; head: { sha: string } };
     issue?: { number: number };
@@ -1446,7 +1694,7 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
   };
 
   switch (node.kind) {
-    case "github.post_review": {
+    case "scm.post_review": {
       // PR object resolution: the lifecycle / pull_request_review webhooks
       // carry `pull_request` inline on the event payload, but the comment
       // path (issue_comment on a PR) doesn't — the orchestrator fetches
@@ -1472,94 +1720,56 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // post the body verbatim — operator-visible signal that the
       // agent didn't honor the contract.
       const parsed = parseReviewVerdict(body);
-      const event = parsed?.verdict ?? node.config.event;
-      const reviewBody = parsed?.bodyWithoutVerdict ?? body;
-      type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-      const postReview = (postEvent: ReviewEvent, postBody: string) =>
-        oct.request(
-          "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-          {
-            owner,
-            repo,
-            pull_number: pr.number,
-            body: postBody || "_(no review body)_",
-            event: postEvent,
-            commit_id: pr.head.sha,
-          },
-        );
-
-      let res;
-      let downgradedFrom: string | null = null;
-      try {
-        res = await postReview(event, reviewBody);
-      } catch (err) {
-        // GitHub forbids APPROVE / REQUEST_CHANGES on a PR opened by the
-        // same identity (HTTP 422). When the App installation backing
-        // post_review also opened the PR — common in single-account
-        // setups where opencara is both the implementer and the
-        // reviewer — fall back to a COMMENT-typed review and embed the
-        // original verdict line in the body so downstream pr-review-fix
-        // can still read intent (see flows/context.ts
-        // resolveReviewStateFromBody).
-        if (!isSelfReviewError(err, event)) throw err;
-        const verdictLabel =
-          event === "REQUEST_CHANGES" ? "Request changes" : "Approve";
-        const verdictToken =
-          event === "REQUEST_CHANGES" ? "request_changes" : "approve";
-        const downgradedBody = [
-          `_Downgraded to "Commented" — GitHub forbids "${verdictLabel}" on a PR you opened. Verdict preserved below for review-fix flows._`,
-          "",
-          `verdict: ${verdictToken}`,
-          "",
-          reviewBody,
-        ]
-          .join("\n")
-          .trim();
-        try {
-          res = await postReview("COMMENT", downgradedBody);
-        } catch (retryErr) {
-          // Surface both errors so operators don't lose the original
-          // 422 context when the retry fails for an unrelated reason
-          // (transient 5xx, PR closed mid-run, etc.).
-          throw new Error(
-            `post_review fallback to COMMENT failed after ${event} self-review 422: ${String(
-              (retryErr as Error).message ?? retryErr,
-            )} (original error: ${String((err as Error).message ?? err)})`,
-            { cause: retryErr },
-          );
-        }
-        downgradedFrom = event;
-        console.warn(
-          `[post_review] self-review on ${owner}/${repo}#${pr.number} downgraded ${event} -> COMMENT`,
+      // Stub guard: every agent upstream of post_review has the verdict
+      // skill injected, so a body with no verdict line AND no substance
+      // means the agent bailed without doing the review (e.g. the
+      // 35-byte "I've completed my review of PR #25." posted as
+      // ParadiseGodot#25 review 4618560289). Fail the step — the run
+      // shows as failed and is rerunnable — instead of publishing a
+      // stub that reads as a completed review pass.
+      if (!parsed && body.length < MIN_UNVERDICTED_REVIEW_BODY_CHARS) {
+        throw new Error(
+          `post_review refused: agent output has no verdict line and is too short to be a review (${body.length} chars): ${JSON.stringify(body.slice(0, 120))}`,
         );
       }
+      const event = parsed?.verdict ?? node.config.event;
+      // Every review posts under the same bot identity, so the body itself
+      // must say which agent wrote it — a PR with several reviewer flows is
+      // otherwise a wall of indistinguishable bot reviews.
+      const reviewBody = withReviewAuthor(
+        parsed?.bodyWithoutVerdict ?? body,
+        ctx.previousAgentName,
+      );
+      // The self-review downgrade that used to live here is now the GitHub
+      // provider's concern (scm/github/provider.ts) — it is a quirk of
+      // GitHub's review API, not flow-engine logic. `downgradedFrom` comes
+      // back on the result when it fires.
+      const res = await provider.postReview(
+        { number: pr.number, headSha: pr.head.sha },
+        event,
+        reviewBody,
+      );
       return {
         output: {
-          reviewId: res.data.id,
-          htmlUrl: res.data.html_url,
-          ...(downgradedFrom ? { downgradedFrom } : {}),
+          reviewId: res.reviewId,
+          htmlUrl: res.htmlUrl,
+          ...(res.downgradedFrom ? { downgradedFrom: res.downgradedFrom } : {}),
         },
       };
     }
-    case "github.add_comment": {
-      const res = await oct.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-        {
-          owner,
-          repo,
-          issue_number: requireIssueNumber("add_comment"),
-          body: body || "_(no body)_",
-        },
+    case "scm.add_comment": {
+      const res = await provider.addComment(
+        requireIssueNumber("add_comment"),
+        body,
       );
-      return { output: { commentId: res.data.id, htmlUrl: res.data.html_url } };
+      return { output: { commentId: res.commentId, htmlUrl: res.htmlUrl } };
     }
-    case "github.add_label": {
-      const labels = node.config.labels;
-      const res = await oct.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
-        { owner, repo, issue_number: requireIssueNumber("add_label"), labels },
+    case "scm.add_label": {
+      const res = await provider.addLabel(
+        requireIssueNumber("add_label"),
+        node.config.labels,
       );
-      return { output: { labels: res.data.map((l) => l.name) } };
+      return { output: { labels: res.labels } };
     }
   }
 };
@@ -1641,24 +1851,61 @@ async function dispatchAgentRun(
   // Mint AFTER insert. The persisted spec.env snapshot still carries the
   // `<ephemeral>` markers; subsequent mutations of opts.env only affect
   // the dispatched copy. Mint failures are non-fatal — the agent runs
-  // without GH_TOKEN, surfacing as 401s downstream rather than masking
+  // without a token, surfacing as 401s downstream rather than masking
   // as a generic flow failure.
+  //
+  // The two platforms differ in what "mint" even means. GitHub issues a fresh
+  // installation token scoped to this repo, which is revoked when the agent
+  // finishes. Azure DevOps has no such call: the best available credential is
+  // the connection's own (refreshed) user-delegated access token, which is
+  // org-wide and cannot be revoked early — see the trust boundary note in the
+  // README. `revokeMintedToken` below therefore only has work to do on GitHub.
   let mintedToken: EphemeralToken | null = null;
   try {
-    mintedToken = await ctx.app.mintEphemeralToken({
-      installationId: ctx.installation.githubInstallationId,
-      repositoryIds: [ctx.project.githubRepoId],
-      permissions: { contents: "write", issues: "write", pull_requests: "write", checks: "read" },
-    });
-    opts.env["GH_TOKEN"] = mintedToken.token;
-    opts.env["GITHUB_TOKEN"] = mintedToken.token;
+    if (ctx.scm.platform === "github") {
+      mintedToken = await requireGithubApp(ctx.app).mintEphemeralToken({
+        installationId: ctx.scm.installation.githubInstallationId,
+        repositoryIds: [ctx.scm.githubRepoId],
+        permissions: {
+          contents: "write",
+          issues: "write",
+          pull_requests: "write",
+          checks: "read",
+        },
+      });
+      opts.env["GH_TOKEN"] = mintedToken.token;
+      opts.env["GITHUB_TOKEN"] = mintedToken.token;
+      opts.env["OPENCARA_SCM_TOKEN"] = mintedToken.token;
+    } else {
+      if (!ctx.azure) {
+        throw new Error("azure devops run needs AZDO_ENTRA_* configured");
+      }
+      const client = await clientForConnection(ctx.azure, ctx.scm.connectionId);
+      if (!client) {
+        throw new Error(
+          `azure devops connection ${ctx.scm.connectionId} no longer exists — reconnect the organization`,
+        );
+      }
+      const token = await client.accessToken();
+      // Only the neutral name: GH_TOKEN would make `gh` pick it up and talk to
+      // github.com with an Azure DevOps token, producing confusing 401s.
+      opts.env["OPENCARA_SCM_TOKEN"] = token;
+      opts.env["AZURE_DEVOPS_EXT_PAT"] = token; // what `az repos` reads
+      opts.env["OPENCARA_AZDO_ORG"] = ctx.scm.orgName;
+      opts.env["OPENCARA_AZDO_PROJECT"] = ctx.scm.projectName;
+      // `az repos pr create --repository` wants the bare repo name;
+      // OPENCARA_REPO is the "org/project/repo"-style display label.
+      opts.env["OPENCARA_REPO_NAME"] = ctx.project.name;
+    }
   } catch (err) {
     console.error(
-      "[flows] mintEphemeralToken failed; agent runs without GH_TOKEN",
+      `[flows] ${ctx.scm.platform} token mint failed; agent runs without a platform token`,
       err,
     );
     delete opts.env["GH_TOKEN"];
     delete opts.env["GITHUB_TOKEN"];
+    delete opts.env["OPENCARA_SCM_TOKEN"];
+    delete opts.env["AZURE_DEVOPS_EXT_PAT"];
   }
 
   // Bounded stderr ring buffer so non-zero exits can carry the real
@@ -1704,6 +1951,9 @@ async function dispatchAgentRun(
     // mustn't re-serialize the in-memory `spec` here because opts.env
     // was mutated to hold the live mintedToken and would leak any
     // non-GH secret (ANTHROPIC_API_KEY, MCP_*_TOKEN, ...) into the row.
+    // Guarded terminal write (mirrors the chat stop endpoint): a cancel
+    // path may have already flipped this row to "cancelled" — the finished
+    // agent must not overwrite that with succeeded/failed.
     await ctx.db
       .update(agentRuns)
       .set({
@@ -1717,16 +1967,28 @@ async function dispatchAgentRun(
             }
           : {}),
       })
-      .where(eq(agentRuns.id, opts.agentRunId));
+      .where(
+        and(
+          eq(agentRuns.id, opts.agentRunId),
+          inArray(agentRuns.status, ["queued", "assigned", "running"]),
+        ),
+      );
     return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
     await ctx.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })
-      .where(eq(agentRuns.id, opts.agentRunId));
+      .where(
+        and(
+          eq(agentRuns.id, opts.agentRunId),
+          inArray(agentRuns.status, ["queued", "assigned", "running"]),
+        ),
+      );
     throw err;
   } finally {
-    if (mintedToken) {
+    // `mintedToken` is only ever set on the GitHub path — Azure DevOps has no
+    // revoke endpoint, so its token is left to expire (README trust boundary).
+    if (mintedToken && ctx.app) {
       // Best-effort revoke. The token expires in ≤1h regardless, so a
       // network blip here is logged + swallowed.
       await ctx.app.revokeToken(mintedToken.token).catch((err: unknown) => {
@@ -1794,7 +2056,7 @@ function renderTemplate(tmpl: string, vars: Record<string, string>, where: strin
       // Fail loud rather than silently producing "opencara/issue-" or
       // "WIP: implement issue #". Operators will see this in
       // flow_runs.error and know which env var is missing.
-      throw new Error(
+      throw new FlowConfigError(
         `${where}: template variable {{${name}}} not in run env (available: ${
           Object.keys(vars).sort().join(", ") || "(none)"
         })`,

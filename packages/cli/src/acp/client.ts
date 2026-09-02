@@ -39,6 +39,7 @@ import {
   type PromptRequest,
   type PromptResponse,
   type SessionNotificationParams,
+  type SetConfigOptionRequest,
 } from "./types.js";
 
 export interface AcpClientOptions {
@@ -129,6 +130,16 @@ export class AcpConnection {
 
   prompt(req: PromptRequest): Promise<PromptResponse> {
     return this.request(ACP_METHODS.session_prompt, req) as Promise<PromptResponse>;
+  }
+
+  /**
+   * Select a session config option (e.g. the model) advertised by the agent in
+   * the session/new response. pi-acp maps `configId: "model"` onto its model
+   * selector. Resolves on success; rejects with the agent's JSON-RPC error
+   * (e.g. "Model not found") — callers log and continue rather than fail the run.
+   */
+  setConfigOption(req: SetConfigOptionRequest): Promise<unknown> {
+    return this.request(ACP_METHODS.session_set_config_option, req);
   }
 
   /** Notification (no reply). Used to cancel a turn mid-flight. */
@@ -368,6 +379,10 @@ export class AcpClient {
 
   prompt(req: PromptRequest): Promise<PromptResponse> {
     return this.must().prompt(req);
+  }
+
+  setConfigOption(req: SetConfigOptionRequest): Promise<unknown> {
+    return this.must().setConfigOption(req);
   }
 
   cancel(sessionId: string): void {

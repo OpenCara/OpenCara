@@ -58,7 +58,7 @@ describe("extractScheduleTriggers", () => {
     const def = flow([
       {
         id: "pr",
-        kind: "github.pull_request",
+        kind: "scm.pull_request",
         position: { x: 0, y: 0 },
         config: { actions: ["opened"] },
       },

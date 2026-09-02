@@ -1,0 +1,12 @@
+-- Per-agent switch for capturing the agent's reasoning stream.
+--
+-- The device fences `agent_thought_chunk` updates into `[think]…[/think]`
+-- blocks on stdout, which land in agent_run_logs and render as collapsible
+-- thinking blocks in the chat panel. claude-acp and codex-acp emit no thought
+-- chunks at all, so this only bites for the reasoning adapters (omp, pi,
+-- cursor), where the stream can dominate a run's log volume.
+--
+-- Defaults TRUE so every existing row keeps today's behaviour; operators opt
+-- individual agents out from the dashboard. NOT NULL + DEFAULT is a metadata-
+-- only change on PG11+ — no table rewrite, no backfill pass.
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "capture_thinking" boolean NOT NULL DEFAULT true;

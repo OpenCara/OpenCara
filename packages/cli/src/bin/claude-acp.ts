@@ -72,6 +72,7 @@ import {
   type JsonRpcRequest,
   type JsonRpcResponse,
 } from "../acp/jsonrpc.js";
+import type { AcpConfigOption } from "../acp/types.js";
 
 // ─── Wire helpers ──────────────────────────────────────────────────
 
@@ -133,6 +134,11 @@ interface SessionState {
    *  files fall through to the pre-#130 behaviour (no `--bare`, no
    *  append) with a stderr warning. */
   instructionsFile?: string;
+  /** Model selected via ACP `session/set_config_option` (configId "model").
+   *  Appended to the `claude` invocation AFTER extraClaudeArgs so it wins
+   *  over an argv `--model` (claude CLI is last-flag-wins). Absent → the
+   *  argv model (or claude's own default) applies. */
+  modelOverride?: string;
 }
 
 /** ACP `session/new` `mcpServers` array element. Mirrors the shape the
@@ -191,6 +197,104 @@ function buildClaudeMcpConfig(servers: AcpMcpServer[]): string {
 }
 
 export const sessions = new Map<string, SessionState>();
+
+/**
+ * Operator-configured extras forwarded from `AgentSpec.args` via the device
+ * runner. The orchestrator builds the spec with the agent's DB `args` column
+ * (e.g. `["--model", "claude-opus-4-5"]`) appended after the adapter's own
+ * args; the device spawns `claude-acp <...spec.args>` so they land here as
+ * `process.argv.slice(2)`. We capture them at startup and append them to
+ * every `claude` subprocess invocation so operators can pin a model, set a
+ * provider, or pass any other per-agent flag without redeploying the shim.
+ *
+ * Only set when running as main (guards the export so unit tests don't
+ * accidentally pick up the test runner's argv).
+ */
+export let extraClaudeArgs: string[] = [];
+
+/** Test-only seam: ESM importers can't assign an exported `let`. */
+export function _setExtraClaudeArgsForTest(args: string[]): void {
+  extraClaudeArgs = args;
+}
+
+/**
+ * The model selected by argv extras, if any. Recognises `--model <v>`,
+ * `--model=<v>`, `-m <v>`, `-m=<v>`; LAST occurrence wins to mirror the
+ * claude CLI's own last-flag-wins argv semantics.
+ */
+export function parseModelFromArgs(args: readonly string[]): string | undefined {
+  let model: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = /^(?:--model|-m)=(.*)$/.exec(a);
+    if (eq && eq[1]) {
+      model = eq[1];
+      continue;
+    }
+    if ((a === "--model" || a === "-m") && args[i + 1] !== undefined) {
+      model = args[i + 1]!;
+      i++;
+    }
+  }
+  return model;
+}
+
+/**
+ * ACP session config options advertised on session/new and session/load.
+ *
+ * Why advertise at all: the device runner selects the operator's model via
+ * `session/set_config_option` and — before this existed — logged a
+ * misleading `model "…" requested but the agent advertised no model
+ * option; using its default` for every claude run, even though the model
+ * HAD been applied via the argv `--model` extra. Advertising the effective
+ * model lets the runner see currentValue === requested and stay silent;
+ * a genuinely different request flows through handleSetConfigOption.
+ */
+export function modelConfigOptions(
+  state: Pick<SessionState, "modelOverride">,
+): AcpConfigOption[] | undefined {
+  const effective = state.modelOverride ?? parseModelFromArgs(extraClaudeArgs);
+  if (!effective) return undefined;
+  return [
+    {
+      type: "select",
+      id: "model",
+      category: "model",
+      name: "Model",
+      currentValue: effective,
+      options: [{ value: effective }],
+    },
+  ];
+}
+
+/**
+ * ACP `session/set_config_option` for configId "model". Claude accepts
+ * freeform model ids (there is no enumerable list to validate against),
+ * so any non-empty string is stored; the next `claude` turn appends
+ * `--model <value>` after the argv extras, which wins last-flag-wins.
+ */
+export function handleSetConfigOption(params: {
+  sessionId?: unknown;
+  configId?: unknown;
+  value?: unknown;
+}): unknown {
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+  const state = sessions.get(sessionId);
+  if (!state) {
+    throw new Error(`session/set_config_option: unknown session '${sessionId}'`);
+  }
+  if (params.configId !== "model") {
+    throw new Error(
+      `session/set_config_option: unknown configId '${String(params.configId)}'`,
+    );
+  }
+  const value = typeof params.value === "string" ? params.value.trim() : "";
+  if (!value) {
+    throw new Error("session/set_config_option: value must be a non-empty string");
+  }
+  state.modelOverride = value;
+  return {};
+}
 
 // ─── Project instructions file ─────────────────────────────────────
 
@@ -471,6 +575,18 @@ async function runClaudeTurn(
     );
     if (resolvedInstructions) {
       args.push("--bare", "--append-system-prompt", resolvedInstructions.content);
+    }
+    // Operator-configured extras (e.g. `--model claude-opus-4-5`).
+    // Appended last so they can override any of the flags above when
+    // the operator explicitly needs a different value. Captured from
+    // process.argv at startup; empty for test imports.
+    if (extraClaudeArgs.length > 0) {
+      args.push(...extraClaudeArgs);
+    }
+    // ACP-selected model (session/set_config_option) — after the extras so
+    // it beats an argv `--model` under claude's last-flag-wins parsing.
+    if (state.modelOverride) {
+      args.push("--model", state.modelOverride);
     }
     // Prompt goes on stdin, not argv. Linux's execve caps a single
     // argv string at MAX_ARG_STRLEN (32 * PAGE_SIZE = 128 KiB on the
@@ -805,13 +921,15 @@ export function handleNewSession(params: NewSessionParams): unknown {
   const sessionId = randomUUID();
   const mcpServers = normalizeMcpServers(params.mcpServers);
   const instructionsFile = normalizeInstructionsFile(params.instructionsFile);
-  sessions.set(sessionId, {
+  const state: SessionState = {
     cwd: params.cwd ?? process.cwd(),
     resume: false,
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
     ...(instructionsFile ? { instructionsFile } : {}),
-  });
-  return { sessionId };
+  };
+  sessions.set(sessionId, state);
+  const configOptions = modelConfigOptions(state);
+  return { sessionId, ...(configOptions ? { configOptions } : {}) };
 }
 
 interface LoadSessionParams {
@@ -835,13 +953,15 @@ export function handleLoadSession(params: LoadSessionParams): unknown {
   }
   const mcpServers = normalizeMcpServers(params.mcpServers);
   const instructionsFile = normalizeInstructionsFile(params.instructionsFile);
-  sessions.set(params.sessionId, {
+  const state: SessionState = {
     cwd: params.cwd ?? process.cwd(),
     resume: true,
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
     ...(instructionsFile ? { instructionsFile } : {}),
-  });
-  return {};
+  };
+  sessions.set(params.sessionId, state);
+  const configOptions = modelConfigOptions(state);
+  return configOptions ? { configOptions } : {};
 }
 
 /** Coerce the opencara session-extension field into a clean string or
@@ -940,6 +1060,13 @@ const isMainModule =
   process.argv[1]?.endsWith("claude-acp.js") === true;
 
 if (isMainModule) {
+  // Capture operator-configured extras (e.g. `--model claude-opus-4-5`)
+  // that the device passed as argv. These are forwarded to every `claude`
+  // subprocess invocation so per-agent model / provider knobs work.
+  // claude-acp itself consumes no argv — all args are treated as passthrough.
+  extraClaudeArgs = process.argv.slice(2);
+  Object.freeze(extraClaudeArgs);
+
   const decoder = new FrameDecoder();
 
   stdin.setEncoding("utf8");
@@ -986,6 +1113,14 @@ async function dispatch(msg: JsonRpcMessage): Promise<void> {
       case "session/load":
         reply(req.id, handleLoadSession(req.params as LoadSessionParams));
         return;
+      case "session/set_config_option":
+        reply(
+          req.id,
+          handleSetConfigOption(
+            req.params as { sessionId?: unknown; configId?: unknown; value?: unknown },
+          ),
+        );
+        return;
       case "session/prompt": {
         const result = await handlePrompt(req.params as PromptParams);
         reply(req.id, result);
@@ -1002,7 +1137,9 @@ async function dispatch(msg: JsonRpcMessage): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     const isParamsError =
       err instanceof Error &&
-      (message.startsWith("session/prompt:") || message.startsWith("session/load:"));
+      (message.startsWith("session/prompt:") ||
+        message.startsWith("session/load:") ||
+        message.startsWith("session/set_config_option:"));
     replyError(
       req.id,
       isParamsError ? JSON_RPC_ERROR_INVALID_PARAMS : JSON_RPC_ERROR_INTERNAL,

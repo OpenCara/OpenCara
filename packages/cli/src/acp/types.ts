@@ -23,6 +23,7 @@ export const ACP_METHODS = {
   session_load: "session/load",
   session_prompt: "session/prompt",
   session_cancel: "session/cancel",
+  session_set_config_option: "session/set_config_option",
   // Client methods (agent → client) — handled minimally in this spike.
   session_update: "session/update",
   session_request_permission: "session/request_permission",
@@ -102,8 +103,41 @@ export interface NewSessionRequest {
   instructionsFile?: string;
 }
 
+/**
+ * A session config option advertised by the agent in `session/new` /
+ * `session/load`. Standard ACP: the agent offers selectable per-session
+ * settings; pi-acp exposes the model this way as
+ * `{ type:"select", id:"model", category:"model", currentValue, options:[{value,name}] }`.
+ * The client selects one via `session/set_config_option`.
+ */
+export interface AcpConfigOption {
+  type?: string;
+  id: string;
+  category?: string;
+  name?: string;
+  currentValue?: string;
+  options?: Array<{ value: string; name?: string; description?: string | null }>;
+}
+
 export interface NewSessionResponse {
   sessionId: string;
+  /** Advertised session config options (optional; most shims omit it). */
+  configOptions?: AcpConfigOption[];
+}
+
+// ─── session/set_config_option ─────────────────────────────────────
+//
+// Reference: https://agentclientprotocol.com/protocol/session-config
+//
+// Selects a value for a session config option advertised in the
+// session/new response (e.g. the model). pi-acp maps `configId: "model"`
+// onto its `set_model`. Non-config-option shims won't advertise options,
+// so we only call this when the agent advertised a matching option.
+
+export interface SetConfigOptionRequest {
+  sessionId: string;
+  configId: string;
+  value: string;
 }
 
 // ─── session/load ──────────────────────────────────────────────────
@@ -137,6 +171,8 @@ export interface LoadSessionRequest {
 // callers (Record<string, never> would be the opposite — it forbids all
 // property access and any added field would be a compile error).
 export interface LoadSessionResponse {
+  /** Same session config options as NewSessionResponse, for the resume path. */
+  configOptions?: AcpConfigOption[];
   [k: string]: unknown;
 }
 

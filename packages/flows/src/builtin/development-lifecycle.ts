@@ -1,6 +1,7 @@
 import type { FlowDefinition } from "../types.js";
 
-// Shared by every reviewer node in the review fan-out. The synthesizer
+// Shared by both reviewer nodes (the multi-review pool and the single
+// reviewer). The synthesizer
 // needs none of these PR extras — its input is the concatenated reviewer
 // outputs delivered on stdin.
 const reviewerContext = {
@@ -39,7 +40,7 @@ const reviewerContext = {
 //
 //   [projects_v2_item] → [implement]                               (stage 1)
 //
-//   [pull_request opened] → [reviewer ×3] → [synthesize] → [post]  (stage 2a, multi)
+//   [pull_request opened] → [reviewer pool] → [synthesize] → [post] (stage 2a, multi)
 //
 //   [pull_request synchronize] → [reviewer] → [post]               (stage 2b, single)
 //
@@ -58,13 +59,17 @@ const reviewerContext = {
 // (`opencara/issue-<n>`), so the fix agent reuses the implementer's
 // checkout and resumes its conversation from `agent-session.json`.
 //
-// The review stage is a multi-agent fan-out (absorbing the old
-// `pr-review-multi`): the PR trigger lights up three reviewer agents
-// (correctness, performance, style) in parallel; a synthesizer fans them
-// in to one summary, which `post_review` posts as a single PR comment.
-// Link a different agent to each reviewer node from the flow detail page;
-// drop reviewer nodes (and their edges) to collapse back toward a single
-// reviewer.
+// The review stage is a multi-agent review driven by ONE agent-pool node
+// (absorbing the old `pr-review-multi` fan-out): the `reviewer` node carries
+// an ordered list of agents sharing one prompt plus a policy — how many run
+// in parallel (also the target number of reviews), the minimum that must
+// succeed, and per-agent retries before failing over to the next in the
+// list. A synthesizer fans the successful reviews in (one section per
+// agent) to one summary, which `post_review` posts as a single PR comment.
+// Configure the pool from the flow detail page: link the primary agent,
+// add fallbacks in priority order, set "run in parallel" to the number of
+// reviews you want. The synthesizer and the other agent nodes accept the
+// same pool settings (typically concurrency 1 = plain failover).
 //
 // Review → fix loop: the fix agent pushing commits emits
 // `pull_request.synchronize`, which the SINGLE-review trigger (2b) picks up
@@ -80,12 +85,12 @@ export const developmentLifecycleFlow: FlowDefinition = {
   slug: "development-lifecycle",
   name: "Development lifecycle",
   description:
-    "The full development lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); opening the PR fans out to three reviewer agents (correctness, performance, style) whose reviews a synthesizer merges into one posted review (multi review), while follow-up pushes run a lighter single reviewer; submitting a review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. The two review components are independent and mutually exclusive by trigger: multi fires on PR open/reopen or `@opencara mreview`, single fires on PR synchronize or `@opencara review`. Trigger entry-points route each webhook to exactly one stage, so there are no `trigger_skip` runs. Label an issue/PR `agent:<name>` to pick a specific agent per-item; link a different agent to each reviewer node from the flow detail page.",
+    "The full development lifecycle in one flow: a Projects v2 issue moving to Ready dispatches the implement agent in a per-PR-branch worktree (it commits, pushes, and opens the PR); opening the PR runs the reviewer agent pool — an ordered list of agents sharing one prompt, N of them in parallel with per-agent retry and failover to the next in the list — whose reviews a synthesizer merges into one posted review (multi review), while follow-up pushes run a lighter single reviewer; submitting a review (or an `@opencara fix` comment) wakes the same implement agent in the same worktree to apply the feedback and optionally auto-merge. The two review components are independent and mutually exclusive by trigger: multi fires on PR open/reopen or `@opencara mreview`, single fires on PR synchronize or `@opencara review`. Trigger entry-points route each webhook to exactly one stage, so there are no `trigger_skip` runs. Label an issue/PR `agent:<name>` to pick a specific agent per-item; configure each agent node's pool (primary, fallbacks, parallelism, minimum successes, retries) from the flow detail page.",
   nodes: [
     // ── Stage 1: issue → implement ──────────────────────────────────
     {
       id: "implement_trigger",
-      kind: "github.projects_v2_item",
+      kind: "scm.board_item",
       position: { x: 0, y: 0 },
       config: {
         projectNumber: null,
@@ -130,7 +135,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // intentionally NOT in this trigger's actions.
     {
       id: "review_trigger",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 620 },
       config: {
         actions: ["opened", "reopened", "commented"],
@@ -142,34 +147,18 @@ export const developmentLifecycleFlow: FlowDefinition = {
         labelsIgnore: [],
         ignoreDrafts: false,
         commentPhrase: "@opencara mreview",
+        delaySeconds: 0,
       },
     },
     {
-      id: "reviewer_correctness",
-      kind: "agent",
-      position: { x: 320, y: 520 },
-      config: {
-        label: "Correctness reviewer",
-        draftPr: false,
-        contextInjection: reviewerContext,
-      },
-    },
-    {
-      id: "reviewer_performance",
+      // Agent POOL: the operator links the primary agent + an ordered list of
+      // fallbacks and sets how many run in parallel (flow_node_settings, not
+      // graph config — agents are user-scoped). All share this node's prompt.
+      id: "reviewer",
       kind: "agent",
       position: { x: 320, y: 620 },
       config: {
-        label: "Performance reviewer",
-        draftPr: false,
-        contextInjection: reviewerContext,
-      },
-    },
-    {
-      id: "reviewer_style",
-      kind: "agent",
-      position: { x: 320, y: 720 },
-      config: {
-        label: "Style reviewer",
+        label: "Reviewer pool",
         draftPr: false,
         contextInjection: reviewerContext,
       },
@@ -183,7 +172,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
         draftPr: false,
         contextInjection: {
           // No PR env extras — input is the concatenated reviewer outputs
-          // delivered via stdin (fan-in over the three reviewer nodes).
+          // delivered via stdin (one section per successful pool agent).
           env: [],
           stdinJson: true,
         },
@@ -191,7 +180,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     },
     {
       id: "post_review",
-      kind: "github.post_review",
+      kind: "scm.post_review",
       position: { x: 960, y: 620 },
       config: { event: "COMMENT" },
     },
@@ -199,7 +188,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // ── Stage 3: review submitted → fix (+ auto-merge) ──────────────
     {
       id: "fix_trigger",
-      kind: "github.pull_request_review",
+      kind: "scm.pull_request_review",
       position: { x: 0, y: 360 },
       config: {
         reviewStates: ["commented", "changes_requested"],
@@ -264,7 +253,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     // review — or on demand via the `@opencara review` comment.
     {
       id: "single_review_trigger",
-      kind: "github.pull_request",
+      kind: "scm.pull_request",
       position: { x: 0, y: 200 },
       config: {
         actions: ["synchronize", "commented"],
@@ -276,6 +265,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
         labelsIgnore: [],
         ignoreDrafts: false,
         commentPhrase: "@opencara review",
+        delaySeconds: 0,
       },
     },
     {
@@ -290,7 +280,7 @@ export const developmentLifecycleFlow: FlowDefinition = {
     },
     {
       id: "single_post_review",
-      kind: "github.post_review",
+      kind: "scm.post_review",
       position: { x: 640, y: 200 },
       config: { event: "COMMENT" },
     },
@@ -298,12 +288,8 @@ export const developmentLifecycleFlow: FlowDefinition = {
   edges: [
     { id: "e_impl", source: "implement_trigger", target: "implement" },
     // Review stage fan-out → synthesize → post.
-    { id: "e_review_c", source: "review_trigger", target: "reviewer_correctness" },
-    { id: "e_review_p", source: "review_trigger", target: "reviewer_performance" },
-    { id: "e_review_s", source: "review_trigger", target: "reviewer_style" },
-    { id: "e_c_synth", source: "reviewer_correctness", target: "review_synthesizer" },
-    { id: "e_p_synth", source: "reviewer_performance", target: "review_synthesizer" },
-    { id: "e_s_synth", source: "reviewer_style", target: "review_synthesizer" },
+    { id: "e_review", source: "review_trigger", target: "reviewer" },
+    { id: "e_reviewer_synth", source: "reviewer", target: "review_synthesizer" },
     { id: "e_post", source: "review_synthesizer", target: "post_review" },
     { id: "e_fix", source: "fix_trigger", target: "fix" },
     // Single-review component (independent of the multi fan-out).

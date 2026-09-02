@@ -35,10 +35,10 @@ import {
   chatSessions,
   flowRunSteps,
   flowRuns,
-  flowNodeSettings,
 } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { loadEffectiveNodeSetting } from "../../flows/nodeSettings.js";
 
 interface ChatSessionsRoutesDeps {
   db: Db;
@@ -148,11 +148,15 @@ export async function hydrateFromFlowRunStep(
 }> {
   const step = await db.query.flowRunSteps.findFirst({
     where: eq(flowRunSteps.id, stepId),
-    columns: { id: true, flowRunId: true, nodeId: true },
+    columns: { id: true, flowRunId: true, nodeId: true, inputJson: true },
   });
   if (!step) {
     return { agentId: null, acpSessionId: null, acpSessionHostId: null };
   }
+  // Agent-pool attempts stamp the candidate that actually ran onto the step
+  // (engine.runStepAttempt). Prefer it over the node's primary link so a
+  // chat opened from a failover attempt targets the agent whose session it is.
+  const attemptAgentId = (step.inputJson as { agentId?: unknown } | null)?.agentId;
   const run = await db.query.flowRuns.findFirst({
     where: eq(flowRuns.id, step.flowRunId),
     columns: { flowId: true },
@@ -165,15 +169,7 @@ export async function hydrateFromFlowRunStep(
     orderBy: [desc(agentRuns.createdAt)],
     columns: { id: true, hostId: true, spec: true },
   });
-  const setting = run
-    ? await db.query.flowNodeSettings.findFirst({
-        where: and(
-          eq(flowNodeSettings.flowId, run.flowId),
-          eq(flowNodeSettings.nodeId, step.nodeId),
-        ),
-        columns: { agentId: true },
-      })
-    : undefined;
+  const setting = run ? await loadEffectiveNodeSetting(db, run.flowId, step.nodeId) : null;
   const spec = (lastRun?.spec ?? null) as
     | { acp?: { priorSessionId?: string | null } | null }
     | null;
@@ -183,7 +179,7 @@ export async function hydrateFromFlowRunStep(
   // resumed iteration's chat still picks up the right id.
   const acpSessionId = spec?.acp?.priorSessionId ?? null;
   return {
-    agentId: setting?.agentId ?? null,
+    agentId: typeof attemptAgentId === "string" ? attemptAgentId : (setting?.agentId ?? null),
     acpSessionId,
     acpSessionHostId: lastRun?.hostId ?? null,
   };

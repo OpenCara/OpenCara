@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Cpu, ExternalLink, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Cpu, ExternalLink, Sparkles, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,13 +73,13 @@ export function NodeEditor({
           onClose={onClose}
         />
       )}
-      {selectedNode && selectedNode.kind === "github.pull_request" && (
+      {selectedNode && selectedNode.kind === "scm.pull_request" && (
         <TriggerNodePanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "github.pull_request_review" && (
+      {selectedNode && selectedNode.kind === "scm.pull_request_review" && (
         <PullRequestReviewTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
-      {selectedNode && selectedNode.kind === "github.projects_v2_item" && (
+      {selectedNode && selectedNode.kind === "scm.board_item" && (
         <ProjectsV2ItemTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
       {selectedNode && selectedNode.kind === "schedule.cron" && (
@@ -87,9 +87,9 @@ export function NodeEditor({
       )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
-        selectedNode.kind !== "github.pull_request" &&
-        selectedNode.kind !== "github.pull_request_review" &&
-        selectedNode.kind !== "github.projects_v2_item" &&
+        selectedNode.kind !== "scm.pull_request" &&
+        selectedNode.kind !== "scm.pull_request_review" &&
+        selectedNode.kind !== "scm.board_item" &&
         selectedNode.kind !== "schedule.cron" && (
           <Card>
             <CardHeader>
@@ -111,16 +111,26 @@ interface SetSettingsVars {
   promptId?: string | null;
   agentId?: string | null;
   label?: string | null;
+  /** Ordered failover list (agent ids) tried after `agentId`. */
+  fallbackAgentIds?: string[];
+  /** Extra attempts on the same agent before failing over. */
+  retrySame?: number;
+  concurrency?: number;
+  quorum?: number;
 }
 
 function useSetSettings(scope: EditorScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: SetSettingsVars) => {
-      const body: Record<string, string | null> = {};
+      const body: Record<string, unknown> = {};
       if (vars.promptId !== undefined) body.promptId = vars.promptId;
       if (vars.agentId !== undefined) body.agentId = vars.agentId;
       if (vars.label !== undefined) body.label = vars.label;
+      if (vars.fallbackAgentIds !== undefined) body.fallbackAgentIds = vars.fallbackAgentIds;
+      if (vars.retrySame !== undefined) body.retrySame = vars.retrySame;
+      if (vars.concurrency !== undefined) body.concurrency = vars.concurrency;
+      if (vars.quorum !== undefined) body.quorum = vars.quorum;
       const url =
         scope.kind === "project"
           ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/nodes/${vars.nodeId}/settings`
@@ -152,31 +162,17 @@ function useSetNodeConfig(scope: EditorScope) {
   });
 }
 
-export function useAddReviewer(scope: EditorScope) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => {
-      const url =
-        scope.kind === "project"
-          ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/reviewers`
-          : `/api/flow-templates/${scope.slug}/reviewers`;
-      return api.post<{ addedNodeId: string }>(url);
-    },
-    onSuccess: () => invalidateScope(qc, scope, ["graph"]),
-  });
-}
-
-export function useRemoveReviewer(scope: EditorScope) {
+/** Project scope only: drop the node's override so it inherits the template again. */
+function useRevertOverride(scope: EditorScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { nodeId: string }) => {
-      const url =
-        scope.kind === "project"
-          ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/reviewers/${vars.nodeId}`
-          : `/api/flow-templates/${scope.slug}/reviewers/${vars.nodeId}`;
-      return api.delete(url);
+      if (scope.kind !== "project") return Promise.resolve(null);
+      return api.delete(
+        `/api/projects/${scope.projectId}/flows/${scope.flowId}/nodes/${vars.nodeId}/settings`,
+      );
     },
-    onSuccess: () => invalidateScope(qc, scope, ["graph", "settings"]),
+    onSuccess: () => invalidateScope(qc, scope, ["settings"]),
   });
 }
 
@@ -225,6 +221,31 @@ function AgentNodePanel({
   const setting = settings.find((s) => s.nodeId === node.id);
   const linkedPromptId = setting?.promptId ?? null;
   const linkedAgentId = setting?.agentId ?? null;
+
+  // Agent pool: ONE ordered list. The first entry is the node's primary
+  // (`agentId`), the rest are fallbacks (`fallbackAgentIds`) tried after it
+  // when an attempt fails. One prompt for the whole pool.
+  const fallbackAgentIds = setting?.fallbackAgentIds ?? [];
+  const agentIds = [
+    ...(linkedAgentId ? [linkedAgentId] : []),
+    ...fallbackAgentIds.filter((id) => id !== linkedAgentId),
+  ];
+  const retrySame = setting?.retrySame ?? 0;
+  const concurrency = setting?.concurrency ?? 1;
+  const quorum = setting?.quorum ?? 1;
+  const poolSize = agentIds.length;
+  const clampInt = (raw: string, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, Math.trunc(Number(raw) || lo)));
+  const addableAgents = agents.filter((a) => !agentIds.includes(a.id));
+  const savePool = (ids: string[]) =>
+    set.mutate({ nodeId: node.id, agentId: ids[0] ?? null, fallbackAgentIds: ids.slice(1) });
+  const movePoolAgent = (from: number, to: number) => {
+    if (to < 0 || to >= agentIds.length) return;
+    const next = [...agentIds];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item!);
+    savePool(next);
+  };
   const linkedPrompt = linkedPromptId
     ? prompts.find((p) => p.id === linkedPromptId) ?? null
     : null;
@@ -232,10 +253,18 @@ function AgentNodePanel({
     ? agents.find((a) => a.id === linkedAgentId) ?? null
     : null;
   const set = useSetSettings(scope);
+  const revert = useRevertOverride(scope);
+  // Project flows inherit the account-scope template's row for this node
+  // until they override it; the server tags each effective row.
+  const inherited = scope.kind === "project" && setting?.source !== "project";
 
   const cfg = (node.config ?? {}) as { label?: string };
   const defaultLabel = cfg.label ?? "Agent";
   const customLabel = setting?.label ?? null;
+  // Agent nodes are named by the agent that runs them — on the graph and in
+  // the `## From <heading>` sections a synthesizer receives. The per-node
+  // rename below is the fallback for a node with nothing linked yet.
+  const displayName = linkedAgent?.name ?? customLabel ?? defaultLabel;
 
   const [labelDraft, setLabelDraft] = useState(customLabel ?? "");
   useEffect(() => {
@@ -256,7 +285,7 @@ function AgentNodePanel({
           <div className="flex items-center gap-2">
             <Bot className="size-4 text-muted-foreground" />
             <CardTitle className="text-base">
-              {customLabel ?? defaultLabel}
+              {displayName}
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 #{node.id}
               </span>
@@ -268,77 +297,89 @@ function AgentNodePanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        {scope.kind === "project" && (
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs",
+              inherited ? "bg-muted/30 text-muted-foreground" : "border-primary/40 bg-primary/5",
+            )}
+          >
+            {inherited ? (
+              <span>
+                Inherits your{" "}
+                <Link to={`/flows/${scope.slug}`} className="text-foreground underline">
+                  account-scope flow
+                </Link>{" "}
+                settings for this node. Any change below becomes a project override.
+              </span>
+            ) : (
+              <>
+                <span>
+                  <span className="font-medium text-foreground">Project override.</span> This
+                  project no longer follows your{" "}
+                  <Link to={`/flows/${scope.slug}`} className="text-foreground underline">
+                    account-scope flow
+                  </Link>{" "}
+                  for this node.
+                </span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={revert.isPending}
+                  onClick={() => revert.mutate({ nodeId: node.id })}
+                >
+                  {revert.isPending ? "Reverting…" : "Revert to account default"}
+                </Button>
+              </>
+            )}
+          </div>
+        )}
         <div className="space-y-2">
           <div className="text-sm font-medium">Display name</div>
-          <Input
-            value={labelDraft}
-            placeholder={defaultLabel}
-            onChange={(e) => setLabelDraft(e.target.value)}
-            onBlur={commitLabel}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="max-w-md"
-          />
-          <p className="text-xs text-muted-foreground">
-            Shown on the graph + used as a section heading when feeding a synthesizer.
-            Empty resets to "{defaultLabel}".
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex items-center gap-1 text-sm font-medium">
-            <Cpu className="size-3.5" />
-            Linked agent
-            <span className="text-xs font-normal text-muted-foreground">(required)</span>
-          </div>
-          <Select
-            value={linkedAgentId ?? NONE}
-            onValueChange={(v) => {
-              set.mutate({ nodeId: node.id, agentId: v === NONE ? null : v });
-            }}
-          >
-            <SelectTrigger className="w-full max-w-md">
-              <SelectValue placeholder="(none — runs will fail)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NONE}>(none — runs will fail)</SelectItem>
-              {agents.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {agents.length === 0 && (
+          {linkedAgent ? (
             <p className="text-xs text-muted-foreground">
-              No agents yet.{" "}
+              On the graph this node is titled by its prompt (or the label below when
+              none is linked) with the pool listed underneath. The section heading a
+              synthesizer sees still comes from the agent that ran — for the primary
+              that is{" "}
+              <span className="font-medium text-foreground">{linkedAgent.name}</span>
+              . Rename agents on the{" "}
               <Link to="/agents" className="text-foreground underline">
-                Create one
-              </Link>{" "}
-              before this flow can run.
+                agents page
+              </Link>
+              .
             </p>
-          )}
-          {linkedAgent && (
-            <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
-              $ {linkedAgent.command}
-              {linkedAgent.args.length ? " " : ""}
-              {linkedAgent.args.join(" ")}
-              <span className="ml-2 text-muted-foreground">
-                [device: {linkedAgent.hostId ? linkedAgent.hostId.slice(-8) : "any"}]
-              </span>
-            </pre>
+          ) : (
+            <>
+              <Input
+                value={labelDraft}
+                placeholder={defaultLabel}
+                onChange={(e) => setLabelDraft(e.target.value)}
+                onBlur={commitLabel}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="max-w-md"
+              />
+              <p className="text-xs text-muted-foreground">
+                Graph title when no prompt is linked, and the section heading a
+                synthesizer sees until an agent is added (the agent's name takes
+                over). Empty resets to "{defaultLabel}".
+              </p>
+            </>
           )}
         </div>
 
         <div className="space-y-2">
           <div className="flex items-center gap-1 text-sm font-medium">
             <Sparkles className="size-3.5" />
-            Linked prompt
-            <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+            Prompt
+            <span className="text-xs font-normal text-muted-foreground">
+              (optional · shared by every agent in the pool)
+            </span>
           </div>
           <Select
             value={linkedPromptId ?? NONE}
@@ -383,6 +424,182 @@ function AgentNodePanel({
           >
             Manage prompts <ExternalLink className="size-3" />
           </Link>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center gap-1 text-sm font-medium">
+            <Cpu className="size-3.5" />
+            Agents
+            <span className="text-xs font-normal text-muted-foreground">
+              (priority order · the first is the node's primary)
+            </span>
+          </div>
+          {agentIds.length > 0 ? (
+            <ol className="max-w-md divide-y rounded-md border">
+              {agentIds.map((id, i) => {
+                const a = agents.find((x) => x.id === id);
+                return (
+                  <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                    <span className="w-5 text-xs text-muted-foreground">{i + 1}.</span>
+                    <span className={cn("flex-1 truncate", !a && "text-destructive")}>
+                      {a?.name ?? `(deleted agent …${id.slice(-6)})`}
+                    </span>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={i === 0 || set.isPending}
+                      onClick={() => movePoolAgent(i, i - 1)}
+                      title="Move up"
+                    >
+                      <ArrowUp />
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={i === agentIds.length - 1 || set.isPending}
+                      onClick={() => movePoolAgent(i, i + 1)}
+                      title="Move down"
+                    >
+                      <ArrowDown />
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      disabled={set.isPending}
+                      onClick={() => savePool(agentIds.filter((x) => x !== id))}
+                      title="Remove"
+                    >
+                      <X />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="text-xs text-destructive">
+              No agent yet — runs of this node will fail until one is added.
+            </p>
+          )}
+          <Select
+            value={NONE}
+            onValueChange={(v) => {
+              if (v !== NONE) savePool([...agentIds, v]);
+            }}
+            disabled={addableAgents.length === 0 || set.isPending}
+          >
+            <SelectTrigger className="w-full max-w-md">
+              <SelectValue placeholder="Add an agent…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Add an agent…</SelectItem>
+              {addableAgents.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {agents.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No agents yet.{" "}
+              <Link to="/agents" className="text-foreground underline">
+                Create one
+              </Link>{" "}
+              before this flow can run.
+            </p>
+          )}
+          {linkedAgent &&
+            (() => {
+              // Show the primary's effective ACP invocation: the kind-fixed
+              // command plus the agent's adapter-args override or the kind
+              // default.
+              const effArgs = linkedAgent.acpArgs ?? linkedAgent.defaultAcpArgs;
+              return (
+                <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
+                  $ {linkedAgent.acpCommand}
+                  {effArgs.length ? " " : ""}
+                  {effArgs.join(" ")}
+                  <span className="ml-2 text-muted-foreground">
+                    [device: {linkedAgent.hostId ? linkedAgent.hostId.slice(-8) : "any"}]
+                  </span>
+                </pre>
+              );
+            })()}
+
+          <div className="mt-3 space-y-2">
+            <div className="flex max-w-md flex-wrap items-center gap-3">
+              <Label htmlFor={`retry-same-${node.id}`} className="shrink-0 text-sm">
+                Retries per agent
+              </Label>
+              <Input
+                id={`retry-same-${node.id}`}
+                type="number"
+                min={0}
+                max={5}
+                step={1}
+                className="w-20"
+                defaultValue={retrySame}
+                key={`retry-same-${node.id}-${retrySame}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 0, 5);
+                  if (n !== retrySame) set.mutate({ nodeId: node.id, retrySame: n });
+                }}
+              />
+              <Label htmlFor={`concurrency-${node.id}`} className="shrink-0 text-sm">
+                Run in parallel
+              </Label>
+              <Input
+                id={`concurrency-${node.id}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                className="w-20"
+                defaultValue={concurrency}
+                key={`concurrency-${node.id}-${concurrency}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 1, 8);
+                  if (n !== concurrency) set.mutate({ nodeId: node.id, concurrency: n });
+                }}
+              />
+              <Label htmlFor={`quorum-${node.id}`} className="shrink-0 text-sm">
+                Minimum successes
+              </Label>
+              <Input
+                id={`quorum-${node.id}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                className="w-20"
+                defaultValue={quorum}
+                key={`quorum-${node.id}-${quorum}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 1, 8);
+                  if (n !== quorum) set.mutate({ nodeId: node.id, quorum: n });
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Agents run from the top of the list, {Math.min(concurrency, Math.max(poolSize, 1))} at
+              a time. A failed agent is retried {retrySame} more time{retrySame === 1 ? "" : "s"}
+              {retrySame === 0 ? " (no retries)" : ""}, then the next agent in the list takes its
+              slot with the same prompt. The node succeeds once every slot has
+              finished with at least {Math.min(quorum, concurrency)} success
+              {Math.min(quorum, concurrency) === 1 ? "" : "es"}, and hands every successful
+              output downstream (one section per agent). 1 / 1 is plain failover.
+              {poolSize > 0 && concurrency > poolSize && (
+                <> Only {poolSize} agent{poolSize === 1 ? "" : "s"} configured, so at most that many run.</>
+              )}
+              {!!node.config?.worktree && concurrency > 1 && (
+                <>
+                  {" "}
+                  This node runs in a shared worktree, so the engine caps it to one agent at a
+                  time (failover still applies).
+                </>
+              )}
+            </p>
+          </div>
         </div>
 
         <AgentDraftPrToggle scope={scope} node={node} />
@@ -950,6 +1167,8 @@ interface TriggerCfg {
   labelsIgnore: string[];
   ignoreDrafts: boolean;
   commentPhrase: string;
+  /** Grace period (seconds) before the review starts; 0 = start at once. */
+  delaySeconds: number;
 }
 
 function readStringArray(o: Record<string, unknown>, key: string): string[] {
@@ -975,6 +1194,10 @@ function readTriggerConfig(raw: unknown): TriggerCfg {
     ignoreDrafts: o.ignoreDrafts === true,
     commentPhrase:
       typeof o.commentPhrase === "string" ? o.commentPhrase : DEFAULT_COMMENT_PHRASE,
+    delaySeconds:
+      typeof o.delaySeconds === "number" && Number.isFinite(o.delaySeconds)
+        ? Math.max(0, Math.trunc(o.delaySeconds))
+        : 0,
   };
 }
 
@@ -989,6 +1212,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   const [labelsIgnore, setLabelsIgnore] = useState(initial.labelsIgnore.join(", "));
   const [ignoreDrafts, setIgnoreDrafts] = useState(initial.ignoreDrafts);
   const [commentPhrase, setCommentPhrase] = useState(initial.commentPhrase);
+  const [delaySeconds, setDelaySeconds] = useState(String(initial.delaySeconds));
   const set = useSetNodeConfig(scope);
 
   useEffect(() => {
@@ -1001,6 +1225,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
     setLabelsIgnore(initial.labelsIgnore.join(", "));
     setIgnoreDrafts(initial.ignoreDrafts);
     setCommentPhrase(initial.commentPhrase);
+    setDelaySeconds(String(initial.delaySeconds));
   }, [initial]);
 
   const toggleAction = (action: TriggerAction) => {
@@ -1023,6 +1248,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
         labelsIgnore: parseList(labelsIgnore),
         ignoreDrafts,
         commentPhrase: commentPhrase.trim() || DEFAULT_COMMENT_PHRASE,
+        delaySeconds: Math.min(86400, Math.max(0, Math.trunc(Number(delaySeconds) || 0))),
       },
     });
   };
@@ -1146,6 +1372,34 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
           />
         </div>
 
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <Label htmlFor={`delay-${node.id}`} className="text-sm font-medium">
+              Grace period before review
+            </Label>
+            <Input
+              id={`delay-${node.id}`}
+              type="number"
+              min={0}
+              max={86400}
+              step={1}
+              className="w-28"
+              value={delaySeconds}
+              onChange={(e) => setDelaySeconds(e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">seconds (0 = off)</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            After a pull-request event matches, wait this long before reviewing, then
+            re-read the PR: the review is cancelled if the PR was merged or closed, or
+            picked up one of the <span className="font-medium">labels ignore</span>{" "}
+            labels meanwhile. A run cancelled from the run page stops waiting too.
+            Comment-triggered reviews start at once. The wait lives in the server
+            process: a server restart inside the window drops that run (no review), like
+            any in-flight step.
+          </p>
+        </div>
+
         {set.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {(set.error as Error).message ?? "Save failed"}
@@ -1166,7 +1420,7 @@ function TriggerNodePanel({ scope, node, onClose }: TriggerNodePanelProps) {
   );
 }
 
-/* ─── github.pull_request_review trigger panel ────────────────── */
+/* ─── scm.pull_request_review trigger panel ────────────────── */
 
 const REVIEW_STATES = ["approved", "changes_requested", "commented", "dismissed"] as const;
 type ReviewState = (typeof REVIEW_STATES)[number];
@@ -1301,7 +1555,7 @@ function PullRequestReviewTriggerPanel({ scope, node, onClose }: PRReviewTrigger
   );
 }
 
-/* ─── github.projects_v2_item trigger panel ───────────────────── */
+/* ─── scm.board_item trigger panel ───────────────────── */
 
 const PROJECTS_V2_CONTENT_TYPES = ["Issue", "PullRequest", "DraftIssue"] as const;
 type ProjectsV2ContentType = (typeof PROJECTS_V2_CONTENT_TYPES)[number];
@@ -1610,45 +1864,3 @@ function parseList(text: string): string[] {
     .filter(Boolean);
 }
 
-/* ─── Reviewer detection ────────────────────────────────────────── */
-
-/**
- * A "reviewer" node, in the multi-agent review flow, is any agent node that
- * feeds the synthesizer. Anchoring on the synthesizer (rather than "the PR
- * trigger") keeps detection correct when a graph has more than one PR trigger
- * — e.g. development-lifecycle's independent single-review component, whose
- * `single_reviewer` feeds its own post_review, NOT the synthesizer, so it is
- * correctly excluded. Purely structural, so added reviewers retain the role.
- */
-export function deriveReviewerIds(graph: {
-  nodes: Array<{ id: string; kind: string }>;
-  edges: Array<{ source: string; target: string }>;
-}): Set<string> {
-  const synth = graph.nodes.find(
-    (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-  );
-  if (!synth) return new Set();
-  const ids = new Set<string>();
-  for (const n of graph.nodes) {
-    if (n.kind !== "agent") continue;
-    if (n.id === synth.id) continue;
-    const toSynth = graph.edges.some((e) => e.source === n.id && e.target === synth.id);
-    if (toSynth) ids.add(n.id);
-  }
-  return ids;
-}
-
-/**
- * A flow exposes the add/remove-reviewer controls when its graph has the
- * fan-out review shape — a PR trigger feeding one or more reviewer agents that
- * feed a synthesizer. Detecting this structurally (instead of by slug) means
- * the controls light up for any flow with the shape: the standalone
- * `pr-review-multi`, the `development-lifecycle` review stage, and any future
- * flow built the same way.
- */
-export function hasMultiReviewShape(graph: {
-  nodes: Array<{ id: string; kind: string }>;
-  edges: Array<{ source: string; target: string }>;
-}): boolean {
-  return deriveReviewerIds(graph).size > 0;
-}

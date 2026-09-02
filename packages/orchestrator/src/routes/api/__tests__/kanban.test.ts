@@ -33,7 +33,7 @@ describe("labelForImplementStatus", () => {
       "Preparing worktree…",
     );
     assert.equal(
-      labelForImplementStatus("running", "github.post_review"),
+      labelForImplementStatus("running", "scm.post_review"),
       "Posting review…",
     );
   });

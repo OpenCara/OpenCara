@@ -12,6 +12,7 @@ import {
   rmSync,
   existsSync,
   realpathSync,
+  statSync,
   writeFileSync,
   renameSync,
   symlinkSync,
@@ -67,25 +68,71 @@ function worktreeCreate(args: string[]): void {
   // `~/.opencara/sessions/<key>/`, and reads any pre-existing session
   // file to seed conversation resume.
   const rawKey = pickFlag(args, "--key") ?? pickFlag(args, "--session-key");
-  if (!repo || !branch) {
-    fail("worktree create requires --repo OWNER/NAME and --branch <name>");
+  // Platform-neutral overrides, both optional so an older orchestrator that
+  // sends neither keeps the exact GitHub behaviour this command shipped with.
+  //
+  // --clone-url: full HTTPS remote. Azure DevOps repos are three segments
+  //   (org/project/_git/repo), which `--repo OWNER/NAME` cannot express.
+  // --auth-user: username half of the basic-auth pair. GitHub requires the
+  //   literal "x-access-token"; Azure DevOps accepts any non-empty value.
+  const cloneUrlFlag = pickFlag(args, "--clone-url");
+  const authUser = pickFlag(args, "--auth-user") ?? "x-access-token";
+
+  if (!branch) {
+    fail("worktree create requires --branch <name>");
+  }
+  if (!repo && !cloneUrlFlag) {
+    fail("worktree create requires --repo OWNER/NAME or --clone-url <url>");
   }
   if (!rawKey) {
     fail("worktree create requires --key <slug>");
   }
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+  // Only validate --repo's shape when it is the thing we'll build a URL from.
+  // With --clone-url present, --repo is just a label (Azure DevOps sends
+  // "org/project" there, which has its own segment count).
+  if (!cloneUrlFlag && repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     fail(`invalid --repo '${repo}' (expected OWNER/NAME)`);
   }
-  const token = process.env["GH_TOKEN"];
+  if (cloneUrlFlag && !/^https:\/\/[\w.-]+\//.test(cloneUrlFlag)) {
+    // Reject non-HTTPS and anything that isn't a plain URL: this value ends up
+    // in a `git clone` argv, so a `--upload-pack=...`-shaped string here would
+    // be an argument-injection vector.
+    fail(`invalid --clone-url '${cloneUrlFlag}' (expected an https:// URL)`);
+  }
+  if (!/^[\w.-]+$/.test(authUser)) {
+    fail("--auth-user contains unexpected characters; refusing to use");
+  }
+  // OPENCARA_SCM_TOKEN is the platform-neutral name; GH_TOKEN stays supported
+  // because every currently-deployed orchestrator injects that one, and agents
+  // in existing prompts reference it by name.
+  const token = process.env["OPENCARA_SCM_TOKEN"] ?? process.env["GH_TOKEN"];
   if (!token) {
-    fail("worktree create needs GH_TOKEN in env (the orchestrator injects this per run)");
+    fail(
+      "worktree create needs GH_TOKEN or OPENCARA_SCM_TOKEN in env (the orchestrator injects this per run)",
+    );
   }
   // Sanity-check the token shape so a fat-fingered env doesn't smuggle
-  // shell metachars into the credential helper string. GitHub
-  // installation tokens are ASCII alphanumerics; reject anything else
-  // before it lands in a `git -c` value.
-  if (!/^[\w-]+$/.test(token)) {
-    fail("GH_TOKEN contains unexpected characters; refusing to use");
+  // shell metachars into the credential helper string before it lands in
+  // a `git -c` value.
+  //
+  // `.` IS allowed: GitHub is rolling out a second installation-token
+  // format alongside the classic 40-char `ghs_`+alphanumerics one — a
+  // ~390-char `ghs_<48>.<254>.<86>` (three dot-separated segments,
+  // JWT-shaped). Both authenticate fine, and which one you get varies
+  // per mint call, so an alphanumerics-only guard rejected a growing
+  // random ~4%+ of otherwise-valid runs (flow run 01KYS8NYV68M2P2TAP1K97AFAJ:
+  // "worktree allocation ... GH_TOKEN contains unexpected characters").
+  //
+  // This is defense-in-depth, not a correctness requirement: HELPER_SNIPPET
+  // below references the token by NAME ($OPENCARA_SCM_TOKEN), so the value
+  // never reaches argv or .git/config. Whitespace, quotes, $ and backticks —
+  // the characters that would actually matter — stay rejected.
+  //
+  // Microsoft Entra access tokens (Azure DevOps) are JWTs: three base64url
+  // segments separated by `.`, so they pass the same guard. base64url uses
+  // only [A-Za-z0-9_-], all within [\w.-].
+  if (!/^[\w.-]+$/.test(token)) {
+    fail("SCM token contains unexpected characters; refusing to use");
   }
 
   const key = safeKey(rawKey);
@@ -116,22 +163,31 @@ function worktreeCreate(args: string[]): void {
     );
   }
   // safeKey takes "owner/name" → "owner/name" (segments sanitized),
-  // which is the natural cache layout.
-  const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo)) : null;
+  // which is the natural cache layout. `repo` is a label under --clone-url,
+  // so fall back to the key when it's absent.
+  const cacheDir = useCache ? join(CACHE_ROOT, safeKey(repo || rawKey)) : null;
+  const baseGitEnv: NodeJS.ProcessEnv = { ...process.env };
+  // Normalize onto one variable name so the helper snippet below has a single
+  // thing to reference regardless of which one the orchestrator injected.
+  baseGitEnv["OPENCARA_SCM_TOKEN"] = token;
   const gitEnv: NodeJS.ProcessEnv | undefined =
     useCache && !useLfs
-      ? { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
-      : undefined;
+      ? { ...baseGitEnv, GIT_LFS_SKIP_SMUDGE: "1" }
+      : baseGitEnv;
 
   // The credential helper is a single-quoted shell snippet that git
-  // execs via /bin/sh on auth challenge. It references $GH_TOKEN by
-  // NAME — the token value never enters argv (process listings) or
+  // execs via /bin/sh on auth challenge. It references the token by
+  // NAME — the value never enters argv (process listings) or
   // .git/config. Installed inline at clone time AND persisted in the
   // worktree's .git/config so a downstream `git push`/`git fetch`
   // also picks up the agent's per-run token.
+  //
+  // The username differs by platform (GitHub demands the literal
+  // "x-access-token"; Azure DevOps accepts anything), so it is interpolated —
+  // safe because --auth-user is validated against [\w.-] above.
   const HELPER_SNIPPET =
-    '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f';
-  const cleanUrl = `https://github.com/${repo}.git`;
+    `!f() { echo username=${authUser}; echo "password=$OPENCARA_SCM_TOKEN"; }; f`;
+  const cleanUrl = cloneUrlFlag ?? `https://github.com/${repo}.git`;
 
   mkdirSync(sessionDir, { recursive: true });
 
@@ -218,8 +274,20 @@ function worktreeCreate(args: string[]): void {
   // removes stale debris. If even those fail (broken HEAD or partial
   // objects/), the outer catch nukes the dir and falls through to
   // the fresh-clone path.
+  // Everything from here to the end of the clone below mutates one
+  // shared directory, so it runs under the per-key allocation lock.
+  const releaseCheckoutLock = acquireCheckoutLock(`${checkoutDir}.lock`);
+
   let reused = false;
-  if (existsSync(join(checkoutDir, ".git"))) {
+  // Probe `.git/HEAD`, not `.git/`: `git clone` creates `.git/` early and
+  // fills it in incrementally, with HEAD landing near the end — so a
+  // crashed clone leaves behind a `.git/` that no amount of in-place
+  // repair can salvage. Every command against it dies with "ambiguous
+  // argument 'HEAD'", which is exactly the state that opened flow run
+  // 01M13SNSCY6YTFANP1SPEC7TM0. Treating that as "no checkout" sends it
+  // straight down the wipe-and-clone path instead of running the repair
+  // sequence on rubble. Same probe the cache TOCTOU guard above uses.
+  if (existsSync(join(checkoutDir, ".git", "HEAD"))) {
     try {
       git(checkoutDir, ["reset", "--hard", "HEAD"], gitEnv);
       git(checkoutDir, ["clean", "-fdx"], gitEnv);
@@ -257,13 +325,26 @@ function worktreeCreate(args: string[]): void {
           (err as Error).message
         }); re-cloning`,
       );
-      rmSync(checkoutDir, { recursive: true, force: true });
+      // The whole point of this catch is that a bad iteration can't
+      // permanently poison the key — so a throwing rm defeats it
+      // entirely. Unguarded, it escaped as an unhandled exception and
+      // took the allocation down with a message about the cleanup
+      // rather than the actual problem (flow run
+      // 01M13SNHM4Y4JGTY4HPKVXW32X: "ENOTEMPTY: rmdir …/checkout/.git").
+      try {
+        rmDir(checkoutDir);
+      } catch (rmErr) {
+        fail(
+          `worktree create: could not clear ${checkoutDir} for re-clone ` +
+            `(${(rmErr as Error).message})`,
+        );
+      }
     }
   } else if (existsSync(checkoutDir)) {
-    // `.git/` is missing but the dir exists (a half-built clone from
+    // No usable `.git/HEAD` but the dir exists (a half-built clone from
     // a crashed prior run) — wipe so the clone below doesn't trip
     // on stale files.
-    rmSync(checkoutDir, { recursive: true, force: true });
+    rmDir(checkoutDir);
   }
   if (!reused) {
     mkdirSync(checkoutDir, { recursive: true });
@@ -307,13 +388,15 @@ function worktreeCreate(args: string[]): void {
     } catch (err) {
       // Best-effort cleanup of the half-built dir before bubbling.
       try {
-        rmSync(checkoutDir, { recursive: true, force: true });
+        rmDir(checkoutDir);
       } catch {
         /* ignore */
       }
       throw err;
     }
   }
+
+  releaseCheckoutLock();
 
   let priorSession: { kind: string; id: string } | null = null;
   const sessionFile = join(sessionDir, "agent-session.json");
@@ -411,6 +494,191 @@ function worktreeRemove(args: string[]): void {
     }
     rmSync(resolved, { recursive: true, force: true });
   }
+}
+
+// How long a contender waits for the per-key allocation lock before
+// giving up. Generous on purpose: the holder may be doing a cold clone
+// of a large repo, and waiting is always cheaper than the corruption
+// that racing produces.
+const LOCK_TIMEOUT_MS = 15 * 60_000;
+// Last-resort escape hatch: a lock this old is broken even if its owner
+// still looks alive, so a wedged allocator — or a dead one whose pid the
+// OS has since handed to an unrelated process — can't poison a key
+// forever. Deliberately well beyond both LOCK_TIMEOUT_MS and any
+// plausible clone, because breaking a lock someone is genuinely holding
+// re-creates the very race this lock exists to prevent.
+const LOCK_STALE_MS = 60 * 60_000;
+const LOCK_POLL_MS = 100;
+// Covers the window between mkdir'ing the lock and writing the owner pid
+// into it, so a lock taken microseconds ago is never mistaken for one
+// whose holder died before it could identify itself.
+const LOCK_GRACE_MS = 5_000;
+
+/**
+ * `rm -rf` that tolerates a racing writer inside the tree.
+ *
+ * Node only retries ENOTEMPTY/EBUSY/EPERM when `maxRetries` is set; at
+ * the default of 0, a single file appearing while `rm` walks the
+ * directory is enough to make removal throw.
+ */
+function rmDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+/**
+ * Block the thread for `ms`. The allocation path is `execFileSync` from
+ * end to end, so a lock wait has to block too — `Atomics.wait` is the
+ * only synchronous sleep Node offers.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** True while the process that took `lockPath` is still running. */
+/**
+ * The pid recorded inside `lockPath`, or null when there isn't a usable
+ * one — a lock from an older CLI, or one whose holder died between the
+ * mkdir and the write. The grace window in `lockIsStale` is what keeps
+ * that "null" from stealing a lock taken microseconds ago.
+ */
+function readLockOwner(lockPath: string): number | null {
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(join(lockPath, "owner"), "utf8").trim(), 10);
+  } catch {
+    return null;
+  }
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function lockOwnerAlive(lockPath: string): boolean {
+  const pid = readLockOwner(lockPath);
+  if (pid === null) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means it exists but belongs to another user — still alive.
+    // Only ESRCH is proof the holder is gone.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function lockIsStale(lockPath: string): boolean {
+  let ageMs: number;
+  try {
+    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+  } catch {
+    return false; // Vanished — the next acquire attempt just takes it.
+  }
+  if (ageMs < LOCK_GRACE_MS) return false;
+  return !lockOwnerAlive(lockPath) || ageMs > LOCK_STALE_MS;
+}
+
+/**
+ * Take the exclusive allocation lock for one per-key checkout, returning
+ * the release callback.
+ *
+ * A single flow run fans sibling agent nodes out in parallel (two
+ * reviewers on the same PR, say), and they share one worktree key — so
+ * two `worktree create` processes routinely open on the same checkout
+ * directory in the same millisecond. Unserialized they destroy each
+ * other, both ways seen in production on 2026-08-28:
+ *
+ *   1. Both take the repair path and both `rm -rf` the tree; whichever
+ *      loses the walk race dies on `ENOTEMPTY: rmdir …/checkout/.git`
+ *      (flow run 01M13SNHM4Y4JGTY4HPKVXW32X).
+ *   2. One re-creates the directory and starts `git clone` in it while
+ *      the other's `rm -rf` deletes that directory underneath — the
+ *      clone's own cwd disappears mid-flight ("sh: 0: getcwd() failed",
+ *      "could not lock config file …/.git/config") (flow run
+ *      01M13SNSCY6YTFANP1SPEC7TM0).
+ *
+ * Cache-prep next door serializes with flock(1), but that binary ships
+ * with util-linux and is absent from a stock macOS — tolerable there
+ * because `--cache-repo` is opt-in, and not tolerable here because every
+ * allocation on every host takes this path. So the lock is built on the
+ * one primitive every platform makes atomic: mkdir(2). The cost is that
+ * the kernel won't drop it for us, hence the staleness probe above and
+ * the exit hook below.
+ */
+function acquireCheckoutLock(lockPath: string): () => void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      // Deliberately non-recursive: `mkdir` of an existing path is the
+      // atomic test-and-set this whole lock rests on.
+      mkdirSync(lockPath);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (Date.now() > deadline) {
+      fail(
+        `worktree create: gave up after ${Math.round(LOCK_TIMEOUT_MS / 60_000)}m ` +
+          `waiting for the allocation lock at ${lockPath} — if no other ` +
+          `'opencara internal worktree create' is running on this host, ` +
+          `remove that directory`,
+      );
+    }
+    if (lockIsStale(lockPath)) {
+      // Claim the break with a rename rather than removing in place:
+      // `statSync`-then-`rmDir` is not atomic, so two waiters that both
+      // judged the lock stale could each remove and mkdir, and both
+      // proceed. Only one rename can win — the loser gets ENOENT and
+      // re-loops — so the break itself is single-winner.
+      try {
+        renameSync(lockPath, `${lockPath}.stale.${process.pid}`);
+      } catch {
+        // Another waiter won the break, or the holder released on its
+        // own. Either way the next iteration re-evaluates.
+      }
+      try {
+        rmDir(`${lockPath}.stale.${process.pid}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    sleepSync(LOCK_POLL_MS);
+  }
+
+  // Advisory: identifies us to the staleness probe. Best-effort — a lock
+  // with no readable owner is treated as dead once past the grace window,
+  // which is the safe direction to fail.
+  try {
+    writeFileSync(join(lockPath, "owner"), `${process.pid}\n`);
+  } catch {
+    /* ignore */
+  }
+
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    // Only remove a lock that is still OURS. If a waiter judged us stale
+    // and broke the lock, the directory now under `lockPath` belongs to
+    // that waiter — deleting it would hand a third process a free
+    // acquire and put two allocators back in one checkout, which is the
+    // exact failure this lock exists to prevent, just one step further
+    // out. A lock we can't prove is ours is left to the staleness probe.
+    if (readLockOwner(lockPath) !== process.pid) return;
+    try {
+      rmDir(lockPath);
+    } catch {
+      // Leave it to the staleness probe rather than failing an
+      // allocation that has otherwise succeeded.
+    }
+  };
+  // `fail()` calls process.exit, which skips `finally` blocks, and a
+  // thrown error exits too — the exit hook is what makes sure neither
+  // path strands the lock. A SIGKILL still can, which is precisely what
+  // the staleness probe is for.
+  process.once("exit", release);
+  return () => {
+    process.removeListener("exit", release);
+    release();
+  };
 }
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): void {

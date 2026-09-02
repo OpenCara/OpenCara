@@ -6,13 +6,12 @@ import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
 import {
   agentRuns,
-  flowNodeSettings,
   flowRuns,
   flowRunSteps,
   flows,
   platformEvents,
 } from "../../db/schema.js";
-import { FlowDefinitionSchema } from "@opencara/flows";
+import { FlowDefinitionSchema, cloneAndNormalizeGraph, LEGACY_BUILTIN_FLOW_SLUGS } from "@opencara/flows";
 import {
   validateCron,
   nextCronOccurrences,
@@ -21,7 +20,9 @@ import {
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resetProjectFlowToTemplate } from "../../flows/builtin.js";
+import { cancelFlowRun } from "../../flows/cancelRun.js";
 import type { FlowEngine } from "../../flows/engine.js";
+import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
 import {
   FLOW_RUNS_CHANNEL,
   parseFlowRunsNotify,
@@ -32,6 +33,7 @@ interface FlowRoutesDeps {
   db: Db;
   pg: Sql;
   flowEngine?: FlowEngine;
+  dispatcher?: AgentDispatcher;
 }
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
@@ -49,7 +51,13 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const rows = await deps.db.query.flows.findMany({
       where: eq(flows.projectId, projectId),
     });
-    return c.json({ flows: rows });
+    // A retired built-in (the unified development-lifecycle flow, disabled by
+    // the split migration) keeps its row for run history but is not offered
+    // as a flow any more. Re-enabling it is not a supported path.
+    const visible = rows.filter(
+      (f) => f.enabled || !LEGACY_BUILTIN_FLOW_SLUGS.includes(f.slug),
+    );
+    return c.json({ flows: visible });
   });
 
   // Single flow detail with recent runs
@@ -183,167 +191,6 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       const updated = await deps.db.query.flows.findFirst({
         where: eq(flows.id, flow.id),
       });
-      return c.json({ flow: updated });
-    },
-  );
-
-  // Add a reviewer node to a multi-agent review flow. Clones the first
-  // existing reviewer (any node with edges trigger→X→synthesizer) so
-  // the new node inherits a sane shape, then wires trigger → new and
-  // new → synthesizer. Sets customizedAt to lock the seeder out.
-  r.post("/projects/:projectId/flows/:flowId/reviewers", auth, async (c) => {
-    const projectId = c.req.param("projectId");
-    const flowId = c.req.param("flowId");
-    const user = c.get("user")!;
-    const owned = await loadOwnedProject(deps.db, projectId, user.id);
-    if (!owned) return c.json({ error: "flow not found in project" }, 404);
-    const flow = await deps.db.query.flows.findFirst({
-      where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
-    });
-    if (!flow) return c.json({ error: "flow not found in project" }, 404);
-
-    const graph = parseGraph(flow.graphJson);
-    if (!graph) return c.json({ error: "flow graph invalid" }, 400);
-
-    // Anchor on the synthesizer: reviewers are the agents feeding it. This is
-    // robust to graphs with more than one PR trigger (e.g. development-lifecycle's
-    // independent single-review component, whose reviewer feeds its own post,
-    // not the synthesizer).
-    const synth = graph.nodes.find(
-      (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-    );
-    if (!synth) {
-      return c.json({ error: "flow shape not supported (need a synthesizer node)" }, 400);
-    }
-    const reviewerNodes = graph.nodes.filter(
-      (n) =>
-        n.kind === "agent" &&
-        graph.edges.some((e) => e.source === n.id && e.target === synth.id),
-    );
-    const template = reviewerNodes[0];
-    if (!template) {
-      return c.json(
-        { error: "no reviewer node to clone — add the first one in code" },
-        400,
-      );
-    }
-    // Wire the new reviewer to the SAME PR trigger that feeds the existing
-    // reviewers (not any/the first PR trigger in the graph).
-    const triggerEdge = graph.edges.find((e) => e.target === template.id);
-    const trigger = triggerEdge
-      ? graph.nodes.find(
-          (n) => n.id === triggerEdge.source && n.kind === "github.pull_request",
-        )
-      : undefined;
-    if (!trigger) {
-      return c.json(
-        { error: "flow shape not supported (no PR trigger feeding the reviewers)" },
-        400,
-      );
-    }
-
-    const newId = `reviewer_${ulid().slice(-8).toLowerCase()}`;
-    const newNode = {
-      ...JSON.parse(JSON.stringify(template)),
-      id: newId,
-      position: {
-        x: template.position.x,
-        y: Math.max(...reviewerNodes.map((r) => r.position.y)) + 160,
-      },
-    };
-    if (newNode.config && typeof newNode.config === "object") {
-      newNode.config.label = `Reviewer ${reviewerNodes.length + 1}`;
-    }
-
-    graph.nodes.push(newNode);
-    graph.edges.push(
-      { id: `e_t_${newId}`, source: trigger.id, target: newId },
-      { id: `e_${newId}_s`, source: newId, target: synth.id },
-    );
-
-    await deps.db
-      .update(flows)
-      .set({
-        graphJson: graph,
-        customizedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(flows.id, flow.id));
-
-    const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
-    return c.json({ flow: updated, addedNodeId: newId });
-  });
-
-  // Remove a reviewer node. Refuses if it's the last reviewer between trigger
-  // and synthesizer. Removes incident edges and clears any flow_node_settings
-  // for the orphaned node so a future node with the same id starts clean.
-  r.delete(
-    "/projects/:projectId/flows/:flowId/reviewers/:nodeId",
-    auth,
-    async (c) => {
-      const projectId = c.req.param("projectId");
-      const flowId = c.req.param("flowId");
-      const nodeId = c.req.param("nodeId");
-      const user = c.get("user")!;
-      const owned = await loadOwnedProject(deps.db, projectId, user.id);
-      if (!owned) return c.json({ error: "flow not found in project" }, 404);
-      const flow = await deps.db.query.flows.findFirst({
-        where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
-      });
-      if (!flow) return c.json({ error: "flow not found in project" }, 404);
-      const graph = parseGraph(flow.graphJson);
-      if (!graph) return c.json({ error: "flow graph invalid" }, 400);
-
-      // Synth-anchored (see the POST handler): reviewers are the agents feeding
-      // the synthesizer, so a second PR trigger / single-review node is ignored.
-      const synth = graph.nodes.find(
-        (n) => n.kind === "agent" && (n.id === "synthesizer" || /synth/i.test(n.id)),
-      );
-      if (!synth) return c.json({ error: "flow shape not supported" }, 400);
-
-      const reviewerIds = new Set(
-        graph.nodes
-          .filter(
-            (n) =>
-              n.kind === "agent" &&
-              graph.edges.some((e) => e.source === n.id && e.target === synth.id),
-          )
-          .map((n) => n.id),
-      );
-      if (!reviewerIds.has(nodeId)) {
-        return c.json({ error: "node is not a reviewer in this flow" }, 400);
-      }
-      if (reviewerIds.size <= 1) {
-        return c.json(
-          { error: "cannot remove the last reviewer — synthesizer would have no input" },
-          400,
-        );
-      }
-
-      graph.nodes = graph.nodes.filter((n) => n.id !== nodeId);
-      graph.edges = graph.edges.filter((e) => e.source !== nodeId && e.target !== nodeId);
-
-      await deps.db
-        .update(flows)
-        .set({
-          graphJson: graph,
-          customizedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(flows.id, flow.id));
-
-      // Cleanup any per-node settings (label / agent / prompt link) for the
-      // removed node so a re-added node with the same id starts clean.
-      await deps.db
-        .delete(flowNodeSettings)
-        .where(
-          and(
-            eq(flowNodeSettings.flowId, flow.id),
-            eq(flowNodeSettings.nodeId, nodeId),
-          ),
-        );
-
-      const updated = await deps.db.query.flows.findFirst({ where: eq(flows.id, flow.id) });
       return c.json({ flow: updated });
     },
   );
@@ -665,16 +512,13 @@ export function flowRoutes(deps: FlowRoutesDeps) {
   });
 
   // Cancel a running flow run. Mirrors the per-wave cancel in /pm: flip the
-  // row to `cancelled` only if still non-terminal (guarded UPDATE), then ping
-  // the flow_runs LISTEN channel so any SSE stream and the kanban board see
-  // the new status without waiting for the next poll tick.
-  //
-  // The agent_run rows referenced by the in-flight step keep their status —
-  // the engine notices the cancelled parent on its next tick and stops
-  // assigning new agent runs. A live agent process is *not* signalled to
-  // stop from this endpoint; the typical implement run is short enough that
-  // the agent finishes naturally and the cancelled status on the flow_run
-  // is what the UI cares about.
+  // row to `cancelled` only if still non-terminal (guarded UPDATE), cancel
+  // the in-flight agent_runs and signal their device (best-effort — the DB
+  // write is the load-bearing state either way), then ping the flow_runs
+  // LISTEN channel so any SSE stream and the kanban board see the new
+  // status without waiting for the next poll tick. The engine's own
+  // terminal write is status-guarded, so the finished agent can't flip
+  // this run back to succeeded/failed.
   r.post("/flow-runs/:id/cancel", auth, async (c) => {
     const id = c.req.param("id");
     const user = c.get("user")!;
@@ -688,35 +532,15 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     if (run.status !== "pending" && run.status !== "running") {
       return c.json({ error: "already terminal" }, 409);
     }
-    // The status predicate races against the engine's own terminal write
-    // (the run could finish between the SELECT above and this UPDATE).
-    // `.returning()` lets us tell honestly whether we actually cancelled,
-    // so a no-op UPDATE returns 409 instead of pretending we stopped a
-    // run that just finished.
-    const updated = await deps.db
-      .update(flowRuns)
-      .set({
-        status: "cancelled",
-        cancelReason: "user_stopped",
-        finishedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(flowRuns.id, id),
-          inArray(flowRuns.status, ["pending", "running"]),
-        ),
-      )
-      .returning({ id: flowRuns.id });
-    if (updated.length === 0) {
+    const result = await cancelFlowRun(
+      { db: deps.db, pg: deps.pg, dispatcher: deps.dispatcher },
+      { id, projectId: run.projectId },
+      { db: "user_stopped", wire: "user_stopped" },
+    );
+    if (!result.cancelled) {
       return c.json({ error: "already terminal" }, 409);
     }
-    // Wake SSE listeners (both /flow-runs/:id/events/stream and the kanban
-    // board, which LISTENs on `flow_runs` to refresh implement statuses).
-    void deps.pg.notify(
-      FLOW_RUNS_CHANNEL,
-      serializeFlowRunsNotify({ flowRunId: id, projectId: run.projectId }),
-    );
-    return c.json({ ok: true });
+    return c.json({ ok: true, signalled: result.signalled });
   });
 
   r.get("/flow-runs/:id", auth, async (c) => {
@@ -843,7 +667,8 @@ async function loadFlowRunSnapshot(db: Db, id: string) {
   if (!run) return null;
   const steps = await db.query.flowRunSteps.findMany({
     where: eq(flowRunSteps.flowRunId, id),
-    orderBy: [flowRunSteps.idx],
+    // Agent-pool attempts share a node's idx; attempt orders them within it.
+    orderBy: [flowRunSteps.idx, flowRunSteps.attempt],
   });
   const stepIds = steps.map((s) => s.id);
   // Project only the fields the snapshot consumer needs. Excluding `spec`
@@ -952,9 +777,11 @@ function parseGraph(raw: unknown): MutableGraph | null {
   if (!raw || typeof raw !== "object") return null;
   const g = raw as MutableGraph;
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) return null;
-  // Defensive deep clone so callers mutate a fresh object — avoids accidentally
-  // mutating drizzle's cached row reference.
-  return JSON.parse(JSON.stringify(g)) as MutableGraph;
+  // Deep clone (drizzle's row reference must not be mutated) + canonicalize
+  // kinds. This helper deliberately skips FlowDefinitionSchema — it must
+  // tolerate graphs that no longer validate — so it misses the schema's
+  // `github.*` → `scm.*` rewrite and has to apply it explicitly.
+  return cloneAndNormalizeGraph(g);
 }
 
 function clampLimit(v: string | undefined): number {

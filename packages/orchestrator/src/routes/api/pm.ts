@@ -12,11 +12,14 @@ import type { Db } from "../../db/client.js";
 import { flowRuns, pmWaveItems, pmWaves } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { cancelFlowRunAgents } from "../../flows/cancelAgents.js";
 import type { FlowEngine } from "../../flows/engine.js";
+import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
 
 interface PmRoutesDeps {
   db: Db;
   flowEngine?: FlowEngine;
+  dispatcher?: AgentDispatcher;
 }
 
 const WAVE_LIMIT = 20;
@@ -92,6 +95,17 @@ export function pmRoutes(deps: PmRoutesDeps) {
               inArray(flowRuns.status, ["pending", "running"]),
             ),
           );
+        // Kill the agent processes behind this run, not just the rows —
+        // otherwise every wave item's agent keeps executing on its device
+        // after the wave reads "cancelled".
+        if (deps.dispatcher) {
+          await cancelFlowRunAgents(
+            deps.db,
+            deps.dispatcher,
+            item.flowRunId,
+            "wave_cancelled",
+          );
+        }
       } catch (err) {
         console.warn("[pm] cancel flow run failed", { flowRunId: item.flowRunId, err });
       }
