@@ -35,6 +35,8 @@ export interface RawSubject {
   /** Set on `issue`-keyed payloads when the issue is actually a PR
    *  (issue_comment on a pull request). */
   isPr?: boolean | null;
+  /** Platform browser URL carried by the payload itself (Azure PR events). */
+  url?: string | null;
   /** push only */
   ref?: string | null;
   compare?: string | null;
@@ -62,11 +64,13 @@ export function buildSubject(
       const isPr = raw.kind === "pull_request" || raw.isPr === true;
       if (number == null) return null;
       if (isPr) {
-        const url = base
-          ? platform === "azure_devops"
-            ? `${base}/pullrequest/${number}`
-            : `${base}/pull/${number}`
-          : null;
+        const url =
+          (typeof raw.url === "string" && /^https?:\/\//.test(raw.url) ? raw.url : null) ??
+          (base
+            ? platform === "azure_devops"
+              ? `${base}/pullrequest/${number}`
+              : `${base}/pull/${number}`
+            : null);
         return { kind: "pull_request", number, title, url, label: `PR #${number}` };
       }
       const url = base && platform === "github" ? `${base}/issues/${number}` : null;
