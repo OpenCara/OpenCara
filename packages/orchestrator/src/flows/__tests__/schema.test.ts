@@ -302,15 +302,14 @@ describe("the four stage built-in flows", () => {
     }
   });
 
-  it("shares the implement branch template with the fix stage for worktree reuse", () => {
+  it("runs the implement and fix stages in a worktree without a configured branch", () => {
     const implement = builtinFlows["issue-implement"]!.nodes.find((n) => n.id === "implement");
     const fix = builtinFlows["pr-review-fix"]!.nodes.find((n) => n.id === "fix");
-    assert.equal(
-      implement?.kind === "agent" && implement.config.worktree?.branchName,
-      "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
-    );
-    // The fix stage's PR head ref IS `opencara/issue-<n>`, so its branch
-    // template resolves to the same per-(repo, branch) worktree slug.
-    assert.equal(fix?.kind === "agent" && fix.config.worktree?.branchName, "{{OPENCARA_PR_HEAD_REF}}");
+    // The branch is derived from the trigger (issue → opencara/issue-<n>,
+    // PR → head ref); nothing in the graph names it any more.
+    for (const node of [implement, fix]) {
+      assert.ok(node?.kind === "agent" && node.config.worktree, node?.id);
+      assert.ok(!("branchName" in (node.config.worktree as object)));
+    }
   });
 });

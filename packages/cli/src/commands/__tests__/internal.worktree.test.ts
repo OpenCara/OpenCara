@@ -919,3 +919,118 @@ describe("internal worktree create — platform-neutral clone flags", () => {
     }
   });
 });
+
+describe("internal worktree gc — stale checkout sweep", () => {
+  it("removes old checkouts not in --keep, keeps fresh ones and kept keys, and prunes orphan session dirs", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-gc-"));
+    try {
+      const home = join(root, "home");
+      const work = join(home, ".opencara", "work");
+      const sessions = join(home, ".opencara", "sessions");
+      const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      const mk = (key: string, stale: boolean) => {
+        const dir = join(work, key);
+        mkdirSync(join(dir, "checkout", ".git"), { recursive: true });
+        writeFileSync(join(dir, "checkout", ".git", "index"), "");
+        mkdirSync(join(sessions, key), { recursive: true });
+        writeFileSync(join(sessions, key, "agent-session.json"), "{}");
+        if (stale) {
+          for (const p of [dir, join(dir, "checkout"), join(dir, "checkout", ".git", "index"), join(sessions, key)]) {
+            utimesSync(p, old, old);
+          }
+        }
+      };
+      mk("acme/app/step-old", true);
+      mk("acme/app/step-live", true); // old but pinned → kept
+      mk("acme/app/step-fresh", false);
+      mk("acme/app/branch-legacy", true);
+      // Session dir with no checkout at all, old → removed.
+      mkdirSync(join(sessions, "acme", "app", "step-ghost"), { recursive: true });
+      utimesSync(join(sessions, "acme", "app", "step-ghost"), old, old);
+      // An empty, old ancestor under sessions/ must NOT map onto work/<owner>/<repo>.
+      mkdirSync(join(sessions, "other", "repo"), { recursive: true });
+      mkdirSync(join(work, "other", "repo", "step-x", "checkout"), { recursive: true });
+      utimesSync(join(sessions, "other", "repo"), old, old);
+
+      const r = runInternal(
+        { ...process.env, HOME: home },
+        ["worktree", "gc", "--max-age-hours", "24", "--keep", "acme/app/step-live"],
+      );
+      assert.equal(r.status, 0, r.stderr);
+      const summary = JSON.parse(r.stdout.trim().split("\n").pop()!) as { removed: string[]; kept: string[] };
+      assert.deepEqual(summary.removed.sort(), [
+        "acme/app/branch-legacy",
+        "acme/app/step-ghost",
+        "acme/app/step-old",
+      ]);
+      assert.deepEqual(summary.kept.sort(), ["acme/app/step-fresh", "acme/app/step-live", "other/repo/step-x"]);
+      assert.ok(existsSync(join(work, "other", "repo", "step-x", "checkout")));
+      assert.ok(!existsSync(join(work, "acme/app/step-old")));
+      assert.ok(!existsSync(join(sessions, "acme/app/step-old")));
+      assert.ok(!existsSync(join(sessions, "acme/app/step-ghost")));
+      assert.ok(existsSync(join(work, "acme/app/step-live/checkout")));
+      assert.ok(existsSync(join(work, "acme/app/step-fresh/checkout")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a missing --max-age-hours", () => {
+    const r = runInternal({ ...process.env, HOME: mkdtempSync(join(tmpdir(), "opencara-wt-gc-")) }, ["worktree", "gc"]);
+    assert.notEqual(r.status, 0);
+  });
+});
+
+describe("internal worktree create — fresh clone reconciles with origin/<branch>", () => {
+  it("tracks an already-pushed origin/<branch> instead of branching off the base (per-attempt keys)", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-fresh-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      const repo = "owner/name";
+      const origin = join(root, "origin.git");
+      execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], { stdio: "ignore" });
+      const seed = join(root, "seed");
+      mkdirSync(seed);
+      git(seed, ["init", "--initial-branch=main"]);
+      git(seed, ["config", "user.email", "t@example.com"]);
+      git(seed, ["config", "user.name", "t"]);
+      writeFileSync(join(seed, "README"), "hi\n");
+      git(seed, ["add", "."]);
+      git(seed, ["commit", "-m", "init"]);
+      git(seed, ["remote", "add", "origin", origin]);
+      git(seed, ["push", "origin", "main"]);
+      // A prior attempt pushed work to opencara/issue-7.
+      git(seed, ["checkout", "-b", "opencara/issue-7"]);
+      writeFileSync(join(seed, "work.txt"), "done\n");
+      git(seed, ["add", "."]);
+      git(seed, ["commit", "-m", "prior attempt"]);
+      git(seed, ["push", "origin", "opencara/issue-7"]);
+      // Point the CLI's github URL at the local bare origin (HOME is ours).
+      writeFileSync(
+        join(home, ".gitconfig"),
+        `[url "${origin}"]\n\tinsteadOf = https://github.com/${repo}.git\n`,
+      );
+
+      // Brand-new key (a retry / rerun), base = main.
+      const key = "owner/name/step-01RETRY";
+      const checkout = join(home, ".opencara", "work", key, "checkout");
+      const r = runInternal(
+        { ...process.env, HOME: home, GH_TOKEN: "ghs_test123" },
+        ["worktree", "create", "--repo", repo, "--branch", "opencara/issue-7",
+         "--from-branch", "main", "--key", key],
+      );
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(existsSync(join(checkout, "work.txt")), "checkout must contain the pushed commit");
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], { encoding: "utf8" }).trim();
+      assert.equal(head, "opencara/issue-7");
+      const upstream = execFileSync(
+        "git", ["-C", checkout, "rev-parse", "--abbrev-ref", "@{upstream}"], { encoding: "utf8" },
+      ).trim();
+      assert.equal(upstream, "origin/opencara/issue-7");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

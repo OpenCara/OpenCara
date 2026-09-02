@@ -609,27 +609,30 @@ export const agents = pgTable(
   }),
 );
 
-// Sticks a (owner_repo, branch) to the agent host that first ran a
-// worktree on it. The session-id file lives on that device under
-// ~/.opencara/sessions/<...>/agent-session.json — without pinning the
-// device we can't find the file on the next iteration, so the agent
-// would always start a fresh conversation. Pin is upserted by the
-// engine after every successful `git.create_worktree` dispatch and
-// pruned by the reaper after 30 days of inactivity (PRs typically
-// close before then).
+// One row per live checkout on a device: `key` is the on-device slug
+// (`<owner>/<repo>/step-<flow_run_steps id>`) and `host_id` is where it
+// lives, so teardown can dispatch `worktree remove --key` to the right
+// device. Written after a successful allocation, deleted when the attempt
+// finishes (worktrees/cleanup.ts `removeAttemptWorktree`); `(owner_repo,
+// branch)` is kept for PR-close cleanup and is NOT unique any more. Rows
+// older than a day are leftovers and get pruned.
 export const worktreePins = pgTable(
   "worktree_pins",
   {
     id: text("id").primaryKey(),
     ownerRepo: text("owner_repo").notNull(),
+    /** Git branch checked out in this worktree; PR-close cleanup keys on it. */
     branch: text("branch").notNull(),
+    /** On-device slug passed to `opencara internal worktree {create,remove} --key`. */
+    key: text("key").notNull(),
     hostId: text("host_id")
       .notNull()
       .references(() => agentHosts.id, { onDelete: "cascade" }),
     lastRunAt: timestamp("last_run_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    repoBranchUq: uniqueIndex("worktree_pins_repo_branch_uq").on(t.ownerRepo, t.branch),
+    keyUq: uniqueIndex("worktree_pins_key_uq").on(t.key),
+    repoBranchIdx: index("worktree_pins_repo_branch_idx").on(t.ownerRepo, t.branch),
     lastRunAtIdx: index("worktree_pins_last_run_at_idx").on(t.lastRunAt),
   }),
 );

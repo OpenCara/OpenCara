@@ -1,14 +1,11 @@
 import type { FlowDefinition } from "../types.js";
 
 // Stage 1 of the development cycle: a Projects v2 issue moving to Ready
-// dispatches the implement agent in a per-issue-branch worktree. The agent
-// commits, pushes and opens the PR; the PR-opened webhook then wakes the
-// `pr-review-multi` flow. Node ids are shared with the (now legacy) unified
-// `development-lifecycle` graph so account-scope settings carry over 1:1.
-//
-// The fix stage (`pr-review-fix`) resolves the SAME per-(repo, branch)
-// worktree — the PR's head ref is `opencara/issue-<n>` — so it reuses this
-// checkout and resumes the implementer's conversation.
+// dispatches the implement agent in a fresh worktree on the derived
+// `opencara/issue-<n>` branch. The agent commits, pushes and opens the PR;
+// the PR-opened webhook then wakes the `pr-review-multi` flow. Node ids are
+// shared with the (now legacy) unified `development-lifecycle` graph so
+// account-scope settings carry over 1:1.
 export const issueImplementFlow: FlowDefinition = {
   slug: "issue-implement",
   name: "Issue → Implement",
@@ -49,7 +46,6 @@ export const issueImplementFlow: FlowDefinition = {
         },
         worktree: {
           fromBranch: null, // = repo's default branch
-          branchName: "opencara/issue-{{OPENCARA_ISSUE_NUMBER}}",
           hostId: null,
         },
       },

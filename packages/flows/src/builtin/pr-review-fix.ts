@@ -1,9 +1,8 @@
 import type { FlowDefinition } from "../types.js";
 
 // Stage 3: a submitted review (or an `@opencara fix` comment) wakes the
-// implement agent again — in the SAME per-(repo, branch) worktree the
-// `issue-implement` flow allocated, resuming its conversation from
-// `agent-session.json` — to apply the feedback and optionally auto-merge.
+// implement agent again in a fresh checkout of the PR head ref (the branch
+// `issue-implement` pushed) to apply the feedback and optionally auto-merge.
 //
 // The fix agent pushing commits emits `pull_request.synchronize`, which the
 // `pr-review` flow picks up for the next lighter review round; `maxIterations`
@@ -63,13 +62,9 @@ export const prReviewFixFlow: FlowDefinition = {
           ],
           stdinJson: true,
         },
-        // Same branchName template as the implement stage (the PR's head ref
-        // equals `opencara/issue-<n>`), so the per-(repo, branch) pin lands
-        // this iteration on the implementer's device + checkout, where the
-        // agent-session.json lives.
+        // PR trigger → the engine checks out the PR head ref.
         worktree: {
-          fromBranch: "{{OPENCARA_PR_HEAD_REF}}",
-          branchName: "{{OPENCARA_PR_HEAD_REF}}",
+          fromBranch: null, // PR trigger: the PR head ref is checked out
           hostId: null,
         },
       },

@@ -325,35 +325,28 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
 });
 
 describe("effectivePoolShape", () => {
-  it("caps quorum to one slot on a worktree node (the reviewer-pool 'failed' paint)", () => {
+  it("keeps a satisfiable shape untouched (worktree nodes get one checkout per slot)", () => {
     assert.deepEqual(
-      effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5, worktree: true }),
-      { concurrency: 1, quorum: 1, forcedSingleSlot: true, quorumCapped: true },
-    );
-  });
-
-  it("keeps a satisfiable shape untouched", () => {
-    assert.deepEqual(
-      effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5, worktree: false }),
-      { concurrency: 2, quorum: 2, forcedSingleSlot: false, quorumCapped: false },
+      effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5 }),
+      { concurrency: 2, quorum: 2, quorumCapped: false },
     );
   });
 
   it("caps both to the candidate count and quorum to concurrency", () => {
     assert.deepEqual(
-      effectivePoolShape({ concurrency: 3, quorum: 3, candidateCount: 2, worktree: false }),
-      { concurrency: 2, quorum: 2, forcedSingleSlot: false, quorumCapped: true },
+      effectivePoolShape({ concurrency: 3, quorum: 3, candidateCount: 2 }),
+      { concurrency: 2, quorum: 2, quorumCapped: true },
     );
     assert.deepEqual(
-      effectivePoolShape({ concurrency: 1, quorum: 3, candidateCount: 4, worktree: false }),
-      { concurrency: 1, quorum: 1, forcedSingleSlot: false, quorumCapped: true },
+      effectivePoolShape({ concurrency: 1, quorum: 3, candidateCount: 4 }),
+      { concurrency: 1, quorum: 1, quorumCapped: true },
     );
   });
 
   it("clamps garbage settings to the defaults", () => {
     assert.deepEqual(
-      effectivePoolShape({ concurrency: "x", quorum: -4, candidateCount: 1, worktree: true }),
-      { concurrency: 1, quorum: 1, forcedSingleSlot: false, quorumCapped: false },
+      effectivePoolShape({ concurrency: "x", quorum: -4, candidateCount: 1 }),
+      { concurrency: 1, quorum: 1, quorumCapped: false },
     );
   });
 });
