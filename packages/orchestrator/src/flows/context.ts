@@ -272,8 +272,10 @@ export async function buildPullRequestContext(
     OPENCARA_PR_NUMBER: String(prNumber),
     OPENCARA_PR_HEAD_SHA: prObject.head.sha,
     OPENCARA_PR_BASE_SHA: prObject.base.sha,
-    // "1" when the unified diff rides along in the page context, "0" when
-    // the agent must read the worktree instead (same contract as Azure).
+    // Run-level: "1" iff a diff was fetched. Agent nodes get a per-node
+    // value stamped by runAgentAttempt (prDiffInlineFlag) — a worktree node
+    // never receives the inline diff even when the run fetched one. This
+    // copy serves {{OPENCARA_PR_DIFF_INLINE}} template substitution.
     OPENCARA_PR_DIFF_INLINE: diffInline ? "1" : "0",
   };
   if (prObject.head.ref) {
@@ -328,10 +330,16 @@ export async function buildPullRequestContext(
   };
 }
 
+/** GitHub stops listing files past this many; a list this long is truncated. */
+export const GITHUB_PR_FILES_CAP = 3000;
+
 /**
- * Paths a PR touches, via the paginated pulls/files endpoint (100 per page,
- * hard-capped by GitHub at 3,000 files). Renames report both the old and
- * new name so `pathsIgnore` on either side behaves like the diff parser did.
+ * Paths a PR touches, via the paginated pulls/files endpoint (100 per page).
+ * Renames report both the old and new name so `pathsIgnore` on either side
+ * behaves like the diff parser did. GitHub silently truncates the listing
+ * at GITHUB_PR_FILES_CAP; a truncated list is treated as unavailable so a
+ * `pathsIgnore` filter cannot skip a run on the strength of the files it
+ * did see.
  */
 async function fetchChangedFiles(
   oct: Awaited<ReturnType<GithubAppClient["forInstallation"]>>,
@@ -344,6 +352,11 @@ async function fetchChangedFiles(
     pull_number: prNumber,
     per_page: 100,
   });
+  if (files.length >= GITHUB_PR_FILES_CAP) {
+    throw new Error(
+      `pulls/files returned ${files.length} entries (GitHub caps at ${GITHUB_PR_FILES_CAP}); list may be truncated`,
+    );
+  }
   const out = new Set<string>();
   for (const f of files) {
     out.add(f.filename);

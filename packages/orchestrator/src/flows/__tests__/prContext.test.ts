@@ -6,9 +6,10 @@ import assert from "node:assert/strict";
 import {
   buildPullRequestContext,
   prContextNeeds,
+  GITHUB_PR_FILES_CAP,
   type PullRequestContext,
 } from "../context.js";
-import { changedFilesFor, prStdinForNode } from "../nodeRunners.js";
+import { changedFilesFor, prDiffInlineFlag, prStdinForNode } from "../nodeRunners.js";
 import type { GithubAppClient } from "../../github/app.js";
 
 const agent = (id: string, worktree: boolean) =>
@@ -120,6 +121,18 @@ describe("buildPullRequestContext", () => {
     assert.deepEqual(ctx.stdin.changedFiles, ["src/a.ts", "src/b.ts", "src/old.ts"]);
   });
 
+  it("treats a list at GitHub's cap as truncated (unavailable, so filters fail closed)", async () => {
+    const app = fakeApp({
+      paginate: async () =>
+        Array.from({ length: GITHUB_PR_FILES_CAP }, (_, i) => ({ filename: `f${i}.ts` })),
+    });
+    const ctx = await buildPullRequestContext(app, installation, project, payload, {
+      diff: false,
+      changedFiles: true,
+    });
+    assert.equal(ctx.stdin.changedFiles, undefined);
+  });
+
   it("leaves changedFiles undefined when the file list fetch fails", async () => {
     const app = fakeApp({
       paginate: async () => {
@@ -158,5 +171,20 @@ describe("prStdinForNode", () => {
   });
   it("passes the context through for a node without a worktree", () => {
     assert.equal(prStdinForNode(baseCtx, false), baseCtx.stdin);
+  });
+});
+
+describe("prDiffInlineFlag", () => {
+  it("is 0 for a worktree node even when the run fetched a diff", () => {
+    assert.equal(prDiffInlineFlag(baseCtx, true), "0");
+  });
+  it("is 1 for a diff-less node with an inline diff", () => {
+    assert.equal(prDiffInlineFlag(baseCtx, false), "1");
+  });
+  it("is 0 for a diff-less node when the diff was skipped or refused", () => {
+    assert.equal(prDiffInlineFlag({ ...baseCtx, stdin: { ...baseCtx.stdin, diff: "" } }, false), "0");
+  });
+  it("is 0 without a PR context", () => {
+    assert.equal(prDiffInlineFlag(undefined, false), "0");
   });
 });

@@ -648,6 +648,21 @@ export function prStdinForNode(
   return { ...rest, diff: "" };
 }
 
+/**
+ * `OPENCARA_PR_DIFF_INLINE` for one agent node: "1" iff a non-empty diff is
+ * in the page context prStdinForNode builds for it. A worktree node always
+ * gets "0" (it `git diff`s the checkout); a diff-less node gets "0" when the
+ * fetch was skipped or failed, so a prompt can tell "review the diff below"
+ * from "no diff was available" instead of silently reviewing nothing.
+ */
+export function prDiffInlineFlag(
+  prContext: PullRequestContext | undefined,
+  hasWorktree: boolean,
+): "0" | "1" {
+  const stdin = prStdinForNode(prContext, hasWorktree);
+  return stdin && stdin.diff.length > 0 ? "1" : "0";
+}
+
 export function parseChangedFiles(diff: string): string[] {
   if (!diff) return [];
   const out = new Set<string>();
@@ -893,6 +908,16 @@ export async function runAgentAttempt(
       const v = ctx.prContext.envExtras[key];
       if (v !== undefined) env[key] = v;
     }
+  }
+  // Always stamped for PR-triggered runs, independent of the node's
+  // contextInjection.env list, and per node: it must agree with what
+  // prStdinForNode actually puts in THIS agent's page context, not with
+  // whether the run fetched a diff at all.
+  if (ctx.prContext) {
+    env["OPENCARA_PR_DIFF_INLINE"] = prDiffInlineFlag(
+      ctx.prContext,
+      Boolean(node.config.worktree),
+    );
   }
   if (ctx.issueContext) {
     for (const key of node.config.contextInjection.env) {
