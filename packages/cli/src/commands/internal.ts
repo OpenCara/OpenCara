@@ -377,12 +377,21 @@ function worktreeCreate(args: string[]): void {
           join(checkoutLfsDir, "objects"),
         );
       }
-      // If branch == fromBranch (review-fix cloning the existing PR
-      // branch), the just-cloned ref already IS that branch — `-b`
-      // would error. Otherwise create the new branch off whatever
-      // ref clone landed on (= fromBranch or repo default).
+      // Three cases, mirroring the reuse path above:
+      //   1. branch == fromBranch (a PR run cloning the PR's own branch):
+      //      the just-cloned ref already IS that branch — `-b` would error.
+      //   2. `origin/<branch>` exists (an issue rerun / retry after an
+      //      earlier attempt already pushed `opencara/issue-<n>`): track it,
+      //      or the agent starts from the base with none of the pushed
+      //      commits and its push is rejected or clobbers them. Every
+      //      attempt clones afresh now, so this is the ONLY place that
+      //      reconciliation can happen.
+      //   3. Neither — create the new branch off whatever ref the clone
+      //      landed on (= fromBranch or repo default).
       if (fromBranch && branch === fromBranch) {
         git(checkoutDir, ["checkout", branch], gitEnv);
+      } else if (refExists(checkoutDir, `refs/remotes/origin/${branch}`)) {
+        git(checkoutDir, ["checkout", "-B", branch, `origin/${branch}`], gitEnv);
       } else {
         git(checkoutDir, ["checkout", "-b", branch], gitEnv);
       }
@@ -510,7 +519,8 @@ function worktreeRemove(args: string[]): void {
  *
  * Age is the newest of the key dir, its checkout/ and checkout/.git/index
  * (touched by every git operation). Emits one JSON line
- * `{removed: [...], kept: [...]}` for the orchestrator's audit log.
+ * `{removed, kept, failed}` for the orchestrator's audit log; a dir that
+ * cannot be removed is reported, never fatal.
  */
 function worktreeGc(args: string[]): void {
   const maxAgeRaw = pickFlag(args, "--max-age-hours");
@@ -545,9 +555,19 @@ function worktreeGc(args: string[]): void {
     return newest;
   };
 
-  const removeKey = (key: string): void => {
+  // A key is `<owner>/<repo>/<step-…|branch-…>`: exactly three segments.
+  // Anything shallower is an ancestor dir shared by live checkouts and must
+  // never be handed to removeKey (a `sessions/<owner>/<repo>/` left empty by
+  // an operator would otherwise map onto `work/<owner>/<repo>/` and wipe
+  // every checkout under it, --keep or not).
+  const KEY_DEPTH = 3;
+  const isKeyShaped = (key: string): boolean => key.split("/").length === KEY_DEPTH;
+  const failed: string[] = [];
+  const removeKey = (key: string): boolean => {
+    if (!isKeyShaped(key)) return false;
+    let ok = true;
     for (const subtreeRoot of [WORK_ROOT, SESSION_ROOT]) {
-      const target = join(subtreeRoot, key);
+      const target = join(subtreeRoot, key.split("/").join(sep));
       if (!existsSync(target)) continue;
       let resolved: string;
       try {
@@ -556,8 +576,16 @@ function worktreeGc(args: string[]): void {
         continue;
       }
       if (!resolved.startsWith(opencaraRoot + sep)) continue;
-      rmSync(resolved, { recursive: true, force: true });
+      // One stuck dir (EACCES, ENOTEMPTY on a busy .git) must not abort the
+      // whole sweep — record it and carry on with the rest.
+      try {
+        rmSync(resolved, { recursive: true, force: true });
+      } catch (err) {
+        ok = false;
+        failed.push(`${key}: ${(err as Error).message}`);
+      }
     }
+    return ok;
   };
 
   // A key dir under work/ is any dir with a `checkout` child (both the
@@ -574,15 +602,14 @@ function worktreeGc(args: string[]): void {
     if (entries.includes("checkout")) {
       const key = relative(WORK_ROOT, dir).split(sep).join("/");
       seen.add(key);
-      if (keep.has(key.split("/").join(sep))) {
+      if (!isKeyShaped(key) || keep.has(key.split("/").join(sep))) {
         kept.push(key);
         return;
       }
       const checkout = join(dir, "checkout");
       const age = newestMtime([dir, checkout, join(checkout, ".git", "index")]);
       if (age < cutoff) {
-        removeKey(key.split("/").join(sep));
-        removed.push(key);
+        if (removeKey(key)) removed.push(key);
       } else {
         kept.push(key);
       }
@@ -618,10 +645,11 @@ function worktreeGc(args: string[]): void {
     });
     if (subdirs.length === 0 && dir !== SESSION_ROOT) {
       const key = relative(SESSION_ROOT, dir).split(sep).join("/");
-      if (seen.has(key) || keep.has(key.split("/").join(sep))) return;
+      // Only a key-shaped leaf with no live checkout and no --keep is a
+      // candidate; an empty ancestor dir is left alone.
+      if (!isKeyShaped(key) || seen.has(key) || keep.has(key.split("/").join(sep))) return;
       if (newestMtime([dir]) < cutoff) {
-        removeKey(key.split("/").join(sep));
-        removed.push(key);
+        if (removeKey(key)) removed.push(key);
       }
       return;
     }
@@ -630,7 +658,10 @@ function worktreeGc(args: string[]): void {
   };
   if (existsSync(SESSION_ROOT)) walkSessions(SESSION_ROOT, 0);
 
-  process.stdout.write(`${JSON.stringify({ removed, kept })}\n`);
+  process.stdout.write(`${JSON.stringify({ removed, kept, failed })}\n`);
+  if (failed.length > 0) {
+    process.stderr.write(`worktree gc: ${failed.length} dir(s) could not be removed:\n  ${failed.join("\n  ")}\n`);
+  }
 }
 
 // How long a contender waits for the per-key allocation lock before

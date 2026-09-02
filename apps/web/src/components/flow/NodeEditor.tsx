@@ -1039,7 +1039,7 @@ function AgentWorktreeSection({ scope, node }: AgentWorktreeSectionProps) {
       <p className="text-xs text-muted-foreground">
         Every agent attempt gets its own fresh checkout on a paired device. The
         branch comes from the trigger: a PR trigger checks out the PR head ref,
-        an issue trigger creates{" "}
+        a board-item or manual-issue trigger creates{" "}
         <code className="font-mono">opencara/issue-&lt;n&gt;</code>, anything
         else <code className="font-mono">opencara/run-&lt;id&gt;</code>. The
         checkout is removed as soon as the attempt finishes; a periodic sweep

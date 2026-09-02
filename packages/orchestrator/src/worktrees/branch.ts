@@ -10,6 +10,14 @@
  *   - anything else   → `opencara/run-<flow run id>`, branched off `fromBranch`
  */
 export interface DeriveWorktreeBranchInput {
+  /**
+   * What the trigger promised: a PR-shaped event must yield a head ref, an
+   * issue-shaped one an issue number. The engine builds those contexts
+   * best-effort (a GitHub 5xx is logged, not thrown), so the deriver is
+   * where a missing one turns into a loud failure instead of silently
+   * branching `opencara/run-<id>` off the default branch.
+   */
+  expected: "pr" | "issue" | null;
   prHeadRef: string | null | undefined;
   issueNumber: number | null | undefined;
   flowRunId: string;
@@ -27,7 +35,24 @@ export interface DerivedWorktreeBranch {
   source: WorktreeBranchSource;
 }
 
+export class WorktreeBranchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorktreeBranchError";
+  }
+}
+
 export function deriveWorktreeBranch(input: DeriveWorktreeBranchInput): DerivedWorktreeBranch {
+  if (input.expected === "pr" && !(input.prHeadRef && input.prHeadRef.length > 0)) {
+    throw new WorktreeBranchError(
+      "worktree: this run was triggered by a pull request but the PR head ref is unavailable (the PR context fetch failed — see the flow-engine log); refusing to check out a branch off the default branch instead",
+    );
+  }
+  if (input.expected === "issue" && !(input.issueNumber != null && Number.isFinite(input.issueNumber))) {
+    throw new WorktreeBranchError(
+      "worktree: this run was triggered for an issue but the issue number is unavailable (the issue context fetch failed — see the flow-engine log); refusing to derive a run-scoped branch instead",
+    );
+  }
   if (input.prHeadRef && input.prHeadRef.length > 0) {
     // branch === fromBranch is the CLI's "check out the existing remote
     // branch" path; it never creates a new ref for PR-triggered runs.

@@ -278,8 +278,9 @@ export const AgentNodeSchema = z.object({
     // When set, the engine allocates a FRESH checkout on a paired device
     // for every agent attempt before dispatching it, so parallel pool slots
     // never share a working tree. The branch is derived from the trigger:
-    // a PR trigger checks out the PR head ref, an issue trigger gets
-    // `opencara/issue-<n>`, anything else `opencara/run-<flow run id>`.
+    // a PR trigger checks out the PR head ref, a board-item / manual-issue
+    // trigger gets `opencara/issue-<n>`, anything else
+    // `opencara/run-<flow run id>`.
     // The checkout is removed when the attempt finishes; PR-close cleanup
     // and a periodic sweep reclaim leftovers. `worktree_pins` records
     // key → host for as long as the checkout exists.

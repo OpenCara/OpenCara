@@ -609,14 +609,13 @@ export const agents = pgTable(
   }),
 );
 
-// Sticks a (owner_repo, branch) to the agent host that first ran a
-// worktree on it. The session-id file lives on that device under
-// ~/.opencara/sessions/<...>/agent-session.json — without pinning the
-// device we can't find the file on the next iteration, so the agent
-// would always start a fresh conversation. Pin is upserted by the
-// engine after every successful `git.create_worktree` dispatch and
-// pruned by the reaper after 30 days of inactivity (PRs typically
-// close before then).
+// One row per live checkout on a device: `key` is the on-device slug
+// (`<owner>/<repo>/step-<flow_run_steps id>`) and `host_id` is where it
+// lives, so teardown can dispatch `worktree remove --key` to the right
+// device. Written after a successful allocation, deleted when the attempt
+// finishes (worktrees/cleanup.ts `removeAttemptWorktree`); `(owner_repo,
+// branch)` is kept for PR-close cleanup and is NOT unique any more. Rows
+// older than a day are leftovers and get pruned.
 export const worktreePins = pgTable(
   "worktree_pins",
   {

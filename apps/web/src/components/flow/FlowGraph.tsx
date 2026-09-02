@@ -20,7 +20,7 @@ export interface FlowGraphNode {
     labels?: string[];
     /** AgentNode worktree option — when set, shows up as a branch
      *  hint on the agent node's subtitle. */
-    worktree?: { fromBranch?: string | null };
+    worktree?: Record<string, unknown>;
     /** ProjectsV2 trigger filters — surfaced on the graph card as
      *  e.g. "Status: Backlog → Ready". */
     fromOptions?: string[];

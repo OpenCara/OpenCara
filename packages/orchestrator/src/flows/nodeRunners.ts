@@ -820,6 +820,32 @@ export async function resolveAgentPool(
 }
 
 /**
+ * What the trigger event promises the worktree deriver: mirrors the engine's
+ * context pre-build (engine.ts `prepareRun`) — PR-shaped events get a
+ * PullRequestContext, Projects v2 moves and manual-with-issueNumber get an
+ * IssueStatusContext. Anything else (schedule, plain issue comment, bare
+ * manual) carries neither and gets a run-scoped branch.
+ */
+export function worktreeBranchExpectation(ctx: {
+  event: { type: string; payload: unknown };
+}): "pr" | "issue" | null {
+  const { type, payload } = ctx.event;
+  if (type === "pull_request" || type === "pull_request_review") return "pr";
+  if (type === "issue_comment") {
+    const issue = (payload as { issue?: { pull_request?: unknown } } | null)?.issue;
+    return issue?.pull_request ? "pr" : null;
+  }
+  if (type === "projects_v2_item") return "issue";
+  if (
+    type === "manual" &&
+    typeof (payload as { issueNumber?: unknown } | null)?.issueNumber === "number"
+  ) {
+    return "issue";
+  }
+  return null;
+}
+
+/**
  * Run ONE attempt of an agent node on a concrete candidate agent. The engine
  * owns the surrounding step row (one per attempt) and the pool loop; this
  * function is the old single-agent runner body from "agent resolved" onward.
@@ -888,6 +914,7 @@ export async function runAgentAttempt(
       "agent.worktree.fromBranch",
     );
     const derived = deriveWorktreeBranch({
+      expected: worktreeBranchExpectation(ctx),
       prHeadRef: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_REF"],
       issueNumber: ctx.issueContext?.stdin.issue?.number ?? null,
       flowRunId: ctx.flowRunId,

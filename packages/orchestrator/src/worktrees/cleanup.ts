@@ -28,7 +28,7 @@ import { ulid } from "ulid";
 import { and, eq, lt } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
-import { agentRunLogs, agentRuns, worktreePins } from "../db/schema.js";
+import { agentRunLogs, agentRuns, flowRunSteps, worktreePins } from "../db/schema.js";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
 
 interface CleanupDeps {
@@ -90,10 +90,30 @@ export async function pruneStaleWorktrees(
   const pins = await deps.db.query.worktreePins.findMany({
     where: lt(worktreePins.lastRunAt, cutoff),
   });
+  let processed = 0;
   for (const pin of pins) {
+    // Leave the row for the next pass when the device is merely offline —
+    // deleting it would only lose the audit trail and hand the dir to the
+    // device-side gc later anyway.
+    if (!deps.dispatcher.isConnected(pin.hostId)) continue;
+    // `last_run_at` is stamped at allocation; an attempt still running past
+    // the window keeps its checkout (the step row says so).
+    if (await attemptStillRunning(deps.db, pin.key)) continue;
     await removePinnedWorktree(deps, pin, null);
+    processed++;
   }
-  return pins.length;
+  return processed;
+}
+
+/** The key embeds the flow_run_steps id (`…/step-<id>`); running = in use. */
+async function attemptStillRunning(db: Db, key: string): Promise<boolean> {
+  const m = /\/step-([A-Za-z0-9]+)$/.exec(key);
+  if (!m) return false;
+  const step = await db.query.flowRunSteps.findFirst({
+    where: eq(flowRunSteps.id, m[1]!),
+    columns: { status: true },
+  });
+  return step?.status === "running";
 }
 
 type PinRow = typeof worktreePins.$inferSelect;
