@@ -24,6 +24,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { summarizeEvent } from "@/lib/eventSummary";
+import { triggerTypeLabel } from "@/lib/triggerLabel";
 
 type ActivityView = "flow-runs" | "runs" | "events";
 
@@ -309,28 +310,6 @@ function FlowRunRow({
       </TableCell>
     </TableRow>
   );
-}
-
-function triggerTypeLabel(type: string | null | undefined): string {
-  switch (type) {
-    case "schedule":
-      return "Schedule";
-    case "pull_request":
-      return "Pull request";
-    case "pull_request_review":
-      return "PR review";
-    case "projects_v2_item":
-      return "Project status";
-    case "issue_comment":
-      return "Comment";
-    case "manual":
-      return "Manual";
-    case null:
-    case undefined:
-      return "—";
-    default:
-      return type;
-  }
 }
 
 function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {

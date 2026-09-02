@@ -14,7 +14,7 @@ interface ActivityRouteDeps {
 }
 
 interface ActivityRow extends Record<string, unknown> {
-  kind: "event" | "run";
+  kind: "event" | "run" | "flow_run";
   id: string;
   ts: string;
   type: string;
@@ -60,7 +60,11 @@ export interface ActivityTriggeredRun {
 
 /** One feed entry as returned to the web UI. */
 export interface ActivityItemOut {
-  kind: "event" | "run";
+  /**
+   * `event` = platform webhook, `run` = one agent run, `flow_run` = one
+   * execution of a flow (what the project Activity tab lists as "Flow runs").
+   */
+  kind: "event" | "run" | "flow_run";
   id: string;
   ts: string;
   type: string;
@@ -69,7 +73,7 @@ export interface ActivityItemOut {
   project: ActivityProject | null;
   /** Runs: the flow the run belongs to (null for chat / test runs). */
   flow: ActivityFlowRef | null;
-  /** Runs: the owning flow run, for the flow-run detail link. */
+  /** Runs / flow runs: the flow run id, for the flow-run detail link. */
   flowRunId: string | null;
   /** Runs: graph node id the run executed. */
   nodeId: string | null;
@@ -162,6 +166,26 @@ export function activityRoutes(deps: ActivityRouteDeps) {
         -- cleanup's 'internal:worktree-remove') are plumbing, not
         -- user-visible work; keep them out of the feed.
         AND COALESCE(r.spec->>'kind', '') NOT LIKE 'internal:%'
+        UNION ALL
+        -- Flow runs as first-class entries, with the same fields the project
+        -- Activity tab's "Flow runs" table shows (trigger, status, duration,
+        -- error) so the cross-project feed can link straight to the run.
+        -- trigger_skip cancellations are webhook fan-out noise and stay hidden,
+        -- as on the project tab.
+        SELECT 'flow_run'::text as kind, fr.id, fr.created_at as ts, fr.status::text as type, fr.project_id,
+               jsonb_build_object(
+                 'status', fr.status::text, 'startedAt', fr.started_at, 'finishedAt', fr.finished_at,
+                 'error', fr.error, 'cancelReason', fr.cancel_reason, 'triggerType', te.type) as payload,
+               fr.id as flow_run_id, f.id as flow_id, f.slug as flow_slug,
+               f.name as flow_name, NULL::text as node_id, NULL::text as agent_kind,
+               ${subjectJsonExpr(sql`te.payload`)} as subject_json
+        FROM flow_runs fr
+        JOIN flows f ON f.id = fr.flow_id
+        LEFT JOIN platform_events te ON te.id = fr.trigger_event_id
+        WHERE fr.project_id IN (
+          SELECT id FROM projects WHERE added_by_user_id = ${user.id}
+        )
+        AND (fr.cancel_reason IS NULL OR fr.cancel_reason <> 'trigger_skip')
       ) u
       WHERE TRUE ${beforeFilter}
       ORDER BY ts DESC
