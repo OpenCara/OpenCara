@@ -55,6 +55,10 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Any WHERE/projection that touches a jsonb column on this DB is a TOAST read per row; keep it out of anything that runs before the LIMIT. A partial index only gets used if its predicate is textually the same expression the query uses (`COALESCE(spec->>'kind', '') NOT LIKE 'internal:%'`).
 - Cheap way to check an index idea on prod without deploying: `BEGIN; CREATE INDEX ...; EXPLAIN ANALYZE ...; ROLLBACK;` (holds a write lock on the table for the build, ~1s here).
 
+### [hits: 1] A bare `Date` inside drizzle's raw `` sql`...${date}` `` + `db.execute` fails at runtime on postgres-js (`ERR_INVALID_ARG_TYPE … Received an instance of Date`)
+- 2026-09-02: the v0.124.0 boot prune failed all three passes; unit tests were green because they only rendered the SQL. Column-aware builders (`lt(table.createdAt, date)`) serialise Dates through the column type; the raw template path does not. Bind `${date.toISOString()}::timestamptz` instead.
+- Any new raw-SQL statement that runs against the DB should be executed once against a real database before merging (a no-op cutoff / `LIMIT 0` is enough) — rendered-SQL assertions don't catch driver-level parameter issues.
+
 ## Dispatch
 
 ### [hits: 1] pickIdle() ignores device capability/version
