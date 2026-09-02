@@ -59,12 +59,12 @@ describe("session/new model advertisement", () => {
     );
   });
 
-  it("advertises nothing when argv has no model (nothing to describe)", () => {
+  it("advertises no model option when argv has no model (nothing to describe)", () => {
     _setExtraClaudeArgsForTest([]);
     const r = handleNewSession({ cwd: "/tmp" }) as {
       configOptions?: AcpConfigOption[];
     };
-    assert.equal(r.configOptions, undefined);
+    assert.equal(r.configOptions?.find((o) => o.id === "model"), undefined);
   });
 
   it("session/load advertises the same option for the resume path", () => {
@@ -109,6 +109,47 @@ describe("handleSetConfigOption", () => {
     assert.throws(
       () => handleSetConfigOption({ sessionId, configId: "model", value: "  " }),
       /non-empty/,
+    );
+  });
+});
+
+describe("thought_level config option", () => {
+  it("is always advertised with currentValue default and claude's effort levels", () => {
+    _setExtraClaudeArgsForTest([]);
+    const r = handleNewSession({ cwd: "/tmp" }) as { configOptions?: AcpConfigOption[] };
+    const opt = r.configOptions?.find((o) => o.category === "thought_level");
+    assert.ok(opt, "thought_level option missing");
+    assert.equal(opt.id, "thought_level");
+    assert.equal(opt.currentValue, "default");
+    assert.deepEqual(
+      opt.options?.map((o) => o.value),
+      ["default", "low", "medium", "high", "xhigh", "max"],
+    );
+  });
+
+  it("stores a valid level (case-insensitive) and reflects it in currentValue", () => {
+    const { sessionId } = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
+    handleSetConfigOption({ sessionId, configId: "thought_level", value: "High" });
+    assert.equal(sessions.get(sessionId)?.thoughtLevel, "high");
+    const r = handleLoadSession({ sessionId, cwd: "/tmp", mcpServers: [] }) as {
+      configOptions?: AcpConfigOption[];
+    };
+    // session/load re-registers the session; a fresh state has no level yet.
+    assert.equal(r.configOptions?.find((o) => o.id === "thought_level")?.currentValue, "default");
+  });
+
+  it("'default' clears a previous level", () => {
+    const { sessionId } = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
+    handleSetConfigOption({ sessionId, configId: "thought_level", value: "max" });
+    handleSetConfigOption({ sessionId, configId: "thought_level", value: "default" });
+    assert.equal(sessions.get(sessionId)?.thoughtLevel, undefined);
+  });
+
+  it("rejects levels claude would refuse", () => {
+    const { sessionId } = handleNewSession({ cwd: "/tmp" }) as { sessionId: string };
+    assert.throws(
+      () => handleSetConfigOption({ sessionId, configId: "thought_level", value: "ultra" }),
+      /unknown thought_level/,
     );
   });
 });

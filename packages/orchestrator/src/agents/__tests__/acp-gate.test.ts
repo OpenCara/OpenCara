@@ -306,6 +306,29 @@ describe("buildAcpSpec — captureThinking", () => {
   });
 });
 
+describe("buildAcpSpec — thoughtLevel", () => {
+  const base = { env: {}, systemPromptMd: "s", userPromptMd: "u" };
+  const agent = (thoughtLevel?: string | null) => ({
+    kind: "claude",
+    name: "claude",
+    cwd: null,
+    args: [],
+    thoughtLevel,
+  });
+
+  it("threads a trimmed thoughtLevel onto the acp spec", () => {
+    const spec = buildAcpSpec({ ...base, agent: agent("  high ") });
+    assert.equal(spec.acp?.thoughtLevel, "high");
+  });
+
+  it("omits the field for null / empty / undefined so older devices see no change", () => {
+    for (const a of [agent(null), agent(""), agent("   "), agent(undefined)]) {
+      const spec = buildAcpSpec({ ...base, agent: a });
+      assert.equal("thoughtLevel" in (spec.acp ?? {}), false);
+    }
+  });
+});
+
 describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {
   it("acpCommandFor returns the kind-fixed executable", () => {
     assert.equal(acpCommandFor("codex"), "npx");

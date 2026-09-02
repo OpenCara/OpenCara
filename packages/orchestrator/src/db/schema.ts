@@ -588,6 +588,14 @@ export const agents = pgTable(
     // safe default is "capture" — a run's thinking can't be recovered
     // after the fact, but it can always be hidden.
     captureThinking: boolean("capture_thinking").notNull().default(true),
+    // Reasoning effort / thinking level requested for every run of this
+    // agent, selected on the device over ACP `session/set_config_option`
+    // (category `thought_level`). Free text because each adapter has its
+    // own vocabulary (claude: low…max, codex: minimal…xhigh, pi/omp:
+    // off…xhigh); the device matches it against what the adapter
+    // advertises and falls back to the adapter default on a miss.
+    // NULL = adapter default.
+    thoughtLevel: text("thought_level"),
     // Optional pin to a specific agent host. NULL = "any idle device".
     // ON DELETE SET NULL so revoking a device doesn't break the agent —
     // it just falls back to "any device" until the user picks a new one.

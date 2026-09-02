@@ -80,10 +80,16 @@ describe("handleNewSession", () => {
 });
 
 describe("handleLoadSession", () => {
-  it("registers the supplied id (the orchestrator-persisted one) and returns empty", () => {
+  it("registers the supplied id (the orchestrator-persisted one) and advertises only config options", () => {
     const id = "11111111-2222-3333-4444-555555555555";
-    const r = handleLoadSession({ sessionId: id, cwd: "/wt/branch" });
-    assert.deepEqual(r, {});
+    const r = handleLoadSession({ sessionId: id, cwd: "/wt/branch" }) as Record<string, unknown>;
+    // No model on argv → the only advertised option is the always-on
+    // thought_level one; nothing else leaks into the response.
+    assert.deepEqual(Object.keys(r), ["configOptions"]);
+    assert.deepEqual(
+      (r.configOptions as Array<{ id: string }>).map((o) => o.id),
+      ["thought_level"],
+    );
     assert.ok(sessions.has(id));
     assert.equal(sessions.get(id)?.cwd, "/wt/branch");
   });

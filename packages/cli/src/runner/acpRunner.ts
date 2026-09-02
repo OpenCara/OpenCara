@@ -283,6 +283,18 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
           handlers.onLog,
         );
       }
+      // Reasoning effort / thinking level, same mechanism: only when the
+      // adapter advertised a `thought_level` option (claude-acp, codex-acp,
+      // pi, omp). Best-effort, never fails the run.
+      if (acpSpec.thoughtLevel) {
+        await selectAcpThoughtLevel(
+          client,
+          sessionId,
+          acpSpec.thoughtLevel,
+          configOptions,
+          handlers.onLog,
+        );
+      }
       // Cancel arrived before the session was minted. Forward the
       // notification so the agent's bookkeeping records a cancel, then
       // skip session/prompt outright — without this, we'd spawn the
@@ -407,6 +419,75 @@ export function matchModelValue(
   if (ci) return ci;
   const suffix = `/${want.toLowerCase()}`;
   return values.find((v) => v.toLowerCase().endsWith(suffix));
+}
+
+/** Config-option ids adapters use for reasoning effort when they don't tag
+ *  the ACP-standard `thought_level` category. */
+const THOUGHT_LEVEL_OPTION_IDS = new Set([
+  "thought_level",
+  "thinking_level",
+  "thinking",
+  "reasoning_effort",
+  "reasoning",
+  "effort",
+]);
+
+export function findThoughtLevelOption(
+  configOptions: AcpConfigOption[] | undefined,
+): AcpConfigOption | undefined {
+  return configOptions?.find(
+    (o) =>
+      o.category === "thought_level" || THOUGHT_LEVEL_OPTION_IDS.has(o.id.toLowerCase()),
+  );
+}
+
+/**
+ * Select the agent's reasoning effort / thinking level via ACP
+ * `session/set_config_option`. Mirrors `selectAcpModel`: silent when the
+ * adapter already reports the requested value, exact-then-case-insensitive
+ * match against the advertised values, a freeform attempt when nothing
+ * matches (adapters that validate reject it and we keep their default), and
+ * never fails the run.
+ */
+export async function selectAcpThoughtLevel(
+  client: AcpClient,
+  sessionId: string,
+  requested: string,
+  configOptions: AcpConfigOption[] | undefined,
+  onLog: LogSink,
+): Promise<void> {
+  const want = requested.trim();
+  const option = findThoughtLevelOption(configOptions);
+  if (!option) {
+    onLog(
+      "stderr",
+      `[acp] thought level "${want}" requested but the agent advertised no thought-level option; using its default\n`,
+    );
+    return;
+  }
+  const values = (option.options ?? []).map((o) => o.value);
+  const target =
+    values.find((v) => v === want) ?? values.find((v) => v.toLowerCase() === want.toLowerCase());
+  if (!target) {
+    try {
+      await client.setConfigOption({ sessionId, configId: option.id, value: want });
+      onLog("stderr", `[acp] selected thought level ${want} (freeform)\n`);
+    } catch {
+      onLog(
+        "stderr",
+        `[acp] thought level "${want}" not among available levels [${values.join(", ")}]; using the default\n`,
+      );
+    }
+    return;
+  }
+  if (option.currentValue === target) return;
+  try {
+    await client.setConfigOption({ sessionId, configId: option.id, value: target });
+    onLog("stderr", `[acp] selected thought level ${target}\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog("stderr", `[acp] thought level selection failed (${msg}); using the default\n`);
+  }
 }
 
 /**

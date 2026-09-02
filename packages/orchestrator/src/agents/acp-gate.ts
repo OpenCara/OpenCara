@@ -110,6 +110,12 @@ export interface BuildAcpSpecOpts {
      * pre-column rows) keep today's behaviour.
      */
     captureThinking?: boolean;
+    /**
+     * Reasoning effort / thinking level (the `thought_level` column).
+     * Threaded onto `acp.thoughtLevel` so the device selects it over ACP
+     * `session/set_config_option`. Null/undefined/empty = adapter default.
+     */
+    thoughtLevel?: string | null;
   };
   env: Record<string, string>;
   systemPromptMd: string;
@@ -193,6 +199,9 @@ export function buildAcpSpec(opts: BuildAcpSpecOpts): AgentSpec {
     // and means an older device (which ignores the field) behaves the same
     // as a new one for every agent that hasn't opted out.
     ...(opts.agent.captureThinking === false ? { captureThinking: false } : {}),
+    ...(opts.agent.thoughtLevel?.trim()
+      ? { thoughtLevel: opts.agent.thoughtLevel.trim() }
+      : {}),
   };
   // Per-adapter model handling. The operator configures model selection in the
   // agent's DB `args` (e.g. `--model gpt-5.5`), but adapters disagree on how a

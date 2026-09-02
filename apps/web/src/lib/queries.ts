@@ -934,6 +934,11 @@ export interface AgentRow {
    *  `[think]` block to show and nothing stored to turn back on later.
    *  Only the reasoning adapters (omp, pi, cursor) emit thoughts at all. */
   captureThinking: boolean;
+  /** Reasoning effort / thinking level selected over ACP for every run
+   *  (claude: low…max, codex: minimal…xhigh, pi/omp: off…xhigh). Free text;
+   *  the device matches it against what the adapter advertises. null =
+   *  adapter default. */
+  thoughtLevel: string | null;
   /** Pin to a specific agent_host (device). null = "any idle device". */
   hostId: string | null;
   createdAt: string;
@@ -964,6 +969,8 @@ export function useCreateAgent() {
       acpArgs?: string | null;
       /** Omit to capture the agent's reasoning (the default). */
       captureThinking?: boolean;
+      /** Reasoning effort; omit / null for the adapter default. */
+      thoughtLevel?: string | null;
       env?: Record<string, string>;
       cwd?: string | null;
       /** Specific device id; null/undefined = "any idle device". */
