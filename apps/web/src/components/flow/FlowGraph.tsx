@@ -62,7 +62,11 @@ interface FlowGraphProps {
   edges: FlowGraphEdge[];
   /** Map node id → step status (for run-coloured graph). Optional. */
   stepStatuses?: Record<string, StepStatus>;
-  /** Map node id → custom display label (rename). Optional. */
+  /**
+   * Map node id → display label, built by `buildFlowNodeLabels`: the linked
+   * agent's name for agent nodes, a legacy per-node rename otherwise.
+   * Optional.
+   */
   labelOverrides?: Record<string, string>;
   /** When set, renders per-reviewer delete buttons + an add-reviewer node. */
   reviewerControls?: FlowReviewerControls;

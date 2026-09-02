@@ -4,9 +4,9 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Database & state
 
-### [hits: 1] DB is Postgres (Supabase), DATABASE_URL in packages/orchestrator/.env
-- Not SQLite. Connection string lives in `packages/orchestrator/.env` → `DATABASE_URL`.
-- Quick query pattern: `set -a && . packages/orchestrator/.env && set +a && psql "$DATABASE_URL" -c "..."`.
+### [hits: 2] DB is Postgres (Supabase); the PROD url is in /opt/opencara/.env.production
+- Not SQLite. Since the container cutover the live url is `/opt/opencara/.env.production` → `DATABASE_URL` (chmod 600, owned by `quabug`, so no sudo needed). `packages/orchestrator/.env` is the local-dev copy.
+- Quick query against prod: `psql "$(grep -m1 '^DATABASE_URL=' /opt/opencara/.env.production | cut -d= -f2- | tr -d '\"')" -c "..."`. `psql` is installed at /usr/bin/psql.
 - Useful tables: `flow_runs`, `flow_run_steps`, `agent_runs`, `agent_run_logs`, `agent_hosts`, `worktree_pins`, `flows` (config in `graph_json` jsonb), `flow_node_settings` (per-node agent/prompt/host bindings), `sessions` (auth cookies).
 
 ### [hits: 1] Adding a pg enum value: drizzle runs ALL pending migrations in ONE transaction, and a fresh-DB test gives a FALSE PASS
@@ -121,6 +121,12 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Two devices with one host id is silent apart from the log churn: `agent_hosts` shows a single row, `/health` is green, and the version column just reflects whichever said hello last.
 - **Recurred 2026-08-17, exactly as written above** — orphan from Aug 12 (PPID 1) survived `kill <launcher>` + `pkill -P <launcher>`, then flapped against the new 0.115.5 device for ~90s with the version alternating 0.114.0/0.115.5. Nothing was in flight so no run died this time. The failure was NOT the technique — it was not reading this file before starting. **Review this file BEFORE any device restart / deploy / kill sequence, not after it goes wrong**; the whole procedure was already here, including the correct check and the exact symptom.
 - Confirm it settled afterwards: `sg docker -c 'docker logs opencara_server --since 30s' | grep device-ws` should be SILENT. Any hello in a quiet window means two processes are still fighting.
+
+### [hits: 2] `grep` silently skips `flows/nodeRunners.ts` — the file has literal NUL bytes and is "binary"
+- The shell's `grep` is ugrep run with `-I` (skip binary files). `globToRegex` in `packages/orchestrator/src/flows/nodeRunners.ts` uses literal `"\x00ANYPATH\x00"` sentinels (8 NUL bytes total), so grep classifies the whole 76KB file as binary and reports NO MATCHES rather than an error.
+- Cost on 2026-08-28: searches for `agentRunner`, `agentName`, `inputJson` across `src/` all came back empty, which read as "this code doesn't exist" instead of "one file was skipped". `agentRunner` is defined at line 600 of exactly that file.
+- Tell: a symbol that is *imported* somewhere (`engine.ts` imports `agentRunner` from `./nodeRunners.js`) but whose definition greps to zero hits. Also `command grep -n <pat> <file>` prints `binary file matches`.
+- Fix: `command grep -an` (or `grep -a`) for anything under `src/flows/`. `sed -n`/`Read` are unaffected.
 
 ## Multi-platform UI
 
@@ -262,6 +268,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - A failed publish leaves an orphan tag: `v0.112.2` exists as a git tag and a GHCR image with no matching npm version. Don't retry by moving/force-pushing the tag — cut the next patch (`v0.112.3`).
 
 ## Agent kinds / ACP adapters
+
+### [hits: 1] ACP `session/set_config_option` takes `configId`, not `configOptionId`
+- Getting the field name wrong returns `-32603 Internal error / "Unknown ACP config option: undefined"`, which reads like the adapter rejecting the option id rather than a malformed request — cost a wrong diagnosis of the omp model id before the param was checked.
+- The device's own call is the reference: `client.setConfigOption({sessionId, configId: modelOption.id, value})` (`packages/cli/src/runner/acpRunner.ts:428`). `selectAcpModel` finds the option with `o.id === "model" || o.category === "model"`, so a hand-rolled probe should mirror that instead of hardcoding an id.
+
+### [hits: 1] `gh run list --commit <sha>` misses tag-triggered runs
+- deploy/publish-cli fire on a `v*` tag push and those runs report `headBranch: v0.116.0`, so a `--commit <merge sha>` filter returned nothing for 15 minutes while both workflows ran and passed.
+- Watch them with `gh run list --limit 6 --json name,event,headBranch,status,conclusion` (or `--branch v0.116.0`) instead.
 
 ### [hits: 2] The adapter COMMAND is fixed by kind — a new CLI can't be added from the dashboard alone
 - `agents.command` is retained for diagnostics only; dispatch takes the command from `ACP_ADAPTERS` in `packages/orchestrator/src/agents/acp-gate.ts`, keyed by `agents.kind`. The `acp_args` override replaces only the ARGS.

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildFanInInput } from "../engine.js";
-import type { FlowNode } from "../engine.js";
+import type { FlowNode, NodeOutput } from "../engine.js";
 
 const REVIEW = "verdict: comment\n\nSolid, well-scoped diff.";
 
@@ -80,6 +80,29 @@ describe("buildFanInInput", () => {
     assert.equal(fromBlank, "  \n");
   });
 
+  it("disambiguates colliding headings with the node id (two reviewers, one agent)", () => {
+    const out = buildFanInInput(
+      agentNode(),
+      [edge("r1", "synth"), edge("r2", "synth"), edge("r3", "synth")],
+      new Map([
+        ["r1", "first review"],
+        ["r2", "second review"],
+        ["r3", "third review"],
+      ]),
+      new Map([
+        ["r1", "Claude Opus"],
+        ["r2", "Claude Opus"],
+        ["r3", "Codex GPT"],
+      ]),
+    );
+    assert.equal(
+      out,
+      "## From Claude Opus (r1)\n\nfirst review\n\n---\n\n" +
+        "## From Claude Opus (r2)\n\nsecond review\n\n---\n\n" +
+        "## From Codex GPT\n\nthird review",
+    );
+  });
+
   it("joins 2+ upstreams as labeled markdown sections", () => {
     const out = buildFanInInput(
       agentNode(),
@@ -93,6 +116,44 @@ describe("buildFanInInput", () => {
     assert.equal(
       out,
       "## From Correctness reviewer\n\nfirst review\n\n---\n\n## From r2\n\nsecond review",
+    );
+  });
+
+  it("expands a pool node's several successes into one section per agent", () => {
+    const out = buildFanInInput(
+      agentNode(),
+      [edge("reviewer", "synth")],
+      new Map<string, NodeOutput>([
+        [
+          "reviewer",
+          [
+            { agentName: "Claude Opus", text: "first review" },
+            { agentName: "omp gemini", text: "second review" },
+          ],
+        ],
+      ]),
+      new Map([["reviewer", "Claude Opus"]]),
+    );
+    assert.equal(
+      out,
+      "## From Claude Opus\n\nfirst review\n\n---\n\n## From omp gemini\n\nsecond review",
+    );
+  });
+
+  it("mixes pool parts with sibling nodes and suffixes colliding agent names", () => {
+    const out = buildFanInInput(
+      agentNode(),
+      [edge("reviewer", "synth"), edge("extra", "synth")],
+      new Map<string, NodeOutput>([
+        ["reviewer", [{ agentName: "Claude Opus", text: "pool review" }]],
+        ["extra", "extra review"],
+      ]),
+      new Map([["extra", "Claude Opus"]]),
+    );
+    assert.equal(
+      out,
+      "## From Claude Opus (reviewer)\n\npool review\n\n---\n\n" +
+        "## From Claude Opus (extra)\n\nextra review",
     );
   });
 });

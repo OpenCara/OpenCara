@@ -172,6 +172,8 @@ export interface FlowRunStep {
   nodeId: string;
   nodeKind: string;
   idx: number;
+  /** Agent-pool attempt ordinal; attempts of one node share idx. */
+  attempt: number;
   status: "pending" | "running" | "succeeded" | "failed" | "skipped";
   inputJson: unknown;
   outputJson: unknown;
@@ -605,6 +607,10 @@ export interface TemplateNodeSetting {
   nodeId: string;
   promptId: string | null;
   agentId: string | null;
+  fallbackAgentIds: string[];
+  retrySame: number;
+  concurrency: number;
+  quorum: number;
   label: string | null;
   updatedAt: string;
 }
@@ -817,6 +823,14 @@ export interface FlowNodeSetting {
   nodeId: string;
   promptId: string | null;
   agentId: string | null;
+  /** Ordered failover list tried after `agentId` (same prompt). */
+  fallbackAgentIds: string[];
+  /** Extra attempts on the same agent before moving to the next. */
+  retrySame: number;
+  /** Parallel slots (also the target number of successes). */
+  concurrency: number;
+  /** Minimum successes for the node to succeed. */
+  quorum: number;
   label: string | null;
   updatedAt: string;
 }

@@ -11,6 +11,7 @@ import type { Db } from "../db/client.js";
 import {
   agentRunLogs,
   agentRuns,
+  agents,
   flowNodeSettings,
   flowRuns,
   flowRunSteps,
@@ -38,12 +39,16 @@ import {
 } from "./context.js";
 import {
   actionRunner,
-  agentRunner,
+  resolveAgentPool,
+  runAgentAttempt,
   triggerRunner,
   SkipFlowError,
   type NodeRunCtx,
+  type NodeRunResult,
   type PlatformRunCtx,
+  type ResolvedAgentPool,
 } from "./nodeRunners.js";
+import { runWithAgentPool } from "./agentPool.js";
 import { azureCloneUrl, parseAzureOwnerLabel } from "../azure/repos.js";
 import { clientForConnection } from "../azure/client.js";
 import { normalizeAzureEvent, pullRequestPayload } from "../azure/events.js";
@@ -232,7 +237,11 @@ export class FlowEngine {
     // model), the workdir is still around, so descendant reuse is
     // safe — the rerun fetches + checks out the same branch and the
     // agent re-executes against current state.
-    const outputs = new Map<string, string | undefined>();
+    const outputs = new Map<string, NodeOutput>();
+    // Agent-pool nodes can have SEVERAL succeeded attempts (concurrency > 1);
+    // collect them per node so the rerun's fan-in sees the same per-agent
+    // sections the original run produced.
+    const partsByNode = new Map<string, PoolOutputPart[]>();
     const reused: ReusedStep[] = [];
     for (const s of allSteps) {
       if (s.status !== "succeeded") continue;
@@ -258,14 +267,17 @@ export class FlowEngine {
       // text. Without this, fan-in to a synthesizer overflows context
       // (codex's --json output runs to >1MB on tool-use turns; claude's
       // single-JSON envelope adds ~500B of metadata per call).
-      outputs.set(
-        s.nodeId,
-        stdoutCaptured !== undefined ? extractAgentResultText(stdoutCaptured) : undefined,
-      );
+      const text = stdoutCaptured !== undefined ? extractAgentResultText(stdoutCaptured) : undefined;
+      const agentName = readAgentName(s.inputJson);
+      const parts = partsByNode.get(s.nodeId) ?? [];
+      parts.push({ agentName: agentName ?? s.nodeId, text: text ?? "" });
+      partsByNode.set(s.nodeId, parts);
+      outputs.set(s.nodeId, parts.length > 1 ? parts : text);
       reused.push({
         nodeId: s.nodeId,
         nodeKind: s.nodeKind,
         outputJson: s.outputJson,
+        agentName,
         startedAt: s.startedAt,
         finishedAt: s.finishedAt,
         originalStepId: s.id,
@@ -542,22 +554,38 @@ export class FlowEngine {
       }
     }
 
-    // Per-node custom labels (rename feature). Used by buildFanInInput so
-    // synthesizer prompts read "## From Correctness reviewer" rather than
-    // the raw node id.
+    // Per-node display names. Used by buildFanInInput so synthesizer prompts
+    // read "## From opus-reviewer" rather than the raw node id. Agent nodes
+    // are named by the AGENT that runs them (see buildNodeLabels); the
+    // per-node rename only survives on nodes with no linked agent.
     const settingsRows = await this.deps.db.query.flowNodeSettings.findMany({
       where: eq(flowNodeSettings.flowId, flowId),
     });
-    const labels = new Map<string, string>();
-    for (const r of settingsRows) {
-      if (r.label) labels.set(r.nodeId, r.label);
+    const linkedAgentIds = [
+      ...new Set(settingsRows.map((r) => r.agentId).filter((id): id is string => !!id)),
+    ];
+    const agentNamesById = new Map<string, string>();
+    if (linkedAgentIds.length > 0) {
+      const agentRows = await this.deps.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, linkedAgentIds));
+      for (const a of agentRows) agentNamesById.set(a.id, a.name);
+    }
+    const labels = buildNodeLabels(def.nodes, settingsRows, agentNamesById);
+    // A rerun reuses upstream steps without re-executing them, so their
+    // runtime-resolved agent never comes back through runNodeStep. Recover it
+    // from the original step row instead, or the rerun's headings would name
+    // the linked agent while the reused output came from another one.
+    for (const r of preloaded?.reused ?? []) {
+      if (r.agentName) labels.set(r.nodeId, r.agentName);
     }
 
     // For rerun-from-failed: preload the upstream nodes' captured stdout.
     // The layer loop below skips any node whose id is already in `outputs`,
     // so those upstream nodes don't re-execute and their previousOutput
     // values still flow into the failed/downstream nodes correctly.
-    const outputs = new Map<string, string | undefined>(preloaded?.outputs);
+    const outputs = new Map<string, NodeOutput>(preloaded?.outputs);
     let nodeIdx = 0;
 
     // Materialise a flow_run_steps row for each reused upstream node so the
@@ -783,14 +811,33 @@ export class FlowEngine {
               errorMsg ??= r.value.skipReason;
               continue;
             }
+            // Runtime agent resolution outranks the flow-node link (issue/PR
+            // `agent:<name>` label, project default implement agent), so the
+            // heading downstream nodes see must name the agent that actually
+            // ran, not the one the graph was configured with.
+            if (r.value.agentName) labels.set(node.id, r.value.agentName);
             // Same envelope/JSONL extraction as the recovery path above —
-            // see comment there for why.
-            outputs.set(
-              node.id,
-              r.value.stdoutCaptured !== undefined
-                ? extractAgentResultText(r.value.stdoutCaptured)
-                : undefined,
-            );
+            // see comment there for why. A pool that finished with several
+            // successes hands downstream one section per agent.
+            if (r.value.poolOutputs) {
+              outputs.set(
+                node.id,
+                r.value.poolOutputs.map((o) => ({
+                  agentName: o.agentName,
+                  text:
+                    o.stdoutCaptured !== undefined
+                      ? extractAgentResultText(o.stdoutCaptured)
+                      : "",
+                })),
+              );
+            } else {
+              outputs.set(
+                node.id,
+                r.value.stdoutCaptured !== undefined
+                  ? extractAgentResultText(r.value.stdoutCaptured)
+                  : undefined,
+              );
+            }
           } else {
             failed = true;
             errorMsg ??= r.reason instanceof Error ? r.reason.message : String(r.reason);
@@ -899,12 +946,15 @@ export class FlowEngine {
   }
 
   /**
-   * Run a single node: insert the step row, dispatch to its runner, persist
-   * the outcome. Returns the captured stdout (for downstream fan-in) and a
-   * skipped flag (SkipFlowError = the run should cancel cleanly).
+   * Run a single node. Non-agent nodes get exactly one step row. Agent nodes
+   * resolve their candidate pool once, then run ONE attempt per step row —
+   * retries on the same agent and failovers to the next candidate each get
+   * their own row sharing `nodeId`/`idx`, ordered by `attempt`.
    *
-   * Throws on any non-skip failure so the caller's Promise.allSettled marks
-   * the layer as failed.
+   * Returns the captured stdout (for downstream fan-in) and a skipped flag
+   * (SkipFlowError = the run should cancel cleanly). Throws on any non-skip
+   * failure so the caller's Promise.allSettled marks the layer as failed;
+   * for an agent node that's the pool-exhausted error carrying the trail.
    */
   private async runNodeStep(
     prepared: PreparedRun,
@@ -919,11 +969,7 @@ export class FlowEngine {
     issueContext: IssueStatusContext | undefined,
     scheduleContext: ScheduleContext | undefined,
     opts: { rerun?: boolean },
-  ): Promise<{
-    stdoutCaptured?: string;
-    skipped: boolean;
-    skipReason?: string;
-  }> {
+  ): Promise<StepOutcome> {
     const { flowRunId, flowId, project, scm } = prepared;
     const { node, idx, previousOutput } = job;
 
@@ -943,25 +989,7 @@ export class FlowEngine {
       }
     }
 
-    const stepId = ulid();
-    await this.deps.db.insert(flowRunSteps).values({
-      id: stepId,
-      flowRunId,
-      nodeId: node.id,
-      nodeKind: node.kind,
-      idx,
-      status: "running",
-      startedAt: new Date(),
-      inputJson: {
-        nodeKind: node.kind,
-        nodeConfig: node.config,
-        previousOutput: previousOutput ? truncate(previousOutput, 4000) : null,
-        eventType: event.type,
-      },
-    });
-    await this.deps.pg.notify("flow_run_steps", flowRunId);
-
-    const baseCtx: NodeRunCtx = {
+    const baseCtx: StepBaseCtx = {
       db: this.deps.db,
       pg: this.deps.pg,
       app: this.deps.app,
@@ -969,7 +997,6 @@ export class FlowEngine {
       dispatcher: this.deps.dispatcher,
       flowId,
       flowRunId,
-      flowRunStepId: stepId,
       projectId: project.id,
       scm,
       project: {
@@ -987,16 +1014,125 @@ export class FlowEngine {
       hasDownstreamPostReview,
       rerun: opts.rerun ?? false,
     };
+    const meta = { node, idx, previousOutput, event };
 
+    if (node.kind !== "agent") {
+      return this.runStepAttempt(baseCtx, { ...meta, attempt: 0 }, (ctx) =>
+        isTriggerKind(node.kind)
+          ? triggerRunner(ctx, node as never)
+          : actionRunner(ctx, node as never),
+      );
+    }
+
+    // Agent node: resolve the pool ONCE (settings, labels, project default,
+    // shared prompt). A resolution failure happens before any attempt can
+    // start, so materialise it as attempt 0 — the run page then shows the
+    // same failed/skipped step the single-agent runner used to produce.
+    let pool: ResolvedAgentPool;
     try {
-      let result;
-      if (isTriggerKind(node.kind)) {
-        result = await triggerRunner(baseCtx, node as never);
-      } else if (node.kind === "agent") {
-        result = await agentRunner(baseCtx, node);
-      } else {
-        result = await actionRunner(baseCtx, node as never);
-      }
+      pool = await resolveAgentPool(baseCtx, node);
+    } catch (err) {
+      return this.runStepAttempt(baseCtx, { ...meta, attempt: 0 }, async () => {
+        throw err;
+      });
+    }
+
+    const { successes } = await runWithAgentPool({
+      candidates: pool.candidates,
+      retrySame: pool.retrySame,
+      concurrency: pool.concurrency,
+      quorum: pool.quorum,
+      describe: (agent) => agent.name,
+      onAttemptFailed: (rec) => {
+        console.warn("[flow-engine] agent pool attempt failed", {
+          flowRunId,
+          nodeId: node.id,
+          attempt: rec.info.attempt,
+          agent: rec.candidate.name,
+          disposition: rec.disposition,
+          error: rec.error instanceof Error ? rec.error.message : String(rec.error),
+        });
+      },
+      attempt: (agent, info) =>
+        this.runStepAttempt(
+          baseCtx,
+          {
+            ...meta,
+            attempt: info.attempt,
+            pool: {
+              agentId: agent.id,
+              agentName: agent.name,
+              candidateIndex: info.candidateIndex,
+              retryIndex: info.retryIndex,
+              candidateCount: info.candidateCount,
+              retrySame: pool.retrySame,
+              concurrency: pool.concurrency,
+              quorum: pool.quorum,
+            },
+          },
+          (ctx) => runAgentAttempt(ctx, node, agent, pool.promptBody),
+        ),
+    });
+    // A skip (maxIterations etc.) is decided per node, not per agent — any
+    // attempt reporting it means the run should cancel cleanly.
+    const skipped = successes.find((s) => s.value.skipped);
+    if (skipped) return skipped.value;
+    if (successes.length === 1) return successes[0]!.value;
+    return {
+      skipped: false,
+      agentName: successes[0]!.value.agentName ?? successes[0]!.candidate.name,
+      poolOutputs: successes.map((s) => ({
+        agentName: s.value.agentName ?? s.candidate.name,
+        stdoutCaptured: s.value.stdoutCaptured,
+      })),
+    };
+  }
+
+  /**
+   * One step row, start to finish: insert as `running`, invoke the runner
+   * with a ctx bound to that row, persist succeeded / skipped / failed.
+   * Throws on any non-skip failure (after recording it) so the caller — the
+   * layer loop or the agent-pool loop — decides what happens next.
+   */
+  private async runStepAttempt(
+    baseCtx: StepBaseCtx,
+    meta: {
+      node: FlowNode;
+      idx: number;
+      previousOutput: string | undefined;
+      event: PlatformEventInput;
+      attempt: number;
+      pool?: StepPoolMeta;
+    },
+    invoke: (ctx: NodeRunCtx) => Promise<NodeRunResult>,
+  ): Promise<StepOutcome> {
+    const { flowRunId } = baseCtx;
+    const { node, idx, previousOutput, event, attempt, pool } = meta;
+    const stepId = ulid();
+    await this.deps.db.insert(flowRunSteps).values({
+      id: stepId,
+      flowRunId,
+      nodeId: node.id,
+      nodeKind: node.kind,
+      idx,
+      attempt,
+      status: "running",
+      startedAt: new Date(),
+      inputJson: {
+        nodeKind: node.kind,
+        nodeConfig: node.config,
+        previousOutput: previousOutput ? truncate(previousOutput, 4000) : null,
+        eventType: event.type,
+        // Stamp the candidate up front so the run page can name the agent
+        // (and its position in the pool) while the attempt is still queued.
+        ...(pool ? { agentName: pool.agentName, agentId: pool.agentId, pool } : {}),
+      },
+    });
+    await this.deps.pg.notify("flow_run_steps", flowRunId);
+
+    const ctx: NodeRunCtx = { ...baseCtx, flowRunStepId: stepId };
+    try {
+      const result = await invoke(ctx);
 
       await this.deps.db
         .update(flowRunSteps)
@@ -1011,6 +1147,7 @@ export class FlowEngine {
       return {
         stdoutCaptured: result.stdoutCaptured,
         skipped: false,
+        agentName: result.agentName,
       };
     } catch (err) {
       if (err instanceof SkipFlowError) {
@@ -1032,6 +1169,43 @@ export class FlowEngine {
   }
 }
 
+/** Everything a step's runner ctx needs except the step row id. */
+type StepBaseCtx = Omit<NodeRunCtx, "flowRunStepId">;
+
+/** Pool bookkeeping stamped into an agent attempt's `inputJson`. */
+interface StepPoolMeta {
+  agentId: string;
+  agentName: string;
+  candidateIndex: number;
+  retryIndex: number;
+  candidateCount: number;
+  retrySame: number;
+  concurrency: number;
+  quorum: number;
+}
+
+interface StepOutcome {
+  stdoutCaptured?: string;
+  skipped: boolean;
+  skipReason?: string;
+  /** Set by agent nodes: the agent that was actually resolved and run. */
+  agentName?: string;
+  /**
+   * Set when an agent pool finished with MORE than one success: one entry per
+   * agent, in completion order. `stdoutCaptured` is then unset.
+   */
+  poolOutputs?: Array<{ agentName: string; stdoutCaptured?: string }>;
+}
+
+/** One agent's contribution when a pool node produced several outputs. */
+export interface PoolOutputPart {
+  agentName: string;
+  text: string;
+}
+
+/** What a node leaves in the run's outputs map for downstream fan-in. */
+export type NodeOutput = string | undefined | PoolOutputPart[];
+
 interface PreparedRun {
   flowRunId: string;
   flowId: string;
@@ -1047,6 +1221,8 @@ interface ReusedStep {
   nodeId: string;
   nodeKind: string;
   outputJson: unknown;
+  /** `inputJson.agentName` of the original step, when it was an agent node. */
+  agentName: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
   originalStepId: string;
@@ -1055,7 +1231,7 @@ interface ReusedStep {
 }
 
 interface PreloadedRun {
-  outputs: Map<string, string | undefined>;
+  outputs: Map<string, NodeOutput>;
   reused: ReusedStep[];
 }
 
@@ -1216,6 +1392,17 @@ function parseFlowDefinition(row: {
     console.error("[flow-engine] invalid flow graph", { slug: row.slug, err });
     return null;
   }
+}
+
+/**
+ * `agentName` off a persisted step's inputJson (written by agentRunner before
+ * dispatch). Null for non-agent steps and for rows written before the field
+ * existed.
+ */
+function readAgentName(inputJson: unknown): string | null {
+  if (!inputJson || typeof inputJson !== "object") return null;
+  const name = (inputJson as { agentName?: unknown }).agentName;
+  return typeof name === "string" && name.length > 0 ? name : null;
 }
 
 function truncate(s: string, n: number): string {
@@ -1411,6 +1598,43 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 }
 
 /**
+ * Display name per node id, used as the `## From <heading>` section title when
+ * a node's output is pasted into a downstream agent (see buildFanInInput).
+ *
+ * An agent node is named by the AGENT that runs it, not by a per-node rename:
+ * a fan-out of "Reviewer 1 / Reviewer 2 / Reviewer 3" tells the synthesizer
+ * (and the operator reading the graph) nothing about what actually produced
+ * each section, while the agent's name does. So a linked agent's name wins
+ * over `flow_node_settings.label`; the stored label only survives on nodes
+ * with no agent linked (legacy renames, non-agent nodes). Nodes with neither
+ * fall through to their raw id in buildFanInInput.
+ *
+ * The link is the flow-node default. Runtime agent resolution can override it
+ * (an `agent:<name>` label on the issue/PR, or the project default implement
+ * agent — see agentRunner), so the engine re-stamps the label with the agent
+ * that actually ran once the step completes.
+ *
+ * Exported for unit tests.
+ */
+export function buildNodeLabels(
+  nodes: readonly { id: string; kind: string }[],
+  settings: readonly { nodeId: string; label: string | null; agentId: string | null }[],
+  agentNamesById: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const kindByNodeId = new Map(nodes.map((n) => [n.id, n.kind]));
+  const labels = new Map<string, string>();
+  for (const s of settings) {
+    const agentName =
+      kindByNodeId.get(s.nodeId) === "agent" && s.agentId
+        ? agentNamesById.get(s.agentId)
+        : undefined;
+    const label = agentName ?? s.label;
+    if (label) labels.set(s.nodeId, label);
+  }
+  return labels;
+}
+
+/**
  * Compose a node's previousOutput from its upstream nodes' captured stdout.
  * - 0 incoming: undefined (e.g. trigger nodes)
  * - 1 incoming into an action node: that node's output verbatim — post_review
@@ -1426,23 +1650,49 @@ function buildLayers(def: FlowDefinition): FlowNode[][] {
 export function buildFanInInput(
   node: FlowNode,
   edges: FlowDefinition["edges"],
-  outputs: Map<string, string | undefined>,
+  outputs: Map<string, NodeOutput>,
   labels: Map<string, string>,
 ): string | undefined {
   const incoming = edges.filter((e) => e.target === node.id);
   if (incoming.length === 0) return undefined;
-  if (incoming.length === 1) {
-    const output = outputs.get(incoming[0]!.source);
+  if (incoming.length === 1 && !Array.isArray(outputs.get(incoming[0]!.source))) {
+    const output = outputs.get(incoming[0]!.source) as string | undefined;
     // Empty/absent upstream (trigger sources) must stay undefined so the
     // agent runner's "(no upstream output)" sentinel still fires.
     if (node.kind !== "agent" || !output?.trim()) return output;
     const heading = labels.get(incoming[0]!.source) ?? incoming[0]!.source;
     return `## From ${heading}\n\n${output}`;
   }
-  return incoming
-    .map((e) => {
-      const heading = labels.get(e.source) ?? e.source;
-      return `## From ${heading}\n\n${outputs.get(e.source) ?? ""}`;
+  // One section per upstream contribution. A pool node that finished with
+  // several successful attempts contributes one section PER AGENT (its
+  // parts carry the agent names); every other upstream contributes one
+  // section under its node label.
+  const sections: Array<{ heading: string; suffix: string; text: string }> = [];
+  for (const e of incoming) {
+    const out = outputs.get(e.source);
+    if (Array.isArray(out)) {
+      for (const part of out) {
+        sections.push({ heading: part.agentName, suffix: e.source, text: part.text });
+      }
+    } else {
+      sections.push({
+        heading: labels.get(e.source) ?? e.source,
+        suffix: e.source,
+        text: out ?? "",
+      });
+    }
+  }
+  // Now that agent nodes are named by their agent (buildNodeLabels), two
+  // siblings can legitimately resolve to the SAME heading — one agent wired
+  // into two reviewer nodes with different prompts. Suffix the node id on the
+  // collisions only, so the synthesizer can still tell the sections apart
+  // without the common case getting noisier.
+  const seen = new Map<string, number>();
+  for (const sct of sections) seen.set(sct.heading, (seen.get(sct.heading) ?? 0) + 1);
+  return sections
+    .map((sct) => {
+      const heading = seen.get(sct.heading)! > 1 ? `${sct.heading} (${sct.suffix})` : sct.heading;
+      return `## From ${heading}\n\n${sct.text}`;
     })
     .join("\n\n---\n\n");
 }

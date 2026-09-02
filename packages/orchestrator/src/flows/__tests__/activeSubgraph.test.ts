@@ -100,14 +100,7 @@ describe("computeActiveSubgraph on the unified development-lifecycle flow", () =
     const active = computeActiveSubgraph(developmentLifecycleFlow, ["review_trigger"]);
     assert.deepEqual(
       [...active].sort(),
-      [
-        "post_review",
-        "review_synthesizer",
-        "review_trigger",
-        "reviewer_correctness",
-        "reviewer_performance",
-        "reviewer_style",
-      ],
+      ["post_review", "review_synthesizer", "review_trigger", "reviewer"],
     );
   });
 

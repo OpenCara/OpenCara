@@ -3,6 +3,11 @@ import { eq, and } from "drizzle-orm";
 import { builtinFlows, type FlowDefinition } from "@opencara/flows";
 import type { Db } from "../db/client.js";
 import {
+  POOL_REVIEWER_NODE_ID,
+  foldLegacyReviewerSettings,
+  graphHasPoolReviewer,
+} from "./legacyReviewerPool.js";
+import {
   flowNodeSettings,
   flows,
   projects,
@@ -74,7 +79,80 @@ export async function ensureBuiltinFlowsForProject(db: Db, projectId: string): P
     if (didInsert && ownerUserId) {
       await seedNodeSettingsFromTemplate(db, projectId, flowId, slug, ownerUserId, seed);
     }
+    // A customized flow keeps its own graph, so judge the fold on what the
+    // flow actually runs, not on the seed it no longer tracks.
+    const liveNodes =
+      existing?.customizedAt ? (existing.graphJson as BuiltinGraph).nodes : seed.nodes;
+    await foldLegacyReviewerPoolForFlow(db, projectId, flowId, liveNodes);
   }
+}
+
+/**
+ * When a project flow's graph carries the pool `reviewer` node but has no
+ * settings row for it yet, fold the legacy sibling-reviewer rows
+ * (`reviewer_correctness` / `reviewer_<rand>` …) into one pool row — see
+ * legacyReviewerPool.ts. Idempotent; the legacy rows are left in place (they
+ * are inert once their nodes are gone). Returns true when a row was written.
+ */
+export async function foldLegacyReviewerPoolForFlow(
+  db: Db,
+  projectId: string,
+  flowId: string,
+  nodes: ReadonlyArray<{ id: string; kind: string }>,
+): Promise<boolean> {
+  if (!graphHasPoolReviewer(nodes)) return false;
+  const rows = await db.select().from(flowNodeSettings).where(eq(flowNodeSettings.flowId, flowId));
+  if (rows.some((r) => r.nodeId === POOL_REVIEWER_NODE_ID)) return false;
+  const folded = foldLegacyReviewerSettings(rows);
+  if (!folded) return false;
+  await db.insert(flowNodeSettings).values({
+    id: ulid(),
+    projectId,
+    flowId,
+    nodeId: POOL_REVIEWER_NODE_ID,
+    promptId: folded.promptId,
+    agentId: folded.agentId,
+    fallbackAgentIds: folded.fallbackAgentIds,
+    retrySame: 0,
+    concurrency: folded.concurrency,
+    quorum: folded.quorum,
+  });
+  return true;
+}
+
+/** Template-side twin of {@link foldLegacyReviewerPoolForFlow}. */
+export async function foldLegacyReviewerPoolForTemplate(
+  db: Db,
+  userId: string,
+  templateSlug: string,
+  nodes: ReadonlyArray<{ id: string; kind: string }>,
+): Promise<boolean> {
+  if (!graphHasPoolReviewer(nodes)) return false;
+  const rows = await db
+    .select()
+    .from(templateNodeSettings)
+    .where(
+      and(
+        eq(templateNodeSettings.userId, userId),
+        eq(templateNodeSettings.templateSlug, templateSlug),
+      ),
+    );
+  if (rows.some((r) => r.nodeId === POOL_REVIEWER_NODE_ID)) return false;
+  const folded = foldLegacyReviewerSettings(rows);
+  if (!folded) return false;
+  await db.insert(templateNodeSettings).values({
+    id: ulid(),
+    userId,
+    templateSlug,
+    nodeId: POOL_REVIEWER_NODE_ID,
+    promptId: folded.promptId,
+    agentId: folded.agentId,
+    fallbackAgentIds: folded.fallbackAgentIds,
+    retrySame: 0,
+    concurrency: folded.concurrency,
+    quorum: folded.quorum,
+  });
+  return true;
 }
 
 async function resolveSeedGraph(
@@ -137,6 +215,10 @@ async function seedNodeSettingsFromTemplate(
       nodeId: s.nodeId,
       promptId: s.promptId,
       agentId: s.agentId,
+      fallbackAgentIds: s.fallbackAgentIds,
+      retrySame: s.retrySame,
+      concurrency: s.concurrency,
+      quorum: s.quorum,
       label: s.label,
     });
   }
@@ -155,7 +237,8 @@ export async function seedBuiltinFlowsForAllProjects(db: Db): Promise<void> {
  * the code-defined built-in). Discards the project's per-flow graph edits and
  * clears `customizedAt`, so the flow tracks future template/code changes again.
  * Per-node settings (agent/prompt links in `flow_node_settings`) are left
- * untouched. Returns `{ ok:false }` when the flow has no global template
+ * untouched, except that legacy sibling-reviewer links are folded into the
+ * pool `reviewer` node's row when the template now has one. Returns `{ ok:false }` when the flow has no global template
  * (e.g. a legacy/custom flow not in `builtinFlows`).
  */
 export async function resetProjectFlowToTemplate(
@@ -183,5 +266,6 @@ export async function resetProjectFlowToTemplate(
       updatedAt: new Date(),
     })
     .where(eq(flows.id, flow.id));
+  await foldLegacyReviewerPoolForFlow(db, projectId, flow.id, seed.nodes);
   return { ok: true };
 }

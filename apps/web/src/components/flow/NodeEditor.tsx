@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Cpu, ExternalLink, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Cpu, ExternalLink, ListOrdered, Sparkles, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,16 +111,26 @@ interface SetSettingsVars {
   promptId?: string | null;
   agentId?: string | null;
   label?: string | null;
+  /** Ordered failover list (agent ids) tried after `agentId`. */
+  fallbackAgentIds?: string[];
+  /** Extra attempts on the same agent before failing over. */
+  retrySame?: number;
+  concurrency?: number;
+  quorum?: number;
 }
 
 function useSetSettings(scope: EditorScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: SetSettingsVars) => {
-      const body: Record<string, string | null> = {};
+      const body: Record<string, unknown> = {};
       if (vars.promptId !== undefined) body.promptId = vars.promptId;
       if (vars.agentId !== undefined) body.agentId = vars.agentId;
       if (vars.label !== undefined) body.label = vars.label;
+      if (vars.fallbackAgentIds !== undefined) body.fallbackAgentIds = vars.fallbackAgentIds;
+      if (vars.retrySame !== undefined) body.retrySame = vars.retrySame;
+      if (vars.concurrency !== undefined) body.concurrency = vars.concurrency;
+      if (vars.quorum !== undefined) body.quorum = vars.quorum;
       const url =
         scope.kind === "project"
           ? `/api/projects/${scope.projectId}/flows/${scope.flowId}/nodes/${vars.nodeId}/settings`
@@ -225,7 +235,28 @@ function AgentNodePanel({
   const setting = settings.find((s) => s.nodeId === node.id);
   const linkedPromptId = setting?.promptId ?? null;
   const linkedAgentId = setting?.agentId ?? null;
-  const linkedPrompt = linkedPromptId
+
+  // Agent pool (failover): the linked agent is the primary; these run after
+  // it, in order, when an attempt fails. One prompt for the whole pool.
+  const fallbackAgentIds = setting?.fallbackAgentIds ?? [];
+  const retrySame = setting?.retrySame ?? 0;
+  const concurrency = setting?.concurrency ?? 1;
+  const quorum = setting?.quorum ?? 1;
+  const poolSize = (linkedAgentId ? 1 : 0) + fallbackAgentIds.length;
+  const clampInt = (raw: string, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, Math.trunc(Number(raw) || lo)));
+  const addableFallbacks = agents.filter(
+    (a) => a.id !== linkedAgentId && !fallbackAgentIds.includes(a.id),
+  );
+  const saveFallbacks = (ids: string[]) =>
+    set.mutate({ nodeId: node.id, fallbackAgentIds: ids });
+  const moveFallback = (from: number, to: number) => {
+    if (to < 0 || to >= fallbackAgentIds.length) return;
+    const next = [...fallbackAgentIds];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item!);
+    saveFallbacks(next);
+  };  const linkedPrompt = linkedPromptId
     ? prompts.find((p) => p.id === linkedPromptId) ?? null
     : null;
   const linkedAgent = linkedAgentId
@@ -236,6 +267,10 @@ function AgentNodePanel({
   const cfg = (node.config ?? {}) as { label?: string };
   const defaultLabel = cfg.label ?? "Agent";
   const customLabel = setting?.label ?? null;
+  // Agent nodes are named by the agent that runs them — on the graph and in
+  // the `## From <heading>` sections a synthesizer receives. The per-node
+  // rename below is the fallback for a node with nothing linked yet.
+  const displayName = linkedAgent?.name ?? customLabel ?? defaultLabel;
 
   const [labelDraft, setLabelDraft] = useState(customLabel ?? "");
   useEffect(() => {
@@ -256,7 +291,7 @@ function AgentNodePanel({
           <div className="flex items-center gap-2">
             <Bot className="size-4 text-muted-foreground" />
             <CardTitle className="text-base">
-              {customLabel ?? defaultLabel}
+              {displayName}
               <span className="ml-2 text-xs font-normal text-muted-foreground">
                 #{node.id}
               </span>
@@ -270,23 +305,39 @@ function AgentNodePanel({
       <CardContent className="space-y-5">
         <div className="space-y-2">
           <div className="text-sm font-medium">Display name</div>
-          <Input
-            value={labelDraft}
-            placeholder={defaultLabel}
-            onChange={(e) => setLabelDraft(e.target.value)}
-            onBlur={commitLabel}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="max-w-md"
-          />
-          <p className="text-xs text-muted-foreground">
-            Shown on the graph + used as a section heading when feeding a synthesizer.
-            Empty resets to "{defaultLabel}".
-          </p>
+          {linkedAgent ? (
+            <p className="text-xs text-muted-foreground">
+              Shown on the graph and used as the section heading when this node
+              feeds a synthesizer. Taken from the linked agent —{" "}
+              <span className="font-medium text-foreground">{linkedAgent.name}</span>
+              . Rename it on the{" "}
+              <Link to="/agents" className="text-foreground underline">
+                agents page
+              </Link>
+              .
+            </p>
+          ) : (
+            <>
+              <Input
+                value={labelDraft}
+                placeholder={defaultLabel}
+                onChange={(e) => setLabelDraft(e.target.value)}
+                onBlur={commitLabel}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="max-w-md"
+              />
+              <p className="text-xs text-muted-foreground">
+                Shown on the graph + used as a section heading when feeding a
+                synthesizer. Empty resets to "{defaultLabel}". Once you link an
+                agent below, its name is used instead.
+              </p>
+            </>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -338,6 +389,150 @@ function AgentNodePanel({
                 </pre>
               );
             })()}
+
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center gap-1 text-sm font-medium">
+              <ListOrdered className="size-3.5" />
+              Fallback agents
+              <span className="text-xs font-normal text-muted-foreground">
+                (optional · priority order)
+              </span>
+            </div>
+            {fallbackAgentIds.length > 0 && (
+              <ol className="max-w-md divide-y rounded-md border">
+                {fallbackAgentIds.map((id, i) => {
+                  const a = agents.find((x) => x.id === id);
+                  return (
+                    <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                      <span className="w-5 text-xs text-muted-foreground">{i + 2}.</span>
+                      <span className={cn("flex-1 truncate", !a && "text-destructive")}>
+                        {a?.name ?? `(deleted agent …${id.slice(-6)})`}
+                      </span>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        disabled={i === 0 || set.isPending}
+                        onClick={() => moveFallback(i, i - 1)}
+                        title="Move up"
+                      >
+                        <ArrowUp />
+                      </Button>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        disabled={i === fallbackAgentIds.length - 1 || set.isPending}
+                        onClick={() => moveFallback(i, i + 1)}
+                        title="Move down"
+                      >
+                        <ArrowDown />
+                      </Button>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        disabled={set.isPending}
+                        onClick={() => saveFallbacks(fallbackAgentIds.filter((x) => x !== id))}
+                        title="Remove"
+                      >
+                        <X />
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+            <Select
+              value={NONE}
+              onValueChange={(v) => {
+                if (v !== NONE) saveFallbacks([...fallbackAgentIds, v]);
+              }}
+              disabled={addableFallbacks.length === 0 || set.isPending}
+            >
+              <SelectTrigger className="w-full max-w-md">
+                <SelectValue placeholder="Add a fallback agent…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Add a fallback agent…</SelectItem>
+                {addableFallbacks.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex max-w-md items-center gap-3">
+              <Label htmlFor={`retry-same-${node.id}`} className="shrink-0 text-sm">
+                Retries per agent
+              </Label>
+              <Input
+                id={`retry-same-${node.id}`}
+                type="number"
+                min={0}
+                max={5}
+                step={1}
+                className="w-20"
+                defaultValue={retrySame}
+                key={`retry-same-${node.id}-${retrySame}`}
+                onBlur={(e) => {
+                  const n = Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0)));
+                  if (n !== retrySame) set.mutate({ nodeId: node.id, retrySame: n });
+                }}
+              />
+            </div>
+            <div className="flex max-w-md items-center gap-3">
+              <Label htmlFor={`concurrency-${node.id}`} className="shrink-0 text-sm">
+                Run in parallel
+              </Label>
+              <Input
+                id={`concurrency-${node.id}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                className="w-20"
+                defaultValue={concurrency}
+                key={`concurrency-${node.id}-${concurrency}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 1, 8);
+                  if (n !== concurrency) set.mutate({ nodeId: node.id, concurrency: n });
+                }}
+              />
+              <Label htmlFor={`quorum-${node.id}`} className="shrink-0 text-sm">
+                Minimum successes
+              </Label>
+              <Input
+                id={`quorum-${node.id}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                className="w-20"
+                defaultValue={quorum}
+                key={`quorum-${node.id}-${quorum}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 1, 8);
+                  if (n !== quorum) set.mutate({ nodeId: node.id, quorum: n });
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Agents run from the top of the list, {Math.min(concurrency, Math.max(poolSize, 1))} at
+              a time; a failed one is retried that many times, then the next agent in the list
+              takes its slot with the same prompt. The node succeeds once every slot has
+              finished with at least {Math.min(quorum, concurrency)} success
+              {Math.min(quorum, concurrency) === 1 ? "" : "es"}, and hands every successful
+              output downstream (one section per agent). 1 / 1 is plain failover.
+              {poolSize > 0 && concurrency > poolSize && (
+                <> Only {poolSize} agent{poolSize === 1 ? "" : "s"} configured, so at most that many run.</>
+              )}
+              {!!node.config?.worktree && concurrency > 1 && (
+                <>
+                  {" "}
+                  This node runs in a shared worktree, so the engine caps it to one agent at a
+                  time (failover still applies).
+                </>
+              )}
+            </p>
+          </div>
         </div>
 
         <div className="space-y-2">

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import {
+  agentsQuery,
   flowNodeSettingsQuery,
   flowRunDetailQuery,
   projectFlowsQuery,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/queries";
 import { formatRelative, formatAbsolute } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
+import { buildFlowNodeLabels } from "@/lib/flowNodeLabels";
 import type { StepStatus } from "@/components/flow/nodes";
 import { StepSteeringChat } from "@/components/flow/StepSteeringChat";
 import { useEventSource } from "@/lib/sse";
@@ -40,6 +42,8 @@ export function FlowRunDetailPage() {
   const initialQ = useQuery(flowRunDetailQuery(runId!));
   const flowsQ = useQuery(projectFlowsQuery(projectId!));
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Agent-pool nodes have one step row per attempt; null = show the latest.
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
   const live = useFlowRunStream(runId!);
   const data = live ?? initialQ.data ?? null;
@@ -53,20 +57,42 @@ export function FlowRunDetailPage() {
     ...flowNodeSettingsQuery(projectId!, flow?.id ?? ""),
     enabled: !!flow,
   });
+  const agentsQ = useQuery(agentsQuery());
+  // Node display names, agent-first (see buildFlowNodeLabels). On a run we can
+  // do better than the flow's linked agent: the step row records the agent the
+  // engine actually resolved (an `agent:<name>` issue/PR label or the project
+  // default implement agent both outrank the node link), so that wins once the
+  // step exists.
   const labelOverrides = useMemo<Record<string, string>>(() => {
-    const m: Record<string, string> = {};
-    for (const s of settingsQ.data?.settings ?? []) {
-      if (s.label) m[s.nodeId] = s.label;
+    const m = buildFlowNodeLabels(
+      flow?.graphJson.nodes ?? [],
+      settingsQ.data?.settings ?? [],
+      agentsQ.data?.agents ?? [],
+    );
+    for (const step of data?.steps ?? []) {
+      const ran = parseAgentPrompt(step.inputJson)?.agentName;
+      if (ran) m[step.nodeId] = ran;
     }
     return m;
-  }, [settingsQ.data]);
+  }, [flow, settingsQ.data, agentsQ.data, data?.steps]);
+
+  // Latest attempt per node: agent-pool retries/failovers each add a step row
+  // sharing the nodeId, and the graph badge + rerun control must reflect the
+  // attempt that decided the node's fate, not the first one that failed.
+  const latestByNode = useMemo(() => {
+    const m = new Map<string, FlowRunStep>();
+    for (const s of data?.steps ?? []) {
+      const prev = m.get(s.nodeId);
+      if (!prev || s.attempt >= prev.attempt) m.set(s.nodeId, s);
+    }
+    return m;
+  }, [data?.steps]);
 
   const stepStatuses = useMemo<Record<string, StepStatus>>(() => {
-    if (!data) return {};
     const m: Record<string, StepStatus> = {};
-    for (const s of data.steps) m[s.nodeId] = s.status;
+    for (const [nodeId, s] of latestByNode) m[nodeId] = s.status;
     return m;
-  }, [data]);
+  }, [latestByNode]);
 
   if ((initialQ.isLoading && !data) || flowsQ.isLoading) {
     return <Skeleton className="h-64 w-full" />;
@@ -76,14 +102,21 @@ export function FlowRunDetailPage() {
   }
 
   const { run, steps, agentRuns } = data;
-  const selectedStep = selectedNodeId
-    ? steps.find((s) => s.nodeId === selectedNodeId) ?? null
-    : null;
+  const nodeAttempts = selectedNodeId
+    ? steps
+        .filter((s) => s.nodeId === selectedNodeId)
+        .sort((a, b) => a.attempt - b.attempt)
+    : [];
+  const selectedStep =
+    nodeAttempts.find((s) => s.id === selectedStepId) ??
+    nodeAttempts[nodeAttempts.length - 1] ??
+    null;
   const selectedAgentRunId = selectedStep
     ? agentRuns.find((a) => a.flowRunStepId === selectedStep.id)?.id ?? null
     : null;
 
-  const failedStep = steps.find((s) => s.status === "failed") ?? null;
+  const failedStep =
+    Array.from(latestByNode.values()).find((s) => s.status === "failed") ?? null;
 
   return (
     <div className="space-y-6">
@@ -118,12 +151,17 @@ export function FlowRunDetailPage() {
         edges={flow.graphJson.edges}
         stepStatuses={stepStatuses}
         labelOverrides={labelOverrides}
-        onNodeClick={(id) => setSelectedNodeId(id)}
+        onNodeClick={(id) => {
+          setSelectedNodeId(id);
+          setSelectedStepId(null);
+        }}
       />
 
       {selectedStep ? (
         <StepPanel
           step={selectedStep}
+          attempts={nodeAttempts}
+          onSelectAttempt={setSelectedStepId}
           agentRunId={selectedAgentRunId}
           projectId={projectId!}
           flowRunId={run.id}
@@ -171,15 +209,21 @@ function useFlowRunStream(runId: string): FlowRunSnapshot | null {
 
 function StepPanel({
   step,
+  attempts,
+  onSelectAttempt,
   agentRunId,
   projectId,
   flowRunId,
 }: {
   step: FlowRunStep;
+  /** Every attempt row for this node, ascending by `attempt`. */
+  attempts: FlowRunStep[];
+  onSelectAttempt: (stepId: string) => void;
   agentRunId: string | null;
   projectId: string;
   flowRunId: string;
 }) {
+  const pool = parsePoolMeta(step.inputJson);
   const duration =
     step.startedAt && step.finishedAt
       ? `${Math.round(
@@ -196,12 +240,55 @@ function StepPanel({
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">
             Step {step.idx + 1} · <span className="text-muted-foreground">{step.nodeKind}</span>
+            {attempts.length > 1 && (
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                attempt {step.attempt + 1} of {attempts.length}
+              </span>
+            )}
           </CardTitle>
           <div className="flex items-center gap-2">
             {reused && <Badge variant="outline">reused</Badge>}
+            {pool && pool.retryIndex > 0 && <Badge variant="outline">retry</Badge>}
+            {pool && pool.retryIndex === 0 && pool.candidateIndex > 0 && (
+              <Badge variant="outline">failover</Badge>
+            )}
             <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
           </div>
         </div>
+        {attempts.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {attempts.map((a) => {
+              const meta = parsePoolMeta(a.inputJson);
+              const active = a.id === step.id;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => onSelectAttempt(a.id)}
+                  className={
+                    "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs " +
+                    (active
+                      ? "border-foreground/40 bg-muted"
+                      : "text-muted-foreground hover:bg-muted/50")
+                  }
+                  title={a.error ?? undefined}
+                >
+                  <span>#{a.attempt + 1}</span>
+                  {meta?.agentName && <span className="font-medium">{meta.agentName}</span>}
+                  <Badge variant={statusVariant(a.status)} className="px-1 py-0 text-[10px]">
+                    {a.status}
+                  </Badge>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {pool && pool.candidateCount > 1 && (
+          <p className="text-xs text-muted-foreground">
+            Agent pool: candidate {pool.candidateIndex + 1} of {pool.candidateCount}
+            {pool.retrySame > 0 && <> · retry {pool.retryIndex} of {pool.retrySame}</>}
+          </p>
+        )}
         {reused && (
           <p className="text-xs text-muted-foreground">
             Carried over from{" "}
@@ -370,6 +457,40 @@ function RerunControls({
       )}
     </div>
   );
+}
+
+interface StepPoolMeta {
+  agentId: string;
+  agentName: string;
+  candidateIndex: number;
+  retryIndex: number;
+  candidateCount: number;
+  retrySame: number;
+}
+
+// Engine stamps `pool` onto agent-attempt steps (engine.runStepAttempt) so
+// the panel can say where this attempt sits in the node's failover list.
+function parsePoolMeta(inputJson: unknown): StepPoolMeta | null {
+  if (!inputJson || typeof inputJson !== "object") return null;
+  const pool = (inputJson as { pool?: unknown }).pool;
+  if (!pool || typeof pool !== "object") return null;
+  const o = pool as Partial<StepPoolMeta>;
+  if (
+    typeof o.agentName !== "string" ||
+    typeof o.candidateIndex !== "number" ||
+    typeof o.retryIndex !== "number" ||
+    typeof o.candidateCount !== "number"
+  ) {
+    return null;
+  }
+  return {
+    agentId: typeof o.agentId === "string" ? o.agentId : "",
+    agentName: o.agentName,
+    candidateIndex: o.candidateIndex,
+    retryIndex: o.retryIndex,
+    candidateCount: o.candidateCount,
+    retrySame: typeof o.retrySame === "number" ? o.retrySame : 0,
+  };
 }
 
 function parseReused(
