@@ -100,4 +100,20 @@ describe("buildSubject", () => {
     assert.equal(s?.label, "PR #9");
     assert.equal(s?.url, null);
   });
+
+  it("prefers a browser url carried by the payload (Azure PR resource _links.web)", () => {
+    const url = "https://dev.azure.com/org/team/_git/repo/pullrequest/60";
+    assert.equal(
+      buildSubject({ kind: "pull_request", number: 60, title: "T", url }, azdo)?.url,
+      url,
+    );
+    // Even without a project row the payload url still links.
+    assert.equal(buildSubject({ kind: "pull_request", number: 60, url }, null)?.url, url);
+  });
+  it("ignores a non-http payload url and falls back to the derived one", () => {
+    assert.equal(
+      buildSubject({ kind: "pull_request", number: 60, url: "javascript:alert(1)" }, azdo)?.url,
+      "https://dev.azure.com/org/team/_git/repo/pullrequest/60",
+    );
+  });
 });

@@ -77,7 +77,7 @@ function TimelineRow({ item }: { item: ActivityItem }) {
   const headline = isRun
     ? `${item.agentKind ?? "agent"} run ${item.type}`
     : item.subject
-      ? summarizeEvent(item.type, item.payload).replace(/^(PR|Issue) #\d+ /, "")
+      ? summarizeEvent(item.type, item.payload).replace(/^(PR|Issue|WI) #\d+ /, "")
       : summarizeEvent(item.type, item.payload);
   const duration = run ? formatDuration(run.startedAt, run.finishedAt) : "";
 

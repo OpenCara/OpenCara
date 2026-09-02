@@ -84,10 +84,24 @@ export interface ActivityItemOut {
 /**
  * Extract the identifying slice of a webhook payload as jsonb, so agent-run
  * rows can carry their trigger's subject without shipping the whole payload.
- * Azure DevOps deliveries are normalised to the same `pull_request` /
- * `work_item` keys upstream (azure/events.ts), so one expression covers both.
+ *
+ * GitHub deliveries are stored as-is and keyed by `pull_request` / `issue` /
+ * `push`. Azure DevOps deliveries are stored as the RAW service-hook envelope
+ * (`{ eventType, resource }`) — normalisation to the engine's GitHub-like
+ * shape happens in memory at dispatch time (azure/events.ts) and is never
+ * written back — so the Azure branches below read the envelope directly:
+ *
+ * - `git.pullrequest.*`: `resource` is the PR (`pullRequestId`, `title`,
+ *   `_links.web.href`).
+ * - PR comment events: `resource` is the bare comment; the only route back to
+ *   the PR is the `/pullRequests/{id}/` segment of `_links.self.href` (see
+ *   idsFromCommentLink). No title is available.
+ * - `workitem.*`: `resource.id` (create) or `resource.workItemId` (update);
+ *   `System.Title` is a plain string on create and `{oldValue,newValue}` on
+ *   update — buildSubject accepts both.
  */
 function subjectJsonExpr(payload: SQL): SQL {
+  const res = sql`${payload}->'resource'`;
   return sql`CASE
     WHEN ${payload} ? 'pull_request' THEN jsonb_build_object(
       'kind', 'pull_request',
@@ -106,6 +120,21 @@ function subjectJsonExpr(payload: SQL): SQL {
       'kind', 'push',
       'ref', ${payload}->>'ref',
       'compare', ${payload}->>'compare')
+    WHEN ${payload}->>'eventType' LIKE 'git.pullrequest.%' THEN jsonb_build_object(
+      'kind', 'pull_request',
+      'number', ${res}->'pullRequestId',
+      'title', ${res}->>'title',
+      'url', ${res}->'_links'->'web'->>'href')
+    WHEN ${payload}->>'eventType' = 'ms.vss-code.git-pullrequest-comment-event' THEN jsonb_build_object(
+      'kind', 'pull_request',
+      'number', COALESCE(
+        ${res}->'pullRequest'->'pullRequestId',
+        to_jsonb(substring(${res}->'_links'->'self'->>'href' from '/pullRequests/(\\d+)')::int)),
+      'title', ${res}->'pullRequest'->>'title')
+    WHEN ${payload}->>'eventType' LIKE 'workitem.%' THEN jsonb_build_object(
+      'kind', 'work_item',
+      'number', COALESCE(${res}->'workItemId', ${res}->'id'),
+      'title', COALESCE(${res}->'fields'->'System.Title', ${res}->'revision'->'fields'->'System.Title'))
     ELSE NULL
   END`;
 }
