@@ -858,7 +858,7 @@ export class FlowEngine {
         skipped = true;
         errorMsg ??=
           verdict === "superseded"
-            ? "superseded: a newer review request for this PR took the queue slot"
+            ? "superseded: a newer review request for this PR is already running or queued"
             : "cancelled while queued behind another review of this PR";
         skipCancelReason =
           verdict === "superseded" ? "review_superseded" : "review_queue_cancelled";

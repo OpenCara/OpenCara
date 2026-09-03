@@ -23,6 +23,29 @@ describe("ReviewGate", () => {
     assert.equal(await third, "run");
   });
 
+  it("a run older than the one in progress is superseded on arrival (grace-delayed trigger)", async () => {
+    // r1 was created first (ready_for_review, held by its grace delay); r2
+    // (the review comment) reached the gate first and is running. r1 must
+    // not queue a second full review behind it.
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r2"), "run");
+    let queued = 0;
+    assert.equal(await gate.acquire("k", "r1", { onQueued: () => { queued += 1; } }), "superseded");
+    assert.equal(queued, 0);
+    assert.deepEqual(gate.state("k"), { running: "r2", queued: null });
+  });
+
+  it("a run older than the queued waiter is superseded instead of replacing it", async () => {
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r1"), "run");
+    const third = gate.acquire("k", "r3", { pollMs: 5 });
+    await tick();
+    assert.equal(await gate.acquire("k", "r2"), "superseded");
+    assert.deepEqual(gate.state("k"), { running: "r1", queued: "r3" });
+    gate.release("k", "r1");
+    assert.equal(await third, "run");
+  });
+
   it("a queued run that gets cancelled leaves the queue", async () => {
     const gate = new ReviewGate();
     assert.equal(await gate.acquire("k", "r1"), "run");
@@ -40,6 +63,23 @@ describe("ReviewGate", () => {
     assert.equal(await third, "run");
     gate.release("k", "r3");
     assert.deepEqual(gate.state("k"), { running: null, queued: null });
+  });
+
+  it("a waiter promoted while its cancel check is in flight releases the slot", async () => {
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r1"), "run");
+    let releaseGate!: () => void;
+    const pending = new Promise<boolean>((r) => (releaseGate = () => r(true)));
+    // isCancelled resolves true only after r1 has released and promoted r2.
+    const second = gate.acquire("k", "r2", { isCancelled: () => pending, pollMs: 1 });
+    await tick();
+    await new Promise((r) => setTimeout(r, 5)); // let the first poll tick start isCancelled
+    gate.release("k", "r1");
+    assert.deepEqual(gate.state("k"), { running: "r2", queued: null });
+    releaseGate();
+    assert.equal(await second, "cancelled");
+    assert.deepEqual(gate.state("k"), { running: null, queued: null });
+    assert.equal(await gate.acquire("k", "r3"), "run");
   });
 
   it("onResumed fires when a queued run is promoted", async () => {

@@ -4,7 +4,14 @@
  * more waiting behind it. NEWEST WINS: a further request while one is already
  * queued replaces the waiter (the older request is superseded), because each
  * request carries the PR state of its own event and the one that should run
- * next is the latest push.
+ * next is the latest push. "Newest" is decided by run id, not by arrival
+ * order at the gate: run ids are ULIDs minted when the event is accepted, so
+ * they sort by event time. This matters because a trigger's grace delay
+ * (`delaySeconds`) can hold an OLDER run back long enough for a newer request
+ * on the same PR (e.g. a `@opencara review` comment posted right after
+ * publishing a draft) to start first — the late-arriving older run must then
+ * stand down, not queue a second full review behind the one already covering
+ * the newer state.
  *
  * In-process by design: the orchestrator is a single instance and a run's
  * execution lives in this process, so the map here IS the truth; the DB only
@@ -55,9 +62,15 @@ export class ReviewGate {
     }
     if (slot.running === runId) return "run";
 
+    // Older than the run in progress: that run already reviews a newer state
+    // of the PR than this request carries, so there is nothing left to do.
+    if (isOlder(runId, slot.running)) return "superseded";
+
     // Newest wins: an older waiter is told to stand down and this run takes
-    // its place in the queue.
+    // its place in the queue — or, if the waiter is the newer one, this run
+    // stands down instead.
     if (slot.queued !== null) {
+      if (isOlder(runId, slot.queued.runId)) return "superseded";
       const older = slot.queued;
       slot.queued = null;
       older.resolve("superseded");
@@ -93,6 +106,15 @@ export class ReviewGate {
         return "run";
       }
       if (await hooks.isCancelled?.()) {
+        // The run ahead may have released while isCancelled was in flight,
+        // promoting this (now cancelled) waiter to `running`. Give the slot
+        // back, or every later review of this PR queues forever behind a
+        // run that never executes — nothing else releases a `cancelled`
+        // verdict.
+        if (slot.running === runId) {
+          this.release(key, runId);
+          return "cancelled";
+        }
         if (slot.queued?.runId === runId) slot.queued = null;
         this.prune(key, slot);
         return "cancelled";
@@ -117,6 +139,11 @@ export class ReviewGate {
   private prune(key: string, slot: Slot): void {
     if (slot.running === null && slot.queued === null) this.slots.delete(key);
   }
+}
+
+/** Run ids are ULIDs: lexicographic order is creation order. */
+function isOlder(runId: string, than: string): boolean {
+  return runId < than;
 }
 
 /** PR number a trigger event concerns (pull_request or a PR's issue_comment). */
