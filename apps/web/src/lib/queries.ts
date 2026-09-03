@@ -623,6 +623,9 @@ export function useCancelFlowRun(projectId: string, issueNumber?: number) {
         });
       }
       qc.invalidateQueries({ queryKey: ["projects", projectId, "flow-runs"] });
+      // The flow page's "Recent runs" table is fed by flowDetailQuery
+      // (["projects", id, "flows", slug]); it has no SSE, so refresh it here.
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flows"] });
       qc.invalidateQueries({ queryKey: ["flow-runs", flowRunId] });
       qc.invalidateQueries({
         queryKey: ["projects", projectId, "kanban"],

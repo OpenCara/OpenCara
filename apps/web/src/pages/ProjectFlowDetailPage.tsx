@@ -290,11 +290,20 @@ function FlowRunRow({ run, projectId }: { run: FlowRunSummary; projectId: string
             variant="ghost"
             disabled={cancel.isPending}
             onClick={() => cancel.mutate(run.id)}
-            title="Cancel this run"
+            title={
+              cancel.error
+                ? `Stop failed: ${(cancel.error as Error).message ?? "unknown error"}`
+                : "Cancel this run"
+            }
           >
             <Square className="size-3.5" />
             {cancel.isPending ? "Stopping…" : "Stop"}
           </Button>
+        )}
+        {cancel.error && (
+          <div className="text-xs text-destructive">
+            {(cancel.error as Error).message ?? "Stop failed"}
+          </div>
         )}
       </TableCell>
     </TableRow>

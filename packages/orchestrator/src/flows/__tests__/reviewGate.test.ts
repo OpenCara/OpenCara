@@ -65,6 +65,23 @@ describe("ReviewGate", () => {
     assert.deepEqual(gate.state("k"), { running: null, queued: null });
   });
 
+  it("a waiter promoted while its cancel check is in flight releases the slot", async () => {
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r1"), "run");
+    let releaseGate!: () => void;
+    const pending = new Promise<boolean>((r) => (releaseGate = () => r(true)));
+    // isCancelled resolves true only after r1 has released and promoted r2.
+    const second = gate.acquire("k", "r2", { isCancelled: () => pending, pollMs: 1 });
+    await tick();
+    await new Promise((r) => setTimeout(r, 5)); // let the first poll tick start isCancelled
+    gate.release("k", "r1");
+    assert.deepEqual(gate.state("k"), { running: "r2", queued: null });
+    releaseGate();
+    assert.equal(await second, "cancelled");
+    assert.deepEqual(gate.state("k"), { running: null, queued: null });
+    assert.equal(await gate.acquire("k", "r3"), "run");
+  });
+
   it("onResumed fires when a queued run is promoted", async () => {
     const gate = new ReviewGate();
     await gate.acquire("k", "r1");

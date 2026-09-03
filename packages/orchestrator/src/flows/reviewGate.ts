@@ -106,6 +106,15 @@ export class ReviewGate {
         return "run";
       }
       if (await hooks.isCancelled?.()) {
+        // The run ahead may have released while isCancelled was in flight,
+        // promoting this (now cancelled) waiter to `running`. Give the slot
+        // back, or every later review of this PR queues forever behind a
+        // run that never executes — nothing else releases a `cancelled`
+        // verdict.
+        if (slot.running === runId) {
+          this.release(key, runId);
+          return "cancelled";
+        }
         if (slot.queued?.runId === runId) slot.queued = null;
         this.prune(key, slot);
         return "cancelled";
