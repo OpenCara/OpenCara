@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { Pause, Play, PowerOff, RotateCcw } from "lucide-react";
+import { Pause, Play, PowerOff, RotateCcw, Square } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +33,7 @@ import {
   useSetFlowEnabled,
   useTriggerFlow,
   type FlowRunSummary,
+  useCancelFlowRun,
 } from "@/lib/queries";
 import { formatRelative } from "@/lib/format";
 import { FlowGraph } from "@/components/flow/FlowGraph";
@@ -240,6 +241,7 @@ export function ProjectFlowDetailPage() {
                   <TableHead>Status</TableHead>
                   <TableHead>Duration</TableHead>
                   <TableHead>Error</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -256,6 +258,8 @@ export function ProjectFlowDetailPage() {
 }
 
 function FlowRunRow({ run, projectId }: { run: FlowRunSummary; projectId: string }) {
+  const cancel = useCancelFlowRun(projectId);
+  const live = run.status === "pending" || run.status === "running";
   const duration =
     run.startedAt && run.finishedAt
       ? `${Math.round(
@@ -278,6 +282,20 @@ function FlowRunRow({ run, projectId }: { run: FlowRunSummary; projectId: string
       <TableCell className="text-sm">{duration}</TableCell>
       <TableCell className="max-w-md truncate text-xs text-muted-foreground">
         {run.error ?? ""}
+      </TableCell>
+      <TableCell className="text-right">
+        {live && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={cancel.isPending}
+            onClick={() => cancel.mutate(run.id)}
+            title="Cancel this run"
+          >
+            <Square className="size-3.5" />
+            {cancel.isPending ? "Stopping…" : "Stop"}
+          </Button>
+        )}
       </TableCell>
     </TableRow>
   );

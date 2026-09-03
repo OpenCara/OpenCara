@@ -23,6 +23,29 @@ describe("ReviewGate", () => {
     assert.equal(await third, "run");
   });
 
+  it("a run older than the one in progress is superseded on arrival (grace-delayed trigger)", async () => {
+    // r1 was created first (ready_for_review, held by its grace delay); r2
+    // (the review comment) reached the gate first and is running. r1 must
+    // not queue a second full review behind it.
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r2"), "run");
+    let queued = 0;
+    assert.equal(await gate.acquire("k", "r1", { onQueued: () => { queued += 1; } }), "superseded");
+    assert.equal(queued, 0);
+    assert.deepEqual(gate.state("k"), { running: "r2", queued: null });
+  });
+
+  it("a run older than the queued waiter is superseded instead of replacing it", async () => {
+    const gate = new ReviewGate();
+    assert.equal(await gate.acquire("k", "r1"), "run");
+    const third = gate.acquire("k", "r3", { pollMs: 5 });
+    await tick();
+    assert.equal(await gate.acquire("k", "r2"), "superseded");
+    assert.deepEqual(gate.state("k"), { running: "r1", queued: "r3" });
+    gate.release("k", "r1");
+    assert.equal(await third, "run");
+  });
+
   it("a queued run that gets cancelled leaves the queue", async () => {
     const gate = new ReviewGate();
     assert.equal(await gate.acquire("k", "r1"), "run");

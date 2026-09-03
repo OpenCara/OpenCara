@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { RefreshCw, RotateCcw } from "lucide-react";
+import { RefreshCw, RotateCcw, Square } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,7 @@ import {
   flowRunDetailQuery,
   projectFlowsQuery,
   promptsQuery,
+  useCancelFlowRun,
   useRerunFlow,
   type AgentRunRow,
   type FlowRunStep,
@@ -145,6 +146,7 @@ export function FlowRunDetailPage() {
         <RerunControls
           projectId={projectId!}
           runId={run.id}
+          status={run.status}
           failedStep={failedStep}
         />
       </div>
@@ -408,14 +410,18 @@ function AgentLogPanel({ agentRunId }: { agentRunId: string }) {
 function RerunControls({
   projectId,
   runId,
+  status,
   failedStep,
 }: {
   projectId: string;
   runId: string;
+  status: string;
   failedStep: FlowRunStep | null;
 }) {
   const navigate = useNavigate();
   const rerun = useRerunFlow(projectId);
+  const cancel = useCancelFlowRun(projectId);
+  const live = status === "pending" || status === "running";
 
   const fire = (fromStepId?: string) => {
     rerun.mutate(
@@ -431,6 +437,18 @@ function RerunControls({
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex gap-2">
+        {live && (
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={cancel.isPending}
+            onClick={() => cancel.mutate(runId)}
+            title="Cancel this run — in-flight agents are stopped on their devices"
+          >
+            <Square className="size-3.5" />
+            {cancel.isPending ? "Stopping…" : "Stop"}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -456,6 +474,11 @@ function RerunControls({
       {rerun.error && (
         <span className="text-xs text-destructive">
           {(rerun.error as Error).message ?? "Rerun failed"}
+        </span>
+      )}
+      {cancel.error && (
+        <span className="text-xs text-destructive">
+          {(cancel.error as Error).message ?? "Stop failed"}
         </span>
       )}
     </div>

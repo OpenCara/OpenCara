@@ -603,9 +603,10 @@ export const issueFlowRunsQuery = (
 
 /**
  * Cancel a flow run. Used by the issue-editing page's "Cancel" button to
- * stop an in-flight implement run from outside the flow-run detail page.
+ * stop an in-flight implement run from outside the flow-run detail page,
+ * and by the flow-run detail / flow run-list "Stop" buttons (no issue).
  */
-export function useCancelFlowRun(projectId: string, issueNumber: number) {
+export function useCancelFlowRun(projectId: string, issueNumber?: number) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (flowRunId: string) =>
@@ -616,15 +617,12 @@ export function useCancelFlowRun(projectId: string, issueNumber: number) {
       // feedback. Also invalidate the flow-run detail in case it's open
       // in another tab, and the kanban board (its implementStatus depends
       // on the same flow_run row).
-      qc.invalidateQueries({
-        queryKey: [
-          "projects",
-          projectId,
-          "issues",
-          issueNumber,
-          "flow-runs",
-        ],
-      });
+      if (issueNumber !== undefined) {
+        qc.invalidateQueries({
+          queryKey: ["projects", projectId, "issues", issueNumber, "flow-runs"],
+        });
+      }
+      qc.invalidateQueries({ queryKey: ["projects", projectId, "flow-runs"] });
       qc.invalidateQueries({ queryKey: ["flow-runs", flowRunId] });
       qc.invalidateQueries({
         queryKey: ["projects", projectId, "kanban"],
