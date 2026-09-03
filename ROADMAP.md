@@ -2,6 +2,8 @@
 
 ## Recent Activity
 
+- **2026-09-03**: Merged [#238](https://github.com/OpenCara/OpenCara/pull/238) - fix(webhooks): attribute new installations to the installer via sender.id
+- **2026-09-03**: Merged [#237](https://github.com/OpenCara/OpenCara/pull/237) - fix(flows): supersede older review runs at the gate; add Stop button
 - **2026-09-02**: Merged [#236](https://github.com/OpenCara/OpenCara/pull/236) - fix(prune): bind the retention cutoff as ISO string ::timestamptz
 - **2026-09-02**: Merged [#235](https://github.com/OpenCara/OpenCara/pull/235) - fix(flows): make PR diff fetch optional and non-fatal; path filters use pulls/files
 - **2026-09-02**: Merged [#234](https://github.com/OpenCara/OpenCara/pull/234) - perf(activity): two-phase feed query, partial indexes, prune stale rows
