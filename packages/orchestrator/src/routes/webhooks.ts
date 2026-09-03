@@ -9,6 +9,7 @@ import {
   projectV2Items,
   projectV2Links,
   projects,
+  users,
 } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
@@ -36,6 +37,8 @@ interface WebhookDeps {
 interface WebhookPayload {
   action?: string;
   installation?: { id: number; account?: { id: number; login: string; type?: string } };
+  /** The GitHub user who performed the action — for `installation.created`, the installer. */
+  sender?: { login?: string };
   repository?: { id: number; full_name: string };
   repositories?: Array<{ id: number; full_name: string }>;
   repositories_added?: Array<{ id: number; full_name: string }>;
@@ -252,7 +255,17 @@ async function resolveInstallationId(
   if (!installation) return null;
 
   if (eventType === "installation" && payload.action === "created") {
-    const upserted = await upsertInstallation(db, installation);
+    // Attribute the row to the installer when they're a known opencara user.
+    // The /auth/github/setup round-trip is the primary attribution path, but
+    // it only runs if GitHub redirects back with a live session — an org
+    // install that lands here first (webhook before redirect) or never
+    // redirects at all leaves an unattributed row, which the installations
+    // list hides from everyone. `sender.login` is the account that clicked
+    // Install on GitHub, so claiming for the matching user is safe;
+    // upsertInstallation still never overwrites an existing attribution.
+    const upserted = await upsertInstallation(db, installation, {
+      addedByUserId: await userIdForGithubLogin(db, payload.sender?.login),
+    });
     return upserted.id;
   }
 
@@ -263,6 +276,15 @@ async function resolveInstallationId(
 
   const upserted = await upsertInstallation(db, installation);
   return upserted.id;
+}
+
+async function userIdForGithubLogin(db: Db, login: string | undefined): Promise<string | null> {
+  if (!login) return null;
+  const row = await db.query.users.findFirst({
+    where: eq(users.githubLogin, login),
+    columns: { id: true },
+  });
+  return row?.id ?? null;
 }
 
 async function resolveProjectId(
