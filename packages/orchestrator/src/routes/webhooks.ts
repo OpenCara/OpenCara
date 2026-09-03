@@ -9,6 +9,7 @@ import {
   projectV2Items,
   projectV2Links,
   projects,
+  userIdentities,
 } from "../db/schema.js";
 import type { GithubAppClient } from "../github/app.js";
 import { upsertInstallation, softRemoveProjectsForRepos } from "../github/installations.js";
@@ -36,6 +37,8 @@ interface WebhookDeps {
 interface WebhookPayload {
   action?: string;
   installation?: { id: number; account?: { id: number; login: string; type?: string } };
+  /** The GitHub user who performed the action — for `installation.created`, the installer. */
+  sender?: { id?: number; login?: string };
   repository?: { id: number; full_name: string };
   repositories?: Array<{ id: number; full_name: string }>;
   repositories_added?: Array<{ id: number; full_name: string }>;
@@ -252,7 +255,22 @@ async function resolveInstallationId(
   if (!installation) return null;
 
   if (eventType === "installation" && payload.action === "created") {
-    const upserted = await upsertInstallation(db, installation);
+    // Attribute the row to the installer when they're a known opencara user.
+    // The /auth/github/setup round-trip is the primary attribution path, but
+    // it only runs if GitHub redirects back with a live session — an org
+    // install that lands here first (webhook before redirect) or never
+    // redirects at all leaves an unattributed row, which the installations
+    // list hides from everyone. `sender` is the account that clicked Install
+    // on GitHub. Resolve it by its immutable numeric id through
+    // user_identities (unique on provider + external_id, and populated for
+    // linked GitHub accounts too) — never by login, which is renameable,
+    // re-registrable and only a display cache on `users`. This column is an
+    // ownership boundary (installations list + project add), so a wrong
+    // match would hand one user another's org. upsertInstallation still
+    // never overwrites an existing attribution.
+    const upserted = await upsertInstallation(db, installation, {
+      addedByUserId: await userIdForGithubSender(db, payload.sender?.id),
+    });
     return upserted.id;
   }
 
@@ -263,6 +281,15 @@ async function resolveInstallationId(
 
   const upserted = await upsertInstallation(db, installation);
   return upserted.id;
+}
+
+async function userIdForGithubSender(db: Db, senderId: number | undefined): Promise<string | null> {
+  if (typeof senderId !== "number") return null;
+  const row = await db.query.userIdentities.findFirst({
+    where: and(eq(userIdentities.provider, "github"), eq(userIdentities.externalId, String(senderId))),
+    columns: { userId: true },
+  });
+  return row?.userId ?? null;
 }
 
 async function resolveProjectId(
