@@ -1,4 +1,9 @@
-import { clampConcurrency, clampQuorum, clampRetrySame } from "../../flows/agentPool.js";
+import {
+  clampConcurrency,
+  clampPreferred,
+  clampQuorum,
+  clampRetrySame,
+} from "../../flows/agentPool.js";
 
 /** Sentinel for "field absent from the PATCH body — leave it alone". */
 export const KEEP = "__keep__" as const;
@@ -11,6 +16,8 @@ export interface AgentPoolPatch {
   fallbackAgentIds: string[] | Keep;
   retrySame: number | Keep;
   concurrency: number | Keep;
+  /** null = clear the override and follow `concurrency` again. */
+  preferred: number | null | Keep;
   quorum: number | Keep;
 }
 
@@ -20,6 +27,8 @@ export interface AgentPoolPatch {
  *   fallbackAgentIds?: string[]   — ordered, deduped, ≤ FALLBACK_AGENTS_MAX
  *   retrySame?: number            — clamped to [0, RETRY_SAME_MAX]
  *   concurrency?: number          — clamped to [1, CONCURRENCY_MAX]
+ *   preferred?: number | null     — clamped to [1, CONCURRENCY_MAX]; null
+ *                                   means "follow concurrency"
  *   quorum?: number               — clamped to [1, CONCURRENCY_MAX] (the
  *                                   runner caps it to the live target)
  * Returns `{ error }` for a malformed value instead of silently coercing,
@@ -51,7 +60,14 @@ export function parseAgentPoolPatch(
   if (typeof concurrency === "object") return concurrency;
   const quorum = parseClampedInt(body.quorum, "quorum", clampQuorum);
   if (typeof quorum === "object") return quorum;
-  return { fallbackAgentIds, retrySame, concurrency, quorum };
+  let preferred: number | null | Keep = KEEP;
+  if (body.preferred !== undefined) {
+    if (body.preferred === null) preferred = null;
+    else if (typeof body.preferred !== "number" || !Number.isFinite(body.preferred)) {
+      return { error: "preferred must be a number or null" };
+    } else preferred = clampPreferred(body.preferred);
+  }
+  return { fallbackAgentIds, retrySame, concurrency, preferred, quorum };
 }
 
 function parseClampedInt(

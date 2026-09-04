@@ -662,10 +662,13 @@ export const flowNodeSettings = pgTable(
     // attempts on the SAME agent before moving to the next candidate.
     fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
     retrySame: integer("retry_same").notNull().default(0),
-    // Parallel slots (== target successes) and the minimum successes needed.
-    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
-    // finishes". See flows/agentPool.ts.
+    // Parallel slots, the successes aimed for (`preferred`, null = follow
+    // `concurrency`) and the minimum successes needed (`quorum`).
+    // 1/-/1 = plain priority failover; N/-/1 = "run N reviewers, keep whatever
+    // finishes"; 3/3/2 = "three reviewers, deliver even if one dies".
+    // See flows/agentPool.ts.
     concurrency: integer("concurrency").notNull().default(1),
+    preferred: integer("preferred"),
     quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -752,10 +755,13 @@ export const templateNodeSettings = pgTable(
     // attempts on the SAME agent before moving to the next candidate.
     fallbackAgentIds: jsonb("fallback_agent_ids").$type<string[]>().notNull().default([]),
     retrySame: integer("retry_same").notNull().default(0),
-    // Parallel slots (== target successes) and the minimum successes needed.
-    // 1/1 = plain priority failover; N/1 = "run N reviewers, keep whatever
-    // finishes". See flows/agentPool.ts.
+    // Parallel slots, the successes aimed for (`preferred`, null = follow
+    // `concurrency`) and the minimum successes needed (`quorum`).
+    // 1/-/1 = plain priority failover; N/-/1 = "run N reviewers, keep whatever
+    // finishes"; 3/3/2 = "three reviewers, deliver even if one dies".
+    // See flows/agentPool.ts.
     concurrency: integer("concurrency").notNull().default(1),
+    preferred: integer("preferred"),
     quorum: integer("quorum").notNull().default(1),
     label: text("label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

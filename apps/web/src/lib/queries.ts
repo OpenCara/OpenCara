@@ -667,6 +667,7 @@ export interface TemplateNodeSetting {
   fallbackAgentIds: string[];
   retrySame: number;
   concurrency: number;
+  preferred: number | null;
   quorum: number;
   label: string | null;
   updatedAt: string;
@@ -888,8 +889,10 @@ export interface FlowNodeSetting {
   fallbackAgentIds: string[];
   /** Extra attempts on the same agent before moving to the next. */
   retrySame: number;
-  /** Parallel slots (also the target number of successes). */
+  /** Parallel slots. */
   concurrency: number;
+  /** Successes the pool aims for; null = follow `concurrency`. */
+  preferred: number | null;
   /** Minimum successes for the node to succeed. */
   quorum: number;
   label: string | null;
