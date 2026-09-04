@@ -8,7 +8,8 @@
  * concurrency N, so when a flow/template picks up the new graph (single
  * `reviewer` node) its legacy per-node links are folded into one pool row:
  * first agent = primary, the rest = fallbacks, concurrency = how many ran in
- * parallel before, quorum 1 ("keep whatever finishes").
+ * parallel before, preferred null (= follow concurrency) and quorum 1 ("keep
+ * whatever finishes").
  *
  * Pure; the DB glue lives in flows/builtin.ts.
  */
@@ -41,6 +42,7 @@ export interface FoldedReviewerPool {
   fallbackAgentIds: string[];
   promptId: string | null;
   concurrency: number;
+  preferred: number | null;
   quorum: number;
   /** Legacy node ids that contributed, in the order they were folded. */
   sourceNodeIds: string[];
@@ -85,6 +87,7 @@ export function foldLegacyReviewerSettings(
     fallbackAgentIds: agentIds.slice(1),
     promptId,
     concurrency: Math.min(CONCURRENCY_MAX, Math.max(1, parallel)),
+    preferred: null,
     quorum: 1,
     sourceNodeIds,
   };

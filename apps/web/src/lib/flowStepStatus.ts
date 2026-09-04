@@ -9,6 +9,7 @@ export interface StepPoolMeta {
   candidateCount: number;
   retrySame: number;
   concurrency: number;
+  preferred: number;
   quorum: number;
 }
 
@@ -36,6 +37,14 @@ export function parsePoolMeta(inputJson: unknown): StepPoolMeta | null {
     candidateCount: o.candidateCount,
     retrySame: typeof o.retrySame === "number" ? o.retrySame : 0,
     concurrency: typeof o.concurrency === "number" ? o.concurrency : 1,
+    // Runs from before the `preferred` knob stamped only concurrency, which
+    // was then both the slot count and the target.
+    preferred:
+      typeof o.preferred === "number"
+        ? o.preferred
+        : typeof o.concurrency === "number"
+          ? o.concurrency
+          : 1,
     quorum: typeof o.quorum === "number" ? o.quorum : 1,
   };
 }
