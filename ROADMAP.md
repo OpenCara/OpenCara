@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-06**: Merged [#240](https://github.com/OpenCara/OpenCara/pull/240) - fix(agents): move the codex ACP adapter to the maintained package
 - **2026-09-06**: Merged [#239](https://github.com/OpenCara/OpenCara/pull/239) - feat(flows): preferred successes on agent pools, split from parallel slots
 - **2026-09-03**: Merged [#238](https://github.com/OpenCara/OpenCara/pull/238) - fix(webhooks): attribute new installations to the installer via sender.id
 - **2026-09-03**: Merged [#237](https://github.com/OpenCara/OpenCara/pull/237) - fix(flows): supersede older review runs at the gate; add Stop button
@@ -39,6 +40,7 @@
 
 ## Completed
 
+- [x] fix(agents): move the codex ACP adapter to `@agentclientprotocol/codex-acp` and stop shipping the deprecated `@zed-industries/codex-acp` as a CLI dependency ([#240](https://github.com/OpenCara/OpenCara/pull/240))
 - [x] feat(flows): preferred successes on agent pools, split from the parallel slot count — a reviewer pool set to 3 parallel / 3 preferred / 2 minimum delivers even when one reviewer fails ([#239](https://github.com/OpenCara/OpenCara/pull/239))
 - [x] fix(cli): stop WS reconnect storm by gating backoff reset on connection stability ([#166](https://github.com/OpenCara/OpenCara/pull/166))
 - [x] fix(flows): never resume a prior ACP session across flow runs ([#226](https://github.com/OpenCara/OpenCara/pull/226))
