@@ -116,6 +116,8 @@ interface SetSettingsVars {
   /** Extra attempts on the same agent before failing over. */
   retrySame?: number;
   concurrency?: number;
+  /** Successes to aim for; null clears the override (follow `concurrency`). */
+  preferred?: number | null;
   quorum?: number;
 }
 
@@ -130,6 +132,7 @@ function useSetSettings(scope: EditorScope) {
       if (vars.fallbackAgentIds !== undefined) body.fallbackAgentIds = vars.fallbackAgentIds;
       if (vars.retrySame !== undefined) body.retrySame = vars.retrySame;
       if (vars.concurrency !== undefined) body.concurrency = vars.concurrency;
+      if (vars.preferred !== undefined) body.preferred = vars.preferred;
       if (vars.quorum !== undefined) body.quorum = vars.quorum;
       const url =
         scope.kind === "project"
@@ -232,8 +235,16 @@ function AgentNodePanel({
   ];
   const retrySame = setting?.retrySame ?? 0;
   const concurrency = setting?.concurrency ?? 1;
+  // Null (never set) means the pool aims for exactly its slot count.
+  const preferred = setting?.preferred ?? concurrency;
   const quorum = setting?.quorum ?? 1;
   const poolSize = agentIds.length;
+  // What the pool will actually run with, mirroring effectivePoolShape():
+  // preferred is bounded by the agents on the node, the slots by preferred,
+  // and the minimum by preferred.
+  const effPreferred = Math.min(preferred, Math.max(poolSize, 1));
+  const effConcurrency = Math.min(concurrency, effPreferred);
+  const effQuorum = Math.min(quorum, effPreferred);
   const clampInt = (raw: string, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, Math.trunc(Number(raw) || lo)));
   const addableAgents = agents.filter((a) => !agentIds.includes(a.id));
@@ -562,6 +573,23 @@ function AgentNodePanel({
                   if (n !== concurrency) set.mutate({ nodeId: node.id, concurrency: n });
                 }}
               />
+              <Label htmlFor={`preferred-${node.id}`} className="shrink-0 text-sm">
+                Preferred successes
+              </Label>
+              <Input
+                id={`preferred-${node.id}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                className="w-20"
+                defaultValue={preferred}
+                key={`preferred-${node.id}-${preferred}`}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, 1, 8);
+                  if (n !== preferred) set.mutate({ nodeId: node.id, preferred: n });
+                }}
+              />
               <Label htmlFor={`quorum-${node.id}`} className="shrink-0 text-sm">
                 Minimum successes
               </Label>
@@ -581,23 +609,37 @@ function AgentNodePanel({
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Agents run from the top of the list, {Math.min(concurrency, Math.max(poolSize, 1))} at
-              a time. A failed agent is retried {retrySame} more time{retrySame === 1 ? "" : "s"}
+              Agents run from the top of the list, {effConcurrency} at a time, until{" "}
+              {effPreferred} of them {effPreferred === 1 ? "has" : "have"} succeeded. A failed agent
+              is retried {retrySame} more time{retrySame === 1 ? "" : "s"}
               {retrySame === 0 ? " (no retries)" : ""}, then the next agent in the list takes its
-              slot with the same prompt. The node succeeds once every slot has
-              finished with at least {Math.min(quorum, concurrency)} success
-              {Math.min(quorum, concurrency) === 1 ? "" : "es"}, and hands every successful
-              output downstream (one section per agent). 1 / 1 is plain failover.
-              {poolSize > 0 && concurrency > poolSize && (
-                <> Only {poolSize} agent{poolSize === 1 ? "" : "s"} configured, so at most that many run.</>
-              )}
-              {!!node.config?.worktree && concurrency > 1 && (
+              slot with the same prompt. The node succeeds once everything in flight has finished
+              with at least {effQuorum} success{effQuorum === 1 ? "" : "es"}, and hands every
+              successful output downstream (one section per agent)
+              {effQuorum < effPreferred && (
                 <>
                   {" "}
-                  Each parallel agent gets its own checkout on the device (
-                  {Math.min(concurrency, Math.max(poolSize, 1))} at once); enable the repo cache
-                  under Worktree so they share git objects and only the working-tree files cost
-                  disk.
+                  — {effPreferred - effQuorum} of the {effPreferred} can fail and the run still
+                  delivers
+                </>
+              )}
+              . 1 / 1 / 1 is plain failover.
+              {poolSize > 0 && preferred > poolSize && (
+                <> Only {poolSize} agent{poolSize === 1 ? "" : "s"} configured, so at most that many run.</>
+              )}
+              {concurrency > effPreferred && (
+                <>
+                  {" "}
+                  Slots above the preferred successes are never filled, so this runs{" "}
+                  {effConcurrency} at a time.
+                </>
+              )}
+              {!!node.config?.worktree && effConcurrency > 1 && (
+                <>
+                  {" "}
+                  Each parallel agent gets its own checkout on the device ({effConcurrency} at
+                  once); enable the repo cache under Worktree so they share git objects and only
+                  the working-tree files cost disk.
                 </>
               )}
             </p>

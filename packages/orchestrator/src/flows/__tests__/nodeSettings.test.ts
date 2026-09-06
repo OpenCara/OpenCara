@@ -13,6 +13,7 @@ const t = (nodeId: string, agentId: string | null, extra: Record<string, unknown
     fallbackAgentIds: [] as string[],
     retrySame: 0,
     concurrency: 1,
+    preferred: null,
     quorum: 1,
     label: null,
     updatedAt: new Date("2026-01-01"),
@@ -30,6 +31,7 @@ const p = (nodeId: string, agentId: string | null, extra: Record<string, unknown
     fallbackAgentIds: [] as string[],
     retrySame: 0,
     concurrency: 1,
+    preferred: null,
     quorum: 1,
     label: null,
     updatedAt: new Date("2026-02-01"),
@@ -65,6 +67,24 @@ describe("mergeEffectiveSettings", () => {
     assert.deepEqual(byNode.reviewer!.fallbackAgentIds, ["kimi"]);
     assert.equal(byNode.fix!.source, "template");
     assert.equal(byNode.fix!.agentId, "opus");
+  });
+
+  it("carries the pool shape, `preferred` included, from whichever row wins", () => {
+    const out = mergeEffectiveSettings(
+      { flowId: "flow", projectId: "proj" },
+      [t("reviewer", "sonnet", { concurrency: 3, preferred: 3, quorum: 2 })],
+      [],
+    );
+    assert.deepEqual(
+      { c: out[0]!.concurrency, p: out[0]!.preferred, q: out[0]!.quorum },
+      { c: 3, p: 3, q: 2 },
+    );
+    const overridden = mergeEffectiveSettings(
+      { flowId: "flow", projectId: "proj" },
+      [t("reviewer", "sonnet", { concurrency: 3, preferred: 3, quorum: 2 })],
+      [p("reviewer", "sonnet", { concurrency: 2, preferred: null, quorum: 1 })],
+    );
+    assert.equal(overridden[0]!.preferred, null);
   });
 
   it("a project row for a node the template does not cover still applies", () => {

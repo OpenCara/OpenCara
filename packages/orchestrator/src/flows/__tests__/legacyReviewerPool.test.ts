@@ -51,6 +51,7 @@ describe("foldLegacyReviewerSettings", () => {
       fallbackAgentIds: ["sonnet", "kimi", "gemini"],
       promptId: "general",
       concurrency: 4,
+      preferred: null,
       quorum: 1,
       sourceNodeIds: ["reviewer_correctness", "reviewer_style", "reviewer_x0", "reviewer_x1"],
     });
@@ -67,6 +68,7 @@ describe("foldLegacyReviewerSettings", () => {
       fallbackAgentIds: ["opus"],
       promptId: "general",
       concurrency: 2,
+      preferred: null,
       quorum: 1,
       sourceNodeIds: ["reviewer_correctness", "reviewer_performance", "reviewer_style"],
     });

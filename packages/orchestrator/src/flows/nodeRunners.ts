@@ -735,8 +735,10 @@ export interface ResolvedAgentPool {
   candidates: Array<typeof agents.$inferSelect>;
   /** Extra attempts on the same agent before failing over to the next. */
   retrySame: number;
-  /** Parallel slots == target successes (see agentPool.ts). */
+  /** Parallel slots (see agentPool.ts). */
   concurrency: number;
+  /** Successes the pool aims for; refills stop once this many succeeded. */
+  preferred: number;
   /** Minimum successes for the node to succeed. */
   quorum: number;
   /** The ONE prompt every candidate in the pool runs with (null = none). */
@@ -839,15 +841,17 @@ export async function resolveAgentPool(
   // pool meta to decide whether the node succeeded.
   const shape = effectivePoolShape({
     concurrency: setting?.concurrency ?? 1,
+    preferred: setting?.preferred ?? null,
     quorum: setting?.quorum ?? 1,
     candidateCount: candidates.length,
   });
   if (shape.quorumCapped) {
-    console.warn("[flows] agent pool: quorum capped to the slot count", {
+    console.warn("[flows] agent pool: quorum capped to the successes aimed for", {
       flowId: ctx.flowId,
       nodeId: node.id,
       requested: setting?.quorum,
       effective: shape.quorum,
+      preferred: shape.preferred,
       concurrency: shape.concurrency,
     });
   }
@@ -855,6 +859,7 @@ export async function resolveAgentPool(
     candidates,
     retrySame: clampRetrySame(setting?.retrySame ?? 0),
     concurrency: shape.concurrency,
+    preferred: shape.preferred,
     quorum: shape.quorum,
     promptBody,
   };

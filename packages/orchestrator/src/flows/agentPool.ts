@@ -4,17 +4,25 @@
  * An agent node carries an ordered list of candidate agents plus a policy:
  *
  *   concurrency — how many candidates run at once, from the top of the list.
- *                 It is also the number of successes the pool AIMS for: a
- *                 failed slot is refilled from the next unstarted candidate
- *                 (after `retrySame` retries on the same agent) while any
- *                 remain.
+ *   preferred   — how many successes the pool AIMS for: a failed slot is
+ *                 refilled from the next unstarted candidate (after
+ *                 `retrySame` retries on the same agent) while successes +
+ *                 in-flight stay below it and candidates remain. Null means
+ *                 "track concurrency", the original slots-are-the-target
+ *                 behaviour. Preferred ABOVE concurrency runs the pool in
+ *                 waves; below it, the extra slots are never needed and
+ *                 concurrency is capped down to it.
  *   quorum      — the minimum successes for the node to count as succeeded.
  *                 The pool never cancels in-flight attempts; it waits for
  *                 them, so a quorum of 1 with concurrency 3 means "run three
  *                 reviewers, keep whatever finished, fail only if all died".
  *
- * concurrency 1 / quorum 1 is plain priority failover: one agent at a time,
- * first success wins, the list running dry fails the node.
+ * The three together are "run `concurrency` at a time, chase `preferred`
+ * successes, deliver on `quorum`": 3 / 3 / 2 runs three reviewers in parallel
+ * and still delivers when one of them dies.
+ *
+ * 1 / 1 / 1 is plain priority failover: one agent at a time, first success
+ * wins, the list running dry fails the node.
  *
  * Everything here is pure: the caller supplies the attempt function (which
  * owns step rows, dispatch, DB writes) and this module owns only the policy.
@@ -66,11 +74,25 @@ export function clampQuorum(value: unknown): number {
 }
 
 /**
- * The slot count and quorum a pool will ACTUALLY run with, derived from the
- * stored settings:
- *   - concurrency never exceeds the candidate count
- *   - quorum never exceeds the slot count — it counts successes, and only
- *     `concurrency` attempts can ever succeed.
+ * Preferred successes. Null/absent (the stored default) means "follow
+ * `concurrency`" — every pool configured before this knob existed keeps the
+ * exact shape it had, where the slot count WAS the target.
+ */
+export function clampPreferred(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(CONCURRENCY_MAX, Math.max(1, Math.trunc(n)));
+}
+
+/**
+ * The shape a pool will ACTUALLY run with, derived from the stored settings:
+ *   - preferred (defaulting to `concurrency`) never exceeds the candidate
+ *     count — no more successes can be produced than there are agents.
+ *   - concurrency never exceeds the candidate count, nor `preferred`: a slot
+ *     beyond the target would start an attempt nobody needs.
+ *   - quorum never exceeds `preferred` — it counts successes, and the pool
+ *     stops starting attempts once `preferred` of them succeeded.
  *
  * Worktree nodes are NOT capped any more: every attempt allocates its own
  * checkout (keyed by its flow_run_steps id), so parallel slots never share a
@@ -83,14 +105,17 @@ export function clampQuorum(value: unknown): number {
  */
 export function effectivePoolShape(input: {
   concurrency: unknown;
+  preferred?: unknown;
   quorum: unknown;
   candidateCount: number;
-}): { concurrency: number; quorum: number; quorumCapped: boolean } {
-  const requested = clampConcurrency(input.concurrency);
-  const concurrency = Math.min(requested, Math.max(1, input.candidateCount));
+}): { concurrency: number; preferred: number; quorum: number; quorumCapped: boolean } {
+  const requestedConcurrency = clampConcurrency(input.concurrency);
+  const room = Math.max(1, input.candidateCount);
+  const preferred = Math.min(clampPreferred(input.preferred) ?? requestedConcurrency, room);
+  const concurrency = Math.min(requestedConcurrency, room, preferred);
   const requestedQuorum = clampQuorum(input.quorum);
-  const quorum = Math.min(requestedQuorum, concurrency);
-  return { concurrency, quorum, quorumCapped: quorum < requestedQuorum };
+  const quorum = Math.min(requestedQuorum, preferred);
+  return { concurrency, preferred, quorum, quorumCapped: quorum < requestedQuorum };
 }
 
 /**
@@ -169,8 +194,10 @@ export class AgentPoolExhaustedError extends Error {
 export interface RunWithAgentPoolOpts<C, T> {
   candidates: readonly C[];
   retrySame: number;
-  /** Parallel slots == target successes. Default 1. */
+  /** Parallel slots. Default 1. */
   concurrency?: number;
+  /** Successes to aim for. Default/null = `concurrency`. */
+  preferred?: number | null;
   /** Minimum successes to succeed. Default 1; capped to the live target. */
   quorum?: number;
   /** Runs one attempt. Throwing = failed attempt; resolving = success. */
@@ -186,6 +213,8 @@ export interface PoolResult<C, T> {
   successes: PoolSuccess<C, T>[];
   failures: PoolAttemptRecord<C>[];
   /** Effective numbers after clamping to the candidate list. */
+  concurrency: number;
+  /** Successes the pool aimed for (the effective `preferred`). */
   target: number;
   quorum: number;
 }
@@ -201,9 +230,12 @@ interface Settled<C, T> {
 /**
  * Drive the pool. Resolves once every slot has settled and at least `quorum`
  * attempts succeeded; throws `AgentPoolExhaustedError` when the candidate
- * list is spent below quorum. An `abort` disposition rethrows the error at
- * once — in-flight attempts are left to settle on their own (their step rows
- * still get finalised by the attempt function) and their outcomes dropped.
+ * list is spent below quorum. Between quorum and `preferred` the pool keeps
+ * refilling from the candidate list, so falling back to quorum costs nothing
+ * while agents remain — it is the floor, not the goal. An `abort` disposition
+ * rethrows the error at once — in-flight attempts are left to settle on their
+ * own (their step rows still get finalised by the attempt function) and their
+ * outcomes dropped.
  */
 export async function runWithAgentPool<C, T>(
   opts: RunWithAgentPoolOpts<C, T>,
@@ -212,7 +244,12 @@ export async function runWithAgentPool<C, T>(
   const describe = opts.describe ?? ((c: C) => String(c));
   const retrySame = clampRetrySame(opts.retrySame);
   const candidateCount = opts.candidates.length;
-  const target = Math.min(clampConcurrency(opts.concurrency ?? 1), candidateCount);
+  const requestedConcurrency = clampConcurrency(opts.concurrency ?? 1);
+  // `target` is the successes aimed for; `parallel` how many chase them at
+  // once. Both are bounded by the candidate list — with none, target is 0 and
+  // the pool fails on the empty tally below rather than starting anything.
+  const target = Math.min(clampPreferred(opts.preferred) ?? requestedConcurrency, candidateCount);
+  const parallel = Math.min(requestedConcurrency, target);
   const quorum = Math.min(clampQuorum(opts.quorum ?? 1), Math.max(target, 1));
 
   // Work queue in priority order. A retry is pushed to the FRONT so the same
@@ -243,7 +280,11 @@ export async function runWithAgentPool<C, T>(
   };
 
   for (;;) {
-    while (successes.length + inFlight.size < target && pending.length > 0) {
+    while (
+      inFlight.size < parallel &&
+      successes.length + inFlight.size < target &&
+      pending.length > 0
+    ) {
       start(pending.shift()!);
     }
     if (inFlight.size === 0) break;
@@ -277,7 +318,7 @@ export async function runWithAgentPool<C, T>(
   }
 
   if (successes.length >= quorum && successes.length > 0) {
-    return { successes, failures, target, quorum };
+    return { successes, failures, concurrency: parallel, target, quorum };
   }
   throw new AgentPoolExhaustedError(failures, successes.length, quorum, (c) => describe(c as C));
 }

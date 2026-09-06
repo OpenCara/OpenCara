@@ -1161,6 +1161,7 @@ export class FlowEngine {
       candidates: pool.candidates,
       retrySame: pool.retrySame,
       concurrency: pool.concurrency,
+      preferred: pool.preferred,
       quorum: pool.quorum,
       describe: (agent) => agent.name,
       onAttemptFailed: (rec) => {
@@ -1187,6 +1188,7 @@ export class FlowEngine {
               candidateCount: info.candidateCount,
               retrySame: pool.retrySame,
               concurrency: pool.concurrency,
+              preferred: pool.preferred,
               quorum: pool.quorum,
             },
           },
@@ -1305,6 +1307,7 @@ interface StepPoolMeta {
   candidateCount: number;
   retrySame: number;
   concurrency: number;
+  preferred: number;
   quorum: number;
 }
 

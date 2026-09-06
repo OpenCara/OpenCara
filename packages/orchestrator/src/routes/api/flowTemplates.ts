@@ -187,6 +187,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       if (pool.fallbackAgentIds !== POOL_KEEP) patch.fallbackAgentIds = pool.fallbackAgentIds;
       if (pool.retrySame !== POOL_KEEP) patch.retrySame = pool.retrySame;
         if (pool.concurrency !== POOL_KEEP) patch.concurrency = pool.concurrency;
+        if (pool.preferred !== POOL_KEEP) patch.preferred = pool.preferred;
         if (pool.quorum !== POOL_KEEP) patch.quorum = pool.quorum;
       await deps.db
         .update(templateNodeSettings)
@@ -200,6 +201,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         ...(pool.fallbackAgentIds !== POOL_KEEP ? { fallbackAgentIds: pool.fallbackAgentIds } : {}),
         ...(pool.retrySame !== POOL_KEEP ? { retrySame: pool.retrySame } : {}),
           ...(pool.concurrency !== POOL_KEEP ? { concurrency: pool.concurrency } : {}),
+          ...(pool.preferred !== POOL_KEEP ? { preferred: pool.preferred } : {}),
           ...(pool.quorum !== POOL_KEEP ? { quorum: pool.quorum } : {}),
         updatedAt: now.toISOString(),
       };
@@ -218,6 +220,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
       fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
       retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
         concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        preferred: pool.preferred === POOL_KEEP ? null : pool.preferred,
         quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
       updatedAt: now,
     });
@@ -234,6 +237,7 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
           fallbackAgentIds: pool.fallbackAgentIds === POOL_KEEP ? [] : pool.fallbackAgentIds,
           retrySame: pool.retrySame === POOL_KEEP ? 0 : pool.retrySame,
         concurrency: pool.concurrency === POOL_KEEP ? 1 : pool.concurrency,
+        preferred: pool.preferred === POOL_KEEP ? null : pool.preferred,
         quorum: pool.quorum === POOL_KEEP ? 1 : pool.quorum,
           updatedAt: now.toISOString(),
         },

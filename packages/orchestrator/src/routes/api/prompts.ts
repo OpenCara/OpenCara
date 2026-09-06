@@ -250,6 +250,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         if (pool.fallbackAgentIds !== KEEP) patch.fallbackAgentIds = pool.fallbackAgentIds;
         if (pool.retrySame !== KEEP) patch.retrySame = pool.retrySame;
         if (pool.concurrency !== KEEP) patch.concurrency = pool.concurrency;
+        if (pool.preferred !== KEEP) patch.preferred = pool.preferred;
         if (pool.quorum !== KEEP) patch.quorum = pool.quorum;
         await deps.db
           .update(flowNodeSettings)
@@ -263,6 +264,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
           ...(pool.fallbackAgentIds !== KEEP ? { fallbackAgentIds: pool.fallbackAgentIds } : {}),
           ...(pool.retrySame !== KEEP ? { retrySame: pool.retrySame } : {}),
           ...(pool.concurrency !== KEEP ? { concurrency: pool.concurrency } : {}),
+          ...(pool.preferred !== KEEP ? { preferred: pool.preferred } : {}),
           ...(pool.quorum !== KEEP ? { quorum: pool.quorum } : {}),
           updatedAt: new Date().toISOString(),
           source: "project" as const,
@@ -286,6 +288,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
           pool.fallbackAgentIds === KEEP ? (inherited?.fallbackAgentIds ?? []) : pool.fallbackAgentIds,
         retrySame: pool.retrySame === KEEP ? (inherited?.retrySame ?? 0) : pool.retrySame,
         concurrency: pool.concurrency === KEEP ? (inherited?.concurrency ?? 1) : pool.concurrency,
+        preferred: pool.preferred === KEEP ? (inherited?.preferred ?? null) : pool.preferred,
         quorum: pool.quorum === KEEP ? (inherited?.quorum ?? 1) : pool.quorum,
       });
       const created = await loadEffectiveNodeSetting(deps.db, flowId, nodeId);

@@ -304,6 +304,102 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
     assert.equal(r.quorum, 2);
   });
 
+  it("preferred below the slot count stops refilling once it is met", async () => {
+    const h = harness();
+    const run = runWithAgentPool({
+      candidates: ["a", "b", "c", "d"],
+      retrySame: 0,
+      concurrency: 3,
+      preferred: 2,
+      quorum: 2,
+      attempt: h.attempt,
+    });
+    await h.tick();
+    // Only 2 slots are worth filling — the third would produce a success
+    // nobody asked for.
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b"]);
+    await h.ok("a#0");
+    await h.ok("b#0");
+    const r = await run;
+    assert.equal(r.target, 2);
+    assert.equal(r.concurrency, 2);
+    assert.equal(r.successes.length, 2);
+  });
+
+  it("preferred above the slot count runs the pool in waves", async () => {
+    const h = harness();
+    const run = runWithAgentPool({
+      candidates: ["a", "b", "c", "d"],
+      retrySame: 0,
+      concurrency: 2,
+      preferred: 3,
+      quorum: 2,
+      attempt: h.attempt,
+    });
+    await h.tick();
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b"]);
+    await h.ok("a#0");
+    // A success frees a slot and the target is still 3 away — c joins b.
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b", "c"]);
+    await h.ok("b#0");
+    await h.ok("c#0");
+    const r = await run;
+    assert.equal(r.target, 3);
+    assert.equal(r.concurrency, 2);
+    assert.equal(r.successes.length, 3);
+    // Three succeeded == preferred, so d is never touched.
+    assert.ok(!h.started.some((s) => s.c === "d"));
+  });
+
+  it("3 parallel / 3 preferred / 2 minimum delivers when one reviewer dies", async () => {
+    const h = harness();
+    const run = runWithAgentPool({
+      candidates: ["a", "b", "c"],
+      retrySame: 0,
+      concurrency: 3,
+      preferred: 3,
+      quorum: 2,
+      attempt: h.attempt,
+    });
+    await h.tick();
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b", "c"]);
+    await h.ok("a#0");
+    await h.fail("b#0");
+    await h.ok("c#0");
+    const r = await run;
+    assert.deepEqual(r.successes.map((s) => s.candidate), ["a", "c"]);
+    assert.equal(r.failures.length, 1);
+    assert.equal(r.quorum, 2);
+  });
+
+  it("chases preferred past a failure while candidates remain, delivers at quorum", async () => {
+    const h = harness();
+    const run = runWithAgentPool({
+      candidates: ["a", "b", "c", "d"],
+      retrySame: 0,
+      concurrency: 3,
+      preferred: 3,
+      quorum: 2,
+      attempt: h.attempt,
+    });
+    // Mark handled up front: the rejection lands during the ticks below.
+    run.catch(() => undefined);
+    await h.tick();
+    await h.fail("b#0");
+    // Still short of 3 successes with d unstarted: the pool refills.
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b", "c", "d"]);
+    await h.ok("a#0");
+    await h.fail("c#0");
+    await h.fail("d#0");
+    // List spent at 1 success, below the minimum of 2.
+    await assert.rejects(run, (err: unknown) => {
+      assert.ok(err instanceof AgentPoolExhaustedError);
+      assert.equal(err.successes, 1);
+      assert.equal(err.quorum, 2);
+      return true;
+    });
+  });
+
   it("an abort while others are in flight rejects immediately", async () => {
     const h = harness();
     const skip = new SkipFlowError("max iterations");
@@ -328,25 +424,55 @@ describe("effectivePoolShape", () => {
   it("keeps a satisfiable shape untouched (worktree nodes get one checkout per slot)", () => {
     assert.deepEqual(
       effectivePoolShape({ concurrency: 2, quorum: 2, candidateCount: 5 }),
-      { concurrency: 2, quorum: 2, quorumCapped: false },
+      { concurrency: 2, preferred: 2, quorum: 2, quorumCapped: false },
     );
   });
 
-  it("caps both to the candidate count and quorum to concurrency", () => {
+  it("an unset preferred follows concurrency (pre-`preferred` pools are unchanged)", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 3, preferred: null, quorum: 2, candidateCount: 5 }),
+      { concurrency: 3, preferred: 3, quorum: 2, quorumCapped: false },
+    );
+  });
+
+  it("preferred above concurrency runs the pool in waves", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 2, preferred: 3, quorum: 2, candidateCount: 5 }),
+      { concurrency: 2, preferred: 3, quorum: 2, quorumCapped: false },
+    );
+  });
+
+  it("caps slots down to preferred — a slot past the target is never filled", () => {
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 5, preferred: 2, quorum: 2, candidateCount: 5 }),
+      { concurrency: 2, preferred: 2, quorum: 2, quorumCapped: false },
+    );
+  });
+
+  it("caps both to the candidate count and quorum to preferred", () => {
     assert.deepEqual(
       effectivePoolShape({ concurrency: 3, quorum: 3, candidateCount: 2 }),
-      { concurrency: 2, quorum: 2, quorumCapped: true },
+      { concurrency: 2, preferred: 2, quorum: 2, quorumCapped: true },
     );
     assert.deepEqual(
       effectivePoolShape({ concurrency: 1, quorum: 3, candidateCount: 4 }),
-      { concurrency: 1, quorum: 1, quorumCapped: true },
+      { concurrency: 1, preferred: 1, quorum: 1, quorumCapped: true },
+    );
+    // Waves: 2 slots but 3 wanted, so a quorum of 3 is satisfiable after all.
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 2, preferred: 3, quorum: 3, candidateCount: 4 }),
+      { concurrency: 2, preferred: 3, quorum: 3, quorumCapped: false },
     );
   });
 
   it("clamps garbage settings to the defaults", () => {
     assert.deepEqual(
       effectivePoolShape({ concurrency: "x", quorum: -4, candidateCount: 1 }),
-      { concurrency: 1, quorum: 1, quorumCapped: false },
+      { concurrency: 1, preferred: 1, quorum: 1, quorumCapped: false },
+    );
+    assert.deepEqual(
+      effectivePoolShape({ concurrency: 2, preferred: "nope", quorum: 1, candidateCount: 4 }),
+      { concurrency: 2, preferred: 2, quorum: 1, quorumCapped: false },
     );
   });
 });

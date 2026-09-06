@@ -25,6 +25,8 @@ export interface EffectiveNodeSetting {
   fallbackAgentIds: string[];
   retrySame: number;
   concurrency: number;
+  /** Successes the pool aims for; null = follow `concurrency`. */
+  preferred: number | null;
   quorum: number;
   label: string | null;
   updatedAt: Date;
@@ -52,6 +54,7 @@ export function mergeEffectiveSettings(
       fallbackAgentIds: t.fallbackAgentIds,
       retrySame: t.retrySame,
       concurrency: t.concurrency,
+      preferred: t.preferred,
       quorum: t.quorum,
       label: t.label,
       updatedAt: t.updatedAt,
@@ -69,6 +72,7 @@ export function mergeEffectiveSettings(
       fallbackAgentIds: p.fallbackAgentIds,
       retrySame: p.retrySame,
       concurrency: p.concurrency,
+      preferred: p.preferred,
       quorum: p.quorum,
       label: p.label,
       updatedAt: p.updatedAt,

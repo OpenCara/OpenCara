@@ -2,6 +2,7 @@
 
 ## Recent Activity
 
+- **2026-09-06**: Merged [#239](https://github.com/OpenCara/OpenCara/pull/239) - feat(flows): preferred successes on agent pools, split from parallel slots
 - **2026-09-03**: Merged [#238](https://github.com/OpenCara/OpenCara/pull/238) - fix(webhooks): attribute new installations to the installer via sender.id
 - **2026-09-03**: Merged [#237](https://github.com/OpenCara/OpenCara/pull/237) - fix(flows): supersede older review runs at the gate; add Stop button
 - **2026-09-02**: Merged [#236](https://github.com/OpenCara/OpenCara/pull/236) - fix(prune): bind the retention cutoff as ISO string ::timestamptz
@@ -38,6 +39,7 @@
 
 ## Completed
 
+- [x] feat(flows): preferred successes on agent pools, split from the parallel slot count — a reviewer pool set to 3 parallel / 3 preferred / 2 minimum delivers even when one reviewer fails ([#239](https://github.com/OpenCara/OpenCara/pull/239))
 - [x] fix(cli): stop WS reconnect storm by gating backoff reset on connection stability ([#166](https://github.com/OpenCara/OpenCara/pull/166))
 - [x] fix(flows): never resume a prior ACP session across flow runs ([#226](https://github.com/OpenCara/OpenCara/pull/226))
 - [x] fix(flows): persist the effective pool quorum, capped to the slot count ([#225](https://github.com/OpenCara/OpenCara/pull/225))

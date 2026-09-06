@@ -238,6 +238,7 @@ export async function splitLegacyLifecycleTemplates(db: Db, ownerUserId: string)
         fallbackAgentIds: row.fallbackAgentIds,
         retrySame: row.retrySame,
         concurrency: row.concurrency,
+        preferred: row.preferred,
         quorum: row.quorum,
         label: row.label,
       });
@@ -305,6 +306,7 @@ async function retireLegacyLifecycleFlow(db: Db, projectId: string): Promise<str
         fallbackAgentIds: o.fallbackAgentIds,
         retrySame: o.retrySame,
         concurrency: o.concurrency,
+        preferred: o.preferred,
         quorum: o.quorum,
         label: o.label,
       });
@@ -346,6 +348,7 @@ export async function foldLegacyReviewerPoolForFlow(
     fallbackAgentIds: folded.fallbackAgentIds,
     retrySame: 0,
     concurrency: folded.concurrency,
+    preferred: folded.preferred,
     quorum: folded.quorum,
   });
   return true;
@@ -381,6 +384,7 @@ export async function foldLegacyReviewerPoolForTemplate(
     fallbackAgentIds: folded.fallbackAgentIds,
     retrySame: 0,
     concurrency: folded.concurrency,
+    preferred: folded.preferred,
     quorum: folded.quorum,
   });
   return true;
