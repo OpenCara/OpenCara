@@ -1,9 +1,9 @@
 // Bundle the CLI binaries into self-contained files so the published
 // `opencara` package doesn't depend on the unpublished `@opencara/shared`
 // workspace package. esbuild inlines the workspace import; runtime deps
-// (`ws`, `zod`, `@modelcontextprotocol/sdk`, `@zed-industries/codex-acp`)
-// stay external — declared in package.json `dependencies` so users
-// install them once via `npm i -g opencara`.
+// (`ws`, `zod`, `@modelcontextprotocol/sdk`) stay external — declared in
+// package.json `dependencies` so users install them once via
+// `npm i -g opencara`.
 //
 // Two entrypoints:
 //   - src/bin.ts         → dist/bin.js        (the `opencara` CLI itself)
@@ -33,15 +33,17 @@ const common = {
   format: "esm",
   bundle: true,
   // Keep these as external requires rather than inline. They're either
-  // platform-native (codex-acp), large (mcp sdk), or already shared
-  // peer-style (ws, zod). package.json `dependencies` ensures install
-  // pulls them.
+  // large (mcp sdk) or already shared peer-style (ws, zod). package.json
+  // `dependencies` ensures install pulls them. ACP adapters are NOT
+  // dependencies: every one of them is fetched at spawn time by
+  // `npx --yes` against the workspace checkout (see ACP_ADAPTERS in
+  // orchestrator/src/agents/acp-gate.ts), so bundling one only pinned a
+  // version the runtime never used.
   external: [
     "ws",
     "zod",
     "@modelcontextprotocol/sdk",
     "@modelcontextprotocol/sdk/*",
-    "@zed-industries/codex-acp",
   ],
   define: {
     "process.env.OPENCARA_VERSION": JSON.stringify(pkgVersion),
