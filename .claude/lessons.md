@@ -340,3 +340,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ### [hits: 1] The only paired device is racknerd-03aefac — which IS this box
 - `agent_hosts` has one row; its device CLI runs here as `npm exec opencara@latest`. Its PATH includes `~/.npm-global/bin` (bun, omp, pi) and `~/.local/bin` (cursor-agent), so adapters installed for the interactive user are reachable from dispatched runs.
+
+### [hits: 1] postgres.js writes jsonb columns as STRINGS unless you use `sql.json()`
+- Inserting `args: JSON.stringify([...])` into `agents.args` (jsonb) stores the JSON *text* — `jsonb_typeof` returns `string`, not `array`. A `::jsonb` cast on the parameter does NOT fix it (postgres.js has already bound it as jsonb, so the cast is a no-op). The row looks right in a plain `select` because the text prints identically.
+- Use `sql.json(value)`: `args = ${sql.json(["--model","gpt-5.5"])}`. Always verify with `select jsonb_typeof(col)` and diff against a row the API wrote — drizzle's `$type<string[]>()` gives no runtime protection, so a string-typed row would reach dispatch as a broken spec.
+- This only bites hand-written rows; the API route serializes correctly. Prefer the API when a session is available.
+
+### [hits: 1] The cc-connect systemd unit is the source of truth for this box's model gateway
+- `~/.config/systemd/user/cc-connect.service` holds `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` (`cr_…`), `OPENAI_API_KEY`, `GEMINI_API_KEY` for the router at `dju6bwshsb814i.quabug.com` (paths `/api`, `/openai`, `/gemini`). Check it before hunting for credentials elsewhere; the shell env's `OPENAI_API_KEY` is a copy of the router's `cr_…` token, NOT an OpenAI key.
+- The router answers with distinct, meaningful 401/403 bodies — `Invalid API key format`, `API key is disabled`, and `403 Client not allowed {"allowedClients":["claude_code"],"userAgent":…}`. Curl the endpoint directly to tell "wrong key" from "route not entitled": as of 2026-09-06 the `cr_…` token works only for the `claude_code` client, and `/openai` is disabled for it, so codex cannot authenticate through this gateway.
+- `~/.codex/auth.json` holds a *different* `sk-…` key; env `OPENAI_API_KEY` overrides it, so probes must control the env explicitly or they silently test the wrong credential.
