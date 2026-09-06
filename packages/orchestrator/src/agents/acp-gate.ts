@@ -17,9 +17,13 @@ import type {
  * Per-kind ACP adapter invocation. Adding a new kind is a one-line
  * append here.
  *
- * - codex: `npx --yes @zed-industries/codex-acp` — third-party Rust
+ * - codex: `npx --yes @agentclientprotocol/codex-acp` — third-party Rust
  *   adapter that links the codex-rs SDK directly. The npm package's
  *   optionalDependencies pull the right platform binary on first use.
+ *   Renamed from `@zed-industries/codex-acp`, which now installs with a
+ *   deprecation warning and stopped receiving updates; the invocation is
+ *   otherwise identical (same argv, same `-c model="…"` override), so this
+ *   is a package swap, not a protocol change.
  * - claude: `claude-acp` — our own thin shim
  *   (`packages/cli/src/bin/claude-acp.ts`) that wraps the local
  *   `claude` CLI. No third-party in the critical path; full Claude Code
@@ -42,7 +46,7 @@ import type {
 const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
   [
     "codex",
-    { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] },
+    { command: "npx", args: ["--yes", "@agentclientprotocol/codex-acp"] },
   ],
   ["claude", { command: "claude-acp", args: [] }],
   [

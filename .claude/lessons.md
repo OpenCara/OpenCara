@@ -340,3 +340,14 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ### [hits: 1] The only paired device is racknerd-03aefac — which IS this box
 - `agent_hosts` has one row; its device CLI runs here as `npm exec opencara@latest`. Its PATH includes `~/.npm-global/bin` (bun, omp, pi) and `~/.local/bin` (cursor-agent), so adapters installed for the interactive user are reachable from dispatched runs.
+
+### [hits: 1] postgres.js writes jsonb columns as STRINGS unless you use `sql.json()`
+- Inserting `args: JSON.stringify([...])` into `agents.args` (jsonb) stores the JSON *text* — `jsonb_typeof` returns `string`, not `array`. A `::jsonb` cast on the parameter does NOT fix it (postgres.js has already bound it as jsonb, so the cast is a no-op). The row looks right in a plain `select` because the text prints identically.
+- Use `sql.json(value)`: `args = ${sql.json(["--model","gpt-5.5"])}`. Always verify with `select jsonb_typeof(col)` and diff against a row the API wrote — drizzle's `$type<string[]>()` gives no runtime protection, so a string-typed row would reach dispatch as a broken spec.
+- This only bites hand-written rows; the API route serializes correctly. Prefer the API when a session is available.
+
+### [hits: 1] The cc-connect systemd unit is the source of truth for this box's model gateway
+- `~/.config/systemd/user/cc-connect.service` holds `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` (`cr_…`), `OPENAI_API_KEY`, `GEMINI_API_KEY` for the router at `dju6bwshsb814i.quabug.com` (paths `/api`, `/openai`, `/gemini`). Check it before hunting for credentials elsewhere; the shell env's `OPENAI_API_KEY` is a copy of the router's `cr_…` token, NOT an OpenAI key.
+- The router answers with distinct, meaningful 401/403 bodies — `Invalid API key format`, `API key is disabled`, and `403 Client not allowed {"allowedClients":["claude_code"],"userAgent":…}`. Curl the endpoint directly to tell "wrong key" from "route not entitled": the cc-connect token is scoped to the `claude_code` client and `/openai` is disabled for it, so it can never drive codex. Codex needs its OWN router key with `/openai` access (2026-09-06: one was issued and works).
+- Probe `/openai/responses` with curl before touching config: it rejects a bad payload with `400 {"detail":"Input must be a list"}` / `{"detail":"Stream must be set to true"}` and a bad key with `401`, so even a malformed 400 proves the key authenticated. `input` must be a list and `stream` must be true.
+- `~/.codex/auth.json` holds a *different* `sk-…` key; env `OPENAI_API_KEY` overrides it, so probes must control the env explicitly or they silently test the wrong credential.

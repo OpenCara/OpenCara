@@ -6,7 +6,7 @@
 //   1. Construct WsAgentCallBridge (transports tool calls back to the
 //      orchestrator via WS) + McpHost (per-run IPC socket).
 //   2. Spawn the ACP agent (`spec.command`/`spec.args` — typically
-//      `npx @zed-industries/codex-acp`).
+//      `npx @agentclientprotocol/codex-acp`).
 //   3. ACP handshake: initialize → session/new (with mcpServers from
 //      the host) → session/prompt with the assembled message content.
 //   4. Stream `session/update` events through `createUpdateTranslator`
@@ -140,7 +140,7 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
   // sends a logical command name in `spec.command`; the device resolves
   // it to a concrete invocation here so we don't have to symlink the
   // cli's bin entries into PATH on every device. Unknown commands pass
-  // through unchanged (e.g. `npx --yes @zed-industries/codex-acp`).
+  // through unchanged (e.g. `npx --yes @agentclientprotocol/codex-acp`).
   const resolved = resolveLocalAcpAdapter(spec.command, spec.args);
 
   const client = new AcpClient({

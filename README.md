@@ -238,7 +238,7 @@ Every agent runs as an [Agent Client Protocol](https://agentclientprotocol.com) 
 | Kind | Adapter command |
 |---|---|
 | `claude` | `claude-acp` — in-package shim around the local `claude` CLI; ships inside the `opencara` npm package and resolves to the bundled `dist/claude-acp.js`, no separate install. |
-| `codex` | `npx --yes @zed-industries/codex-acp` |
+| `codex` | `npx --yes @agentclientprotocol/codex-acp` |
 | `opencode` | `npx --yes opencode-ai@latest acp` |
 | `pi` | `npx --yes pi-acp@latest` |
 | `omp` | `npx --yes @oh-my-pi/pi-coding-agent@latest acp` — Oh My Pi's native ACP server. The npm *package* name is not the `omp` bin name; the device also needs `bun` on PATH. Credentials come from the device's `~/.omp/agent/models.yml` (per-provider `apiKey`) or an account added with `/login`, so the agent's env can usually stay empty. |

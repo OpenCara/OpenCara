@@ -81,7 +81,7 @@ agents when `OPENCARA_ACP=1`. To exercise it on the dev host:
 
 2. In the dashboard, create or edit a Codex agent (`agents` table row
    with `kind = "codex"`). Command/args don't matter on this path — the
-   chat route hardcodes `npx --yes @zed-industries/codex-acp`.
+   chat route hardcodes `npx --yes @agentclientprotocol/codex-acp`.
 
 3. Make sure your chosen device has `OPENAI_API_KEY` exported in its
    environment (`opencara run` inherits it).
