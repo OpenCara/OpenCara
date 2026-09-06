@@ -68,7 +68,7 @@ describe("splitModelArg", () => {
 });
 
 describe("resolveAdapterInvocation — per-adapter model translation", () => {
-  const codexAdapter = ["--yes", "@zed-industries/codex-acp"];
+  const codexAdapter = ["--yes", "@agentclientprotocol/codex-acp"];
   const opencodeAdapter = ["--yes", "opencode-ai@latest", "acp"];
 
   it("codex: model becomes `-c model=\"<v>\"`, never `--model` (codex-acp rejects --model)", () => {
@@ -80,7 +80,7 @@ describe("resolveAdapterInvocation — per-adapter model translation", () => {
     );
     assert.deepEqual(args, [
       "--yes",
-      "@zed-industries/codex-acp",
+      "@agentclientprotocol/codex-acp",
       "-c",
       'model="gpt-5.5"',
     ]);
@@ -340,7 +340,7 @@ describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {
   it("defaultAcpArgsFor reflects the kind base args + model translation", () => {
     assert.deepEqual(defaultAcpArgsFor("codex", ["--model", "gpt-5.5"]), [
       "--yes",
-      "@zed-industries/codex-acp",
+      "@agentclientprotocol/codex-acp",
       "-c",
       'model="gpt-5.5"',
     ]);
@@ -355,7 +355,7 @@ describe("acpCommandFor / defaultAcpArgsFor (UI-facing)", () => {
 });
 
 describe("resolveAdapterArgs — override vs default", () => {
-  const codex = { command: "npx", args: ["--yes", "@zed-industries/codex-acp"] };
+  const codex = { command: "npx", args: ["--yes", "@agentclientprotocol/codex-acp"] };
 
   it("uses acpArgs verbatim when set (no base args, no translation)", () => {
     const { args, env } = resolveAdapterArgs(
@@ -371,11 +371,11 @@ describe("resolveAdapterArgs — override vs default", () => {
   it("falls back to the translated default when acpArgs is null/empty", () => {
     assert.deepEqual(
       resolveAdapterArgs("codex", codex, { args: ["--model", "gpt-5.5"], acpArgs: null }, {}).args,
-      ["--yes", "@zed-industries/codex-acp", "-c", 'model="gpt-5.5"'],
+      ["--yes", "@agentclientprotocol/codex-acp", "-c", 'model="gpt-5.5"'],
     );
     assert.deepEqual(
       resolveAdapterArgs("codex", codex, { args: [], acpArgs: [] }, {}).args,
-      ["--yes", "@zed-industries/codex-acp"],
+      ["--yes", "@agentclientprotocol/codex-acp"],
     );
   });
 
