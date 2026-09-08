@@ -116,6 +116,13 @@ const KIND_HINTS: Record<
     argsHint:
       "Cursor's ACP model ids are parameterized and strictly validated; a rejected name is logged with the accepted list and the run falls back to Cursor's default.",
   },
+  agy: {
+    label: "Antigravity CLI (agy)",
+    defaultCommand: "agy",
+    envHint: "Install agy-acp@0.5.2 and sign in to agy on the device. Uses the local CLI credentials.",
+    argsPlaceholder: "--model gemini-3.8-flash",
+    argsHint: "Select a base model from `agy models` and set thinking level separately. This adapter does not forward OpenCara MCP tools.",
+  },
   custom: {
     label: "Custom (no resume)",
     defaultCommand: null,
@@ -130,7 +137,7 @@ const KIND_HINTS: Record<
 // kind, so switching a quiet agent to a reasoning kind later needs no
 // migration. claude-acp and codex-acp emit no thoughts, so the switch is a
 // no-op for them.
-const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor"]);
+const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor", "agy"]);
 
 // Reasoning-effort vocabularies per adapter, for the placeholder / hint of
 // the "Thinking level" field. Advisory: the value is free text and the
@@ -140,6 +147,7 @@ const THOUGHT_LEVEL_HINTS: Partial<Record<AgentKind, string>> = {
   codex: "minimal, low, medium, high, xhigh",
   pi: "off, minimal, low, medium, high, xhigh",
   omp: "off, minimal, low, medium, high, xhigh",
+  agy: "low, medium, high",
 };
 
 function ThoughtLevelField({
@@ -206,6 +214,7 @@ const KIND_ORDER: AgentKind[] = [
   "pi",
   "omp",
   "cursor",
+  "agy",
   "custom",
 ];
 

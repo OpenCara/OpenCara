@@ -1,0 +1,1 @@
+ALTER TYPE "agent_kind" ADD VALUE IF NOT EXISTS 'agy';

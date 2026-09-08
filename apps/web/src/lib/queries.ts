@@ -921,6 +921,7 @@ export type AgentKind =
   | "pi"
   | "omp"
   | "cursor"
+  | "agy"
   | "custom";
 
 export interface AgentRow {

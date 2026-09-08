@@ -59,6 +59,8 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
     { command: "npx", args: ["--yes", "@oh-my-pi/pi-coding-agent@latest", "acp"] },
   ],
   ["cursor", { command: "cursor-agent", args: ["acp"] }],
+  // Community bridge to the installed agy CLI; model/effort are selected over ACP.
+  ["agy", { command: "agy-acp", args: [] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
@@ -260,8 +262,8 @@ export function defaultAcpArgsFor(
 /**
  * Resolve the adapter (args, env) for dispatch, honouring a full `acpArgs`
  * override. A non-empty override is used verbatim (no kind base args, no model
- * translation) — the operator owns the line — except for cursor, where the
- * model flag is stripped because its argv and ACP model namespaces differ.
+ * translation) — the operator owns the line — except for cursor and agy,
+ * where model selection is owned by ACP rather than adapter argv.
  * Otherwise fall back to the kind-derived default via resolveAdapterInvocation.
  */
 export function resolveAdapterArgs(
@@ -271,6 +273,9 @@ export function resolveAdapterArgs(
   baseEnv: Record<string, string>,
 ): { args: string[]; env: Record<string, string> } {
   if (agent.acpArgs && agent.acpArgs.length > 0) {
+    if (kind.toLowerCase() === "agy") {
+      return { args: splitModelArg(agent.acpArgs).rest, env: baseEnv };
+    }
     if (kind.toLowerCase() === "cursor") {
       // One exception to "verbatim": cursor's argv and ACP model namespaces
       // are different (see resolveAdapterInvocation), so a `--model` left on
@@ -387,6 +392,11 @@ export function resolveAdapterInvocation(
     // same string on argv would either be rejected by a future stricter parse
     // or silently mean a different model. Strip it — ACP owns model selection
     // for this kind.
+    const { rest } = splitModelArg(agentArgs);
+    return { args: [...adapterArgs, ...rest], env: baseEnv };
+  }
+  if (k === "agy") {
+    // agy-acp has no --model flag; the model is carried by acp.model instead.
     const { rest } = splitModelArg(agentArgs);
     return { args: [...adapterArgs, ...rest], env: baseEnv };
   }
