@@ -354,6 +354,7 @@ function NewAgentCard() {
   // Operator extras for named kinds (e.g. `--provider X --model Y` for
   // pi). Hidden for custom (extras are part of the Command field).
   const [extraArgs, setExtraArgs] = useState("");
+  const [model, setModel] = useState("");
   const [envText, setEnvText] = useState("");
   const [thoughtLevel, setThoughtLevel] = useState("");
   const [hostId, setHostId] = useState<string>(ANY_DEVICE);
@@ -416,6 +417,7 @@ function NewAgentCard() {
               if (next !== kind) {
                 setCommand("");
                 setExtraArgs("");
+                setModel("");
               }
               setKind(next);
             }}
@@ -434,6 +436,21 @@ function NewAgentCard() {
             {isCustom ? hint.argsHint : COMMAND_OVERRIDE_HINT}
           </p>
         </div>
+        {!isCustom && (
+          <div>
+            <Label htmlFor="new-agent-model">Model</Label>
+            <Input
+              id="new-agent-model"
+              placeholder="e.g. gemini-3.8-flash"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="font-mono text-xs"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Saved as <code>--model</code> and selected over ACP when the adapter supports it.
+            </p>
+          </div>
+        )}
         {!isCustom && (
           <div>
             <Label htmlFor="new-agent-extra-args">Extra args</Label>
@@ -486,7 +503,7 @@ function NewAgentCard() {
                     ? { command: command.trim() }
                     : {
                         command: command.trim(),
-                        extraArgs: extraArgs.trim(),
+                        extraArgs: withModelArg(model, extraArgs),
                       }),
                   env,
                   thoughtLevel: thoughtLevel.trim() || null,
@@ -498,6 +515,7 @@ function NewAgentCard() {
                     setKind("claude");
                     setCommand("");
                     setExtraArgs("");
+                    setModel("");
                     setEnvText("");
                     setThoughtLevel("");
                     setHostId(ANY_DEVICE);
@@ -537,6 +555,8 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const [acpArgsText, setAcpArgsText] = useState(
     agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
   );
+  const [model, setModel] = useState(modelArg(agent.args));
+  const [extraArgs, setExtraArgs] = useState(joinArgs(withoutModelArg(agent.args)));
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
@@ -560,6 +580,8 @@ function AgentCard({ agent }: { agent: AgentRow }) {
     setAcpArgsText(
       agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
     );
+    setModel(modelArg(agent.args));
+    setExtraArgs(joinArgs(withoutModelArg(agent.args)));
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
     setCaptureThinking(agent.captureThinking);
@@ -626,7 +648,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                           // persist the adapter-args override instead.
                           ...(isCustom
                             ? { command: command.trim() }
-                            : { acpArgs }),
+                            : { acpArgs, extraArgs: withModelArg(model, extraArgs) }),
                           env: parseEnv(envText),
                           captureThinking,
                           thoughtLevel: thoughtLevel.trim() || null,
@@ -693,13 +715,15 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                   if (next !== kind) {
                     setCommand("");
                     setAcpArgsText("");
+                    setModel("");
+                    setExtraArgs("");
                   }
                   setKind(next);
                 }}
               />
             </div>
             {kind === "custom" ? (
-              <div>
+                <div>
                 <Label>Command</Label>
                 <Input
                   value={command}
@@ -710,8 +734,32 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 <p className="mt-1 text-xs text-muted-foreground">
                   {KIND_HINTS.custom.argsHint}
                 </p>
-              </div>
+                </div>
             ) : (
+              <>
+                <div>
+                  <Label htmlFor={`agent-model-${agent.id}`}>Model</Label>
+                  <Input
+                    id={`agent-model-${agent.id}`}
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="e.g. gemini-3.8-flash"
+                    className="font-mono text-xs"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Saved as <code>--model</code> and selected over ACP when the adapter supports it.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor={`agent-extra-args-${agent.id}`}>Extra args</Label>
+                  <Input
+                    id={`agent-extra-args-${agent.id}`}
+                    value={extraArgs}
+                    onChange={(e) => setExtraArgs(e.target.value)}
+                    placeholder={KIND_HINTS[kind].argsPlaceholder}
+                    className="font-mono text-xs"
+                  />
+                </div>
               <div>
                 <div className="flex items-center justify-between">
                   <Label htmlFor={`agent-acp-args-${agent.id}`}>Adapter args</Label>
@@ -748,6 +796,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                   reaches <code>cursor-agent</code>&apos;s own flag.
                 </p>
               </div>
+              </>
             )}
             <div>
               <Label>Env (KEY=value)</Label>
@@ -807,6 +856,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 const effArgs = agent.acpArgs ?? agent.defaultAcpArgs;
                 return `$ ${agent.acpCommand}${effArgs.length ? " " : ""}${effArgs.join(" ")}`;
               })(),
+              ...(modelArg(agent.args) ? [`  model: ${modelArg(agent.args)}`] : []),
               ...(agent.thoughtLevel ? [`  thinking level: ${agent.thoughtLevel}`] : []),
             ]
               .concat(
@@ -840,6 +890,41 @@ function joinCommand(agent: { command: string; args: string[] }): string {
     return `"${s}"`; // mixed quotes — user will need to fix manually
   };
   return [agent.command, ...agent.args].map(quote).join(" ");
+}
+
+function joinArgs(args: string[]): string {
+  return joinCommand({ command: "_", args }).replace(/^_\s?/, "");
+}
+
+function modelArg(args: string[]): string {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if ((arg === "--model" || arg === "-m") && args[i + 1]) return args[i + 1]!;
+    if (arg.startsWith("--model=")) return arg.slice("--model=".length);
+    if (arg.startsWith("-m=")) return arg.slice("-m=".length);
+  }
+  return "";
+}
+
+function withoutModelArg(args: string[]): string[] {
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--model" || arg === "-m") {
+      i++;
+    } else if (!arg.startsWith("--model=") && !arg.startsWith("-m=")) {
+      rest.push(arg);
+    }
+  }
+  return rest;
+}
+
+function withModelArg(model: string, extraArgs: string): string {
+  const trimmedModel = model.trim();
+  const trimmedExtras = extraArgs.trim();
+  return [trimmedModel ? `--model ${trimmedModel}` : "", trimmedExtras]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function parseEnv(text: string): Record<string, string> {

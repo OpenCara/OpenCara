@@ -1007,6 +1007,8 @@ export function useUpdateAgent() {
           "id" | "userId" | "createdAt" | "updatedAt" | "acpArgs" | "acpCommand" | "defaultAcpArgs"
         >
       > & {
+        /** Per-agent CLI extras. Sent separately so the server can tokenize it. */
+        extraArgs?: string | string[];
         /** Override as a shell string (server tokenizes); null resets to default. */
         acpArgs?: string | string[] | null;
       };
