@@ -27,7 +27,14 @@ scan the device daemon's entire home directory.
 
 The adapter supports streaming replies, local tools, permission requests,
 and conversation resume. Its default sandbox and interactive permissions
-remain enabled. Version 0.5.2 does not forward ACP session MCP servers, so
-OpenCara's per-session MCP tools are unavailable. It also does not consume
-OpenCara's custom `instructionsFile` extension. Use it for chat/local coding;
-flows that require those integrations need an adapter with that support.
+remain enabled for ad-hoc adapter use. OpenCara passes
+`--dangerously-skip-permissions` to every default `agy` adapter invocation:
+the agent can read files, edit files, run commands, and fetch URLs without a
+per-tool confirmation. This is required for unattended flow runs because
+OpenCara cannot present agy's interactive permission UI. A custom Adapter args
+override replaces this default.
+
+Version 0.5.2 does not forward ACP session MCP servers, so OpenCara's
+per-session MCP tools are unavailable. It also does not consume OpenCara's
+custom `instructionsFile` extension. Use it for chat/local coding; flows that
+require those integrations need an adapter with that support.

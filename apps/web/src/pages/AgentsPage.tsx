@@ -121,7 +121,7 @@ const KIND_HINTS: Record<
     defaultCommand: "agy",
     envHint: "Install agy-acp@0.5.2 and sign in to agy on the device. Uses the local CLI credentials.",
     argsPlaceholder: "--model gemini-3.8-flash",
-    argsHint: "Select a base model from `agy models` and set thinking level separately. This adapter does not forward OpenCara MCP tools.",
+    argsHint: "Select a base model from `agy models` and set thinking level separately. The adapter auto-approves its local tools and URL fetches; it does not forward OpenCara MCP tools.",
   },
   custom: {
     label: "Custom (no resume)",

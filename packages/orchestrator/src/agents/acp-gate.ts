@@ -59,8 +59,9 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
     { command: "npx", args: ["--yes", "@oh-my-pi/pi-coding-agent@latest", "acp"] },
   ],
   ["cursor", { command: "cursor-agent", args: ["acp"] }],
-  // Community bridge to the installed agy CLI; model/effort are selected over ACP.
-  ["agy", { command: "agy-acp", args: [] }],
+  // Flow agents cannot answer agy's permission prompts, so allow local tools
+  // and URL fetches for the whole turn. Model/effort are selected over ACP.
+  ["agy", { command: "agy-acp", args: ["--dangerously-skip-permissions"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */

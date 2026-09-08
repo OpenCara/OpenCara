@@ -44,10 +44,12 @@ describe("agy adapter", () => {
     });
     assert.equal(checkAcpEligibility("agy").useAcp, true);
     assert.equal(spec.command, "agy-acp");
-    assert.deepEqual(spec.args, ["--sandbox"]);
+    assert.deepEqual(spec.args, ["--dangerously-skip-permissions", "--sandbox"]);
     assert.equal(spec.acp?.model, "gemini-3.8-flash");
     assert.equal(spec.acp?.thoughtLevel, "medium");
-    assert.deepEqual(defaultAcpArgsFor("agy", ["--model=gemini-3.8-flash"]), []);
+    assert.deepEqual(defaultAcpArgsFor("agy", ["--model=gemini-3.8-flash"]), [
+      "--dangerously-skip-permissions",
+    ]);
   });
 });
 
