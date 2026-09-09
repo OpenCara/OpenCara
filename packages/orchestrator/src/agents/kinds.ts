@@ -10,7 +10,7 @@
 // inside the per-kind ACP adapter binaries (claude-acp, codex-acp,
 // opencode acp, pi-acp).
 
-export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "omp" | "cursor";
+export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "omp" | "cursor" | "agy";
 
 export const AGENT_KINDS: AgentKind[] = [
   "claude",
@@ -19,6 +19,7 @@ export const AGENT_KINDS: AgentKind[] = [
   "pi",
   "omp",
   "cursor",
+  "agy",
 ];
 
 export function isAgentKind(s: unknown): s is AgentKind {
@@ -32,6 +33,15 @@ export function isAgentKind(s: unknown): s is AgentKind {
  * adapter can authenticate.
  */
 export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: string }>> = {
+  agy: [
+    {
+      name: "(Antigravity CLI login on the device)",
+      description:
+        "Install agy-acp@0.5.2 and sign in to agy on the device. The adapter uses the local CLI. " +
+        "Select a base model such as gemini-3.8-flash and a thinking level (low, medium, high). " +
+        "This adapter does not forward session MCP servers; OpenCara MCP tools are unavailable.",
+    },
+  ],
   claude: [
     {
       name: "ANTHROPIC_API_KEY",

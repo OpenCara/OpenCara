@@ -108,6 +108,38 @@ describe("actionRunner scm.post_review stub guard", () => {
     );
   });
 
+  it("posts only agy's final structured review, never its narration", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      [
+        "Let me inspect the diff.",
+        "verdict: approve",
+        "Now I will trace the implementation.",
+        "## Summary",
+        "Looks correct.",
+        "## Findings",
+        "None.",
+      ].join("\n\n"),
+      "agy opus 4.6",
+    );
+    await actionRunner(ctx, postReviewNode);
+    assert.equal(
+      requests[0]!.params.body,
+      "_Reviewed by **agy opus 4.6**_\n\n## Summary\n\nLooks correct.\n\n## Findings\n\nNone.",
+    );
+  });
+
+  it("refuses agy's unstructured narration", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nLet me inspect the diff.",
+      "agy gemini-flash",
+    );
+    await assert.rejects(
+      actionRunner(ctx, postReviewNode),
+      /agy output has no structured final review body/,
+    );
+    assert.equal(requests.length, 0);
+  });
+
   it("still posts a substantial verdict-less body via the config-event fallback", async () => {
     const body = "x".repeat(MIN_UNVERDICTED_REVIEW_BODY_CHARS);
     const { ctx, requests } = ctxForPostReview(body);

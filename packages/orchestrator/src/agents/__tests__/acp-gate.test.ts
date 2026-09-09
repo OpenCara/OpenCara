@@ -18,6 +18,41 @@ const baseOpts = {
   userPromptMd: "user",
 };
 
+describe("agy adapter", () => {
+  it("keeps an override model in ACP without forwarding an unsupported CLI flag", () => {
+    const spec = buildAcpSpec({
+      ...baseOpts,
+      agent: {
+        kind: "agy", name: "agy", cwd: null,
+        args: ["--model", "gemini-3.7-flash"],
+        acpArgs: ["--sandbox", "--model", "gemini-3.8-flash"],
+      },
+    });
+    assert.deepEqual(spec.args, ["--sandbox"]);
+    assert.equal(spec.acp?.model, "gemini-3.8-flash");
+  });
+  it("uses the local-CLI bridge and selects model and effort over ACP", () => {
+    const spec = buildAcpSpec({
+      ...baseOpts,
+      agent: {
+        kind: "agy",
+        name: "agy",
+        cwd: null,
+        args: ["--model", "gemini-3.8-flash", "--sandbox"],
+        thoughtLevel: "medium",
+      },
+    });
+    assert.equal(checkAcpEligibility("agy").useAcp, true);
+    assert.equal(spec.command, "agy-acp");
+    assert.deepEqual(spec.args, ["--dangerously-skip-permissions", "--sandbox"]);
+    assert.equal(spec.acp?.model, "gemini-3.8-flash");
+    assert.equal(spec.acp?.thoughtLevel, "medium");
+    assert.deepEqual(defaultAcpArgsFor("agy", ["--model=gemini-3.8-flash"]), [
+      "--dangerously-skip-permissions",
+    ]);
+  });
+});
+
 describe("buildAcpSpec priorSessionId", () => {
   it("threads priorSessionId onto the AcpSpec when set", () => {
     const spec = buildAcpSpec({ ...baseOpts, priorSessionId: "abc-123" });

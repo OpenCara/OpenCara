@@ -36,6 +36,7 @@ import { buildIssueImplementContractSkill } from "./skills/issueImplementContrac
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
+import { reviewBodyForPublication } from "../agents/reviewBody.js";
 import { providerFor } from "../scm/registry.js";
 import type { PullRequestState } from "../scm/types.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
@@ -1821,10 +1822,16 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // Every review posts under the same bot identity, so the body itself
       // must say which agent wrote it — a PR with several reviewer flows is
       // otherwise a wall of indistinguishable bot reviews.
-      const reviewBody = withReviewAuthor(
+      const reviewContent = reviewBodyForPublication(
         parsed?.bodyWithoutVerdict ?? body,
         ctx.previousAgentName,
       );
+      if (reviewContent === null) {
+        throw new Error(
+          "post_review refused: agy output has no structured final review body",
+        );
+      }
+      const reviewBody = withReviewAuthor(reviewContent, ctx.previousAgentName);
       // The self-review downgrade that used to live here is now the GitHub
       // provider's concern (scm/github/provider.ts) — it is a quirk of
       // GitHub's review API, not flow-engine logic. `downgradedFrom` comes
