@@ -119,7 +119,10 @@ const KIND_HINTS: Record<
   agy: {
     label: "Antigravity CLI (agy)",
     defaultCommand: "agy",
-    envHint: "Install agy-acp@0.5.2 and sign in to agy on the device. Uses the local CLI credentials.",
+    envHint:
+      "Install the OpenCara adapter release on the device: `npm install -g " +
+      "https://github.com/quabug/agy-acp/releases/download/opencara-v0.5.2-1/agy-acp-0.5.2-opencara.1.tgz`. " +
+      "Then sign in to agy. Stock agy-acp@0.5.2 ignores the required print-timeout option.",
     argsPlaceholder: "--model gemini-3.8-flash",
     argsHint: "Select a base model from `agy models` and set thinking level separately. The adapter auto-approves its local tools and URL fetches; it does not forward OpenCara MCP tools.",
   },

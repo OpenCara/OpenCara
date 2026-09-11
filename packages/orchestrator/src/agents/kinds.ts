@@ -37,7 +37,9 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
     {
       name: "(Antigravity CLI login on the device)",
       description:
-        "Install agy-acp@0.5.2 and sign in to agy on the device. The adapter uses the local CLI. " +
+        "Install the OpenCara adapter release 0.5.2-opencara.1 on the device: " +
+        "`npm install -g https://github.com/quabug/agy-acp/releases/download/opencara-v0.5.2-1/agy-acp-0.5.2-opencara.1.tgz`. " +
+        "Sign in to agy on the device. Stock agy-acp@0.5.2 does not support the required print-timeout option. " +
         "Select a base model such as gemini-3.8-flash and a thinking level (low, medium, high). " +
         "This adapter does not forward session MCP servers; OpenCara MCP tools are unavailable.",
     },
