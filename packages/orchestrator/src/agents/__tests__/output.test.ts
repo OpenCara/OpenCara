@@ -191,6 +191,17 @@ describe("stripAcpMarkers", () => {
 });
 
 describe("extractAgentResultText — ACP marker stripping", () => {
+  it("returns empty text when an ACP run produced only thoughts and tool events", () => {
+    const raw = [
+      "[think]",
+      "I need to inspect the diff first.",
+      "[/think]",
+      "[tool] Read File",
+      "[tool] Read File -> completed",
+    ].join("\n");
+    assert.equal(extractAgentResultText(raw), "");
+  });
+
   it("strips the markers a real posted review carried to GitHub", () => {
     // Shape taken verbatim from flow_run_step 01M1EJVTTSPJDS1FMGA9C4Z5A6,
     // whose review body reached GitHub with these lines above the verdict.
