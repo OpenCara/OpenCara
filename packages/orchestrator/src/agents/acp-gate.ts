@@ -61,7 +61,9 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
   ["cursor", { command: "cursor-agent", args: ["acp"] }],
   // Flow agents cannot answer agy's permission prompts, so allow local tools
   // and URL fetches for the whole turn. Model/effort are selected over ACP.
-  ["agy", { command: "agy-acp", args: ["--dangerously-skip-permissions"] }],
+  // agy print mode otherwise ends active reviews at five minutes with exit 0.
+  // Requires the adapter's configurable print-timeout support (see docs/agy-acp.md).
+  ["agy", { command: "agy-acp", args: ["--dangerously-skip-permissions", "--print-timeout", "30m"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */

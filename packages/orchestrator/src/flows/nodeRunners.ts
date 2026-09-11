@@ -1350,17 +1350,6 @@ export async function runAgentAttempt(
       throw new Error(`agent exited with code ${result.exitCode}`);
     }
 
-    // ACP adapters can finish cleanly after a tool call without ever sending
-    // an assistant message. For review flows that leaves the synthesizer an
-    // empty contribution, even though the attempt appears successful. Treat
-    // marker-only output as a failed attempt so the pool can use its fallback.
-    if (
-      ctx.hasDownstreamPostReview &&
-      extractAgentResultText(result.stdoutCaptured).trim().length === 0
-    ) {
-      throw new Error("agent exited successfully but produced no final review text");
-    }
-
     // Post-step: when an issue-implement-shaped run succeeds (issue
     // context present, worktree allocated), link the PR the agent just
     // opened back to its source issue (Closes #N in body → populates
