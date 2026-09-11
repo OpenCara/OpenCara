@@ -2,20 +2,24 @@
 
 OpenCara's `agy` kind uses the existing Apache-2.0-licensed
 [shindgew/agy-acp](https://github.com/shindgew/agy-acp) adapter, verified with
-`agy` 1.2.1 and a patched `agy-acp@0.5.2`. It runs the installed Antigravity CLI.
+`agy` 1.2.1 and `agy-acp@0.5.2-opencara.1`. It runs the installed Antigravity CLI.
 
-On the paired device, install and sign in to `agy`, then build and install
-the adapter revision that includes the metadata and print-timeout fixes:
+On the paired device, install and sign in to `agy`, then install the
+[OpenCara adapter release 0.5.2-opencara.1](https://github.com/quabug/agy-acp/releases/tag/opencara-v0.5.2-1).
+The release contains a built npm package with the metadata and print-timeout
+fixes; no source checkout or TypeScript build is needed:
 
 ```sh
-git clone https://github.com/quabug/agy-acp.git
-cd agy-acp
-git checkout e1030222fba6f168c109c3674f69cb5ab5dcb0b9
-pnpm install --frozen-lockfile
-pnpm build
-npm pack
-npm install -g ./agy-acp-0.5.2.tgz
+npm install -g https://github.com/quabug/agy-acp/releases/download/opencara-v0.5.2-1/agy-acp-0.5.2-opencara.1.tgz
 ```
+
+This is a versioned compatibility release from the OpenCara fork, not a
+release on the upstream npm channel. Its source is commit
+`cc98c7c` in `quabug/agy-acp`; the release includes a SHA-256 checksum for
+the package. Upgrade existing paired devices with the same command before
+deploying the server's new default arguments. To check the installed version,
+run `npm list -g agy-acp` (the adapter itself starts an ACP server, including
+when invoked with `--version`).
 
 Both `agy` and `agy-acp` must be on the device daemon's PATH. OpenCara starts
 `agy-acp` directly so cancellation and teardown reach the adapter instead of
