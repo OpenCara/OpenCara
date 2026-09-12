@@ -130,14 +130,32 @@ describe("actionRunner scm.post_review stub guard", () => {
 
   it("refuses agy's unstructured narration", async () => {
     const { ctx, requests } = ctxForPostReview(
-      "verdict: approve\n\nLet me inspect the diff.",
+      "Let me inspect the diff.",
       "agy gemini-flash",
     );
     await assert.rejects(
       actionRunner(ctx, postReviewNode),
-      /agy output has no structured final review body/,
+      /agy output has no final verdict-bearing review body/,
     );
     assert.equal(requests.length, 0);
+  });
+
+  it("posts agy's valid follow-up review format", async () => {
+    const body = [
+      "verdict: approve",
+      "5 of 6 prior items resolved; 1 remains.",
+      "### Prior Review Feedback Status",
+      "- Fixed: disposal is idempotent.",
+    ].join("\n\n");
+    const { ctx, requests } = ctxForPostReview(body, "agy gemini-flash");
+    await actionRunner(ctx, postReviewNode);
+    assert.equal(
+      requests[0]!.params.body,
+      "_Reviewed by **agy gemini-flash**_\n\n" +
+        "5 of 6 prior items resolved; 1 remains.\n\n" +
+        "### Prior Review Feedback Status\n\n" +
+        "- Fixed: disposal is idempotent.",
+    );
   });
 
   it("still posts a substantial verdict-less body via the config-event fallback", async () => {

@@ -15,11 +15,21 @@ describe("reviewBodyForPublication", () => {
     ].join("\n\n");
     assert.equal(
       reviewBodyForPublication(body, "agy opus 4.6"),
-      "## Summary\n\nThe change is sound.\n\n## Findings\n\nNone.",
+      "verdict: approve\n\n## Summary\n\nThe change is sound.\n\n## Findings\n\nNone.",
     );
   });
 
-  it("refuses unstructured agy output instead of publishing narration", () => {
+  it("keeps a valid follow-up review format after the verdict", () => {
+    const body = [
+      "verdict: approve",
+      "5 of 6 prior items resolved; 1 remains.",
+      "### Prior Review Feedback Status",
+      "- Fixed: disposal is idempotent.",
+    ].join("\n\n");
+    assert.equal(reviewBodyForPublication(body, "agy gemini-flash"), body);
+  });
+
+  it("refuses agy output without a verdict instead of publishing narration", () => {
     assert.equal(reviewBodyForPublication("Let me inspect the diff.", "agy gemini-flash"), null);
   });
 
