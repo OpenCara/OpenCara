@@ -1805,7 +1805,13 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // absent or malformed, fall back to `node.config.event` and
       // post the body verbatim — operator-visible signal that the
       // agent didn't honor the contract.
-      const parsed = parseReviewVerdict(body);
+      const publicationBody = reviewBodyForPublication(body, ctx.previousAgentName);
+      if (publicationBody === null) {
+        throw new Error(
+          "post_review refused: agy output has no final verdict-bearing review body",
+        );
+      }
+      const parsed = parseReviewVerdict(publicationBody);
       // Stub guard: every agent upstream of post_review has the verdict
       // skill injected, so a body with no verdict line AND no substance
       // means the agent bailed without doing the review (e.g. the
@@ -1813,24 +1819,16 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // ParadiseGodot#25 review 4618560289). Fail the step — the run
       // shows as failed and is rerunnable — instead of publishing a
       // stub that reads as a completed review pass.
-      if (!parsed && body.length < MIN_UNVERDICTED_REVIEW_BODY_CHARS) {
+      if (!parsed && publicationBody.length < MIN_UNVERDICTED_REVIEW_BODY_CHARS) {
         throw new Error(
-          `post_review refused: agent output has no verdict line and is too short to be a review (${body.length} chars): ${JSON.stringify(body.slice(0, 120))}`,
+          `post_review refused: agent output has no verdict line and is too short to be a review (${publicationBody.length} chars): ${JSON.stringify(publicationBody.slice(0, 120))}`,
         );
       }
       const event = parsed?.verdict ?? node.config.event;
       // Every review posts under the same bot identity, so the body itself
       // must say which agent wrote it — a PR with several reviewer flows is
       // otherwise a wall of indistinguishable bot reviews.
-      const reviewContent = reviewBodyForPublication(
-        parsed?.bodyWithoutVerdict ?? body,
-        ctx.previousAgentName,
-      );
-      if (reviewContent === null) {
-        throw new Error(
-          "post_review refused: agy output has no structured final review body",
-        );
-      }
+      const reviewContent = parsed?.bodyWithoutVerdict ?? publicationBody;
       const reviewBody = withReviewAuthor(reviewContent, ctx.previousAgentName);
       // The self-review downgrade that used to live here is now the GitHub
       // provider's concern (scm/github/provider.ts) — it is a quirk of
