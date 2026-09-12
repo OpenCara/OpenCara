@@ -13,7 +13,7 @@ export function reviewBodyForPublication(
   const normalized = body.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
   let verdictLine = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
+  for (let i = 0; i < lines.length; i++) {
     if (/^verdict\s*:\s*(approve|request_changes|comment)\s*$/i.test(lines[i]!.trim())) {
       verdictLine = i;
       break;

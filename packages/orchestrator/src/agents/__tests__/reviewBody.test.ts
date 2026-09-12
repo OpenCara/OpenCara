@@ -29,6 +29,25 @@ describe("reviewBodyForPublication", () => {
     assert.equal(reviewBodyForPublication(body, "agy gemini-flash"), body);
   });
 
+  it("keeps the first standalone verdict when the review later quotes another", () => {
+    const body = [
+      "Narration before the answer.",
+      "verdict: request_changes",
+      "One blocking issue remains.",
+      "verdict: comment",
+      "is the marker used for non-blocking feedback.",
+    ].join("\n\n");
+    assert.equal(
+      reviewBodyForPublication(body, "agy gemini-flash"),
+      [
+        "verdict: request_changes",
+        "One blocking issue remains.",
+        "verdict: comment",
+        "is the marker used for non-blocking feedback.",
+      ].join("\n\n"),
+    );
+  });
+
   it("refuses agy output without a verdict instead of publishing narration", () => {
     assert.equal(reviewBodyForPublication("Let me inspect the diff.", "agy gemini-flash"), null);
   });
