@@ -28,8 +28,9 @@ import { ulid } from "ulid";
 import { and, eq, lt } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.js";
-import { agentRunLogs, agentRuns, flowRunSteps, worktreePins } from "../db/schema.js";
+import { agentRuns, flowRunSteps, worktreePins } from "../db/schema.js";
 import type { AgentDispatcher } from "../dispatch/dispatcher.js";
+import { AgentLogSink } from "../agents/logSink.js";
 
 interface CleanupDeps {
   db: Db;
@@ -203,18 +204,11 @@ async function runInternalOnHost(
     startedAt: new Date(),
   });
 
-  let seq = 0;
-  const onLog = (stream: "stdout" | "stderr", chunk: string) => {
-    const mySeq = seq++;
-    void deps.db
-      .insert(agentRunLogs)
-      .values({ agentRunId: runId, seq: mySeq, stream, chunk })
-      .then(() => deps.pg.notify("agent_run_logs", runId))
-      .catch(() => undefined);
-  };
+  const logSink = new AgentLogSink(deps.db, deps.pg, runId);
 
   try {
-    const result = await deps.dispatcher.run(spec, { runId, onLog, hostId, projectId });
+    const result = await deps.dispatcher.run(spec, { runId, onLog: logSink.push, hostId, projectId });
+    await logSink.close();
     await deps.db
       .update(agentRuns)
       .set({
@@ -226,6 +220,7 @@ async function runInternalOnHost(
     return { exitCode: result.exitCode, stdoutCaptured: result.stdoutCaptured };
   } catch (err) {
     console.warn("[worktree-cleanup] dispatch failed", { kind, hostId, err });
+    await logSink.close();
     await deps.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })

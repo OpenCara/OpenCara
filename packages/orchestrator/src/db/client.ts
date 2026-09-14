@@ -9,7 +9,7 @@ export interface DbHandle {
   pg: Sql;
 }
 
-function intFromEnv(
+export function intFromEnv(
   env: NodeJS.ProcessEnv,
   key: string,
   fallback: number,
@@ -59,21 +59,53 @@ function intFromEnv(
  *                     it — fine for current data sizes; bump DB_STATEMENT_TIMEOUT_MS
  *                     if a future migration needs longer).
  */
+/**
+ * SSL is only worth forcing on connections that leave the host. Loopback,
+ * RFC-1918 addresses, and dotless hostnames (Docker/compose service names
+ * like `db` or `postgres` — the production topology after the #245 local-PG
+ * move) are all link-local/private, where `ssl: require` would just break
+ * against a stock postgres image. `DB_SSL=require|disable` overrides for
+ * exotic cases (e.g. an internal CA on a dotted LAN name).
+ */
+function sslFor(databaseUrl: string, env: NodeJS.ProcessEnv): Options<Record<string, never>>["ssl"] {
+  const override = env.DB_SSL;
+  if (override === "require") return "require";
+  if (override === "disable") return false;
+  let host = "";
+  try {
+    host = new URL(databaseUrl).hostname;
+  } catch {
+    return "require"; // unparseable — fail closed toward encryption
+  }
+  const isLocal =
+    host === "localhost" ||
+    host === "[::1]" ||
+    host === "::1" ||
+    !host.includes(".") || // bare service name (docker network, /etc/hosts)
+    /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  return isLocal ? false : "require";
+}
+
 export function poolOptions(
   databaseUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Options<Record<string, never>> {
-  const isLocal = /@(localhost|127\.0\.0\.1|\[::1])\b/.test(databaseUrl);
   const statementTimeoutMs = intFromEnv(env, "DB_STATEMENT_TIMEOUT_MS", 30_000);
   return {
     max: intFromEnv(env, "DB_POOL_MAX", 12),
-    ssl: isLocal ? false : "require",
+    ssl: sslFor(databaseUrl, env),
     connect_timeout: intFromEnv(env, "DB_CONNECT_TIMEOUT_SEC", 10),
     max_lifetime: intFromEnv(env, "DB_MAX_LIFETIME_SEC", 60 * 30),
     idle_timeout: intFromEnv(env, "DB_IDLE_TIMEOUT_SEC", 60),
     // Passed through to the server at connection startup. postgres accepts a
-    // bare integer as milliseconds.
-    connection: { statement_timeout: statementTimeoutMs },
+    // bare integer as milliseconds. application_name lets the pool monitor
+    // (db/poolMonitor.ts) pick OUR connections out of pg_stat_activity —
+    // through the shared Supabase pooler, "everyone's" sessions are
+    // indistinguishable without it.
+    connection: {
+      statement_timeout: statementTimeoutMs,
+      application_name: "opencara-server",
+    },
   };
 }
 

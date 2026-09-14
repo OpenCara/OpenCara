@@ -44,6 +44,24 @@ export const DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS = 90;
 export const DEFAULT_INTERNAL_RUN_RETENTION_DAYS = 7;
 
 /**
+ * Master retention window (days) for the general data prune — user-facing
+ * run history, not just housekeeping rows. Drives `pruneTerminalAgentRuns`,
+ * `pruneTerminalFlowRuns` and `pruneUnreferencedPlatformEvents` in the daily
+ * pass, so with the default of 7 the Activity feed and run lists keep one
+ * week of history and the churn tables (agent_run_logs via cascade,
+ * flow_run_steps via cascade) stay bounded. Config: DATA_RETENTION_DAYS;
+ * 0 disables the whole retention pass.
+ *
+ * Note the platform_events consequence: tightening this below 90 days also
+ * shrinks the Azure DevOps `previousPrDelivery` dedupe lookback
+ * (routes/webhooksAzure.ts). Unreferenced events older than the window go
+ * away, so a PR whose last delivery predates it gets one extra review —
+ * fail-open, bounded harm, and the reason events historically kept a
+ * separate 90-day default.
+ */
+export const DEFAULT_DATA_RETENTION_DAYS = 7;
+
+/**
  * Rows deleted per statement. Every pooled connection runs with a 30s
  * `statement_timeout` (db/client.ts); one unbounded DELETE over a first-run
  * backlog of tens of thousands of TOASTed rows (plus cascading
@@ -176,4 +194,102 @@ export async function pruneInternalAgentRuns(
 ): Promise<number> {
   const cutoff = retentionCutoff(now, retentionDays);
   return deleteInBatches(db, (limit) => internalAgentRunsBatch(cutoff, limit));
+}
+
+// ---------------------------------------------------------------------------
+// General data retention (DATA_RETENTION_DAYS, default 7 — OpenCara#245).
+//
+// The three narrower prunes above cover the highest-churn housekeeping rows.
+// Everything else still grew unbounded — agent_runs was 130MB / platform_events
+// 226MB inside a few months, and every byte the Activity feed has to wade
+// through is latency on a hot endpoint. These batches apply the retention
+// window to the USER-VISIBLE rows too: terminal agent runs (logs cascade),
+// terminal flow runs (steps cascade; their agent_runs were already removed by
+// the pass above or lose their step link via the FK's SET NULL), and events
+// nothing references.
+//
+// Order in the daily pass matters: agent_runs BEFORE flow_runs so the run
+// rows are gone before their steps vanish; events LAST so the runs just
+// deleted free their trigger events for the NOT EXISTS guards.
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete terminal agent_runs older than the retention window — every kind,
+ * including the `internal:*` housekeeping rows the narrower prune above
+ * handles. `agent_run_logs` rows cascade. Only terminal statuses go: a
+ * still-running row is owned by a live dispatcher/step.
+ */
+export function terminalAgentRunsBatch(cutoff: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT id FROM agent_runs
+      WHERE created_at < ${cutoff.toISOString()}::timestamptz
+        AND status::text IN ('succeeded', 'failed', 'cancelled')
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM agent_runs WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
+export async function pruneTerminalAgentRuns(
+  db: Db,
+  retentionDays: number = DEFAULT_DATA_RETENTION_DAYS,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = retentionCutoff(now, retentionDays);
+  return deleteInBatches(db, (limit) => terminalAgentRunsBatch(cutoff, limit));
+}
+
+/**
+ * Delete terminal flow_runs older than the retention window — every cancel
+ * reason, including `trigger_skip`. `flow_run_steps` cascade; agent_runs
+ * referencing those steps get `flow_run_step_id` SET NULL by the FK (the
+ * runs themselves are covered by pruneTerminalAgentRuns, which runs first).
+ */
+export function terminalFlowRunsBatch(cutoff: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT id FROM flow_runs
+      WHERE created_at < ${cutoff.toISOString()}::timestamptz
+        AND status::text IN ('succeeded', 'failed', 'cancelled')
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM flow_runs WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
+export async function pruneTerminalFlowRuns(
+  db: Db,
+  retentionDays: number = DEFAULT_DATA_RETENTION_DAYS,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = retentionCutoff(now, retentionDays);
+  return deleteInBatches(db, (limit) => terminalFlowRunsBatch(cutoff, limit));
+}
+
+/**
+ * Delete expired sessions. Retention-window independent — an expired session
+ * is unusable regardless of how much history we keep, and loadSession already
+ * deletes them lazily on lookup; this just keeps the table from accumulating
+ * dead rows for sessions that are never presented again.
+ */
+export function expiredSessionsBatch(now: Date, limit: number): SQL {
+  return sql`
+    WITH victims AS (
+      SELECT id FROM sessions
+      WHERE expires_at < ${now.toISOString()}::timestamptz
+      LIMIT ${limit}
+    ), deleted AS (
+      DELETE FROM sessions WHERE id IN (SELECT id FROM victims) RETURNING 1
+    )
+    SELECT count(*)::int AS n FROM deleted`;
+}
+
+export async function pruneExpiredSessions(
+  db: Db,
+  now: Date = new Date(),
+): Promise<number> {
+  return deleteInBatches(db, (limit) => expiredSessionsBatch(now, limit));
 }

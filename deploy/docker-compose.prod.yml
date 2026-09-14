@@ -12,9 +12,39 @@
 # at container start. See deploy/README.md for the required keys.
 
 services:
+  db:
+    image: postgres:17-alpine
+    container_name: opencara_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opencara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:-opencara}
+    # Loopback-only host port: host-side tooling (pg_dump backups, psql
+    # debugging) reaches it via 127.0.0.1:5433; it is NOT reachable from the
+    # public NIC. The app itself connects over the internal compose network.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - opencara_pgdata:/var/lib/postgresql/data
+    # pg_stat_statements was load-bearing during the #245 pool-saturation
+    # investigation; keep the same observability on the local instance.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # A DB failure must not be silently restarted into corruption suspicion,
+    # but `restart: unless-stopped` is still right for transient OOM/crash.
+
   server:
     image: ${OPENCARA_REGISTRY:-ghcr.io}/${OPENCARA_IMAGE:-opencara/opencara/server}:${OPENCARA_IMAGE_TAG:-latest}
     container_name: opencara_server
+    depends_on:
+      db:
+        condition: service_healthy
     # The supervisor the bare-metal nohup process never had: a hard crash now
     # restarts instead of taking opencara.com down until a human notices.
     restart: unless-stopped
@@ -42,3 +72,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+volumes:
+  opencara_pgdata:

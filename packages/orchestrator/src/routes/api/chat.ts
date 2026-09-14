@@ -17,7 +17,8 @@ import {
   githubInstallations,
   projects,
 } from "../../db/schema.js";
-import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
+import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
+import { AgentLogSink } from "../../agents/logSink.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resolvePageSkill, type PageContextLike } from "../../flows/skills.js";
@@ -418,29 +419,23 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       }
     }
 
-    let seq = 0;
-    const onLog = (stream: LogStream, chunk: string) => {
-      const mySeq = seq++;
-      void deps.db
-        .insert(agentRunLogs)
-        .values({ agentRunId, seq: mySeq, stream, chunk })
-        .then(() => deps.pg.notify("agent_run_logs", agentRunId))
-        .catch((err: unknown) => {
-          console.error("[chat] log persist failed", err);
-        });
-    };
+    const logSink = new AgentLogSink(deps.db, deps.pg, agentRunId);
 
     // Fire-and-forget the dispatcher; the SSE stream is the client's only view.
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
           runId: agentRunId,
-          onLog,
+          onLog: logSink.push,
           hostId: dispatchHostId,
           projectId,
           userId: user.id,
           sessionId,
         });
+        // Drain buffered log chunks before the terminal write — the SSE
+        // end event goes out on the status flip, so the last chunks must
+        // already be durable or the tail would arrive after "end".
+        await logSink.close();
         // First terminal write wins: when the user clicked Stop, the
         // cancel endpoint already flipped this row to "cancelled" with
         // cancel_reason="user_stopped". A late dispatcher resolve must
@@ -504,6 +499,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
         }
       } catch (err) {
         console.error("[chat] dispatcher run failed", err);
+        await logSink.close();
         // Same first-write-wins guard as the success branch.
         await deps.db
           .update(agentRuns)

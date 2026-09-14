@@ -3,9 +3,10 @@ import { ulid } from "ulid";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Sql } from "postgres";
 import type { Db } from "../../db/client.js";
-import { agentHosts, agentRunLogs, agentRuns, agents } from "../../db/schema.js";
+import { agentHosts, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
-import type { AgentDispatcher, LogStream } from "../../dispatch/dispatcher.js";
+import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
+import { AgentLogSink } from "../../agents/logSink.js";
 import { AGENT_KINDS, isAgentKind, type AgentKind } from "../../agents/kinds.js";
 import {
   acpCommandFor,
@@ -269,31 +270,20 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       startedAt: new Date(),
     });
 
-    let seq = 0;
-    // Drained via Promise.allSettled before flipping terminal status. We
-    // assume the dispatcher fires every onLog before its run() promise
-    // resolves — true for WebSocketDispatcher (resolves on the device's
-    // `done` frame, which comes after every `log` frame).
-    const logWrites: Promise<unknown>[] = [];
-    const onLog = (stream: LogStream, chunk: string) => {
-      const p = deps.db
-        .insert(agentRunLogs)
-        .values({ agentRunId, seq: seq++, stream, chunk })
-        .then(() => deps.pg.notify("agent_run_logs", agentRunId))
-        .catch((err: unknown) => {
-          console.error("[agent-test] log persist failed", err);
-        });
-      logWrites.push(p);
-    };
+    // Batched log persistence — one insert+notify per flush instead of two
+    // pool checkouts per chunk (see AgentLogSink / OpenCara#245).
+    const logSink = new AgentLogSink(deps.db, deps.pg, agentRunId);
 
     void (async () => {
       try {
         const result = await deps.dispatcher.run(spec, {
           runId: agentRunId,
-          onLog,
+          onLog: logSink.push,
           hostId,
         });
-        await Promise.allSettled(logWrites);
+        // Drain buffered chunks before the terminal write — the SSE end
+        // event goes out on the status flip, so the tail must be durable.
+        await logSink.close();
         // First terminal write wins — see the matching guard in chat.ts.
         // Test runs are cancellable via the same /chat/messages/:runId/
         // cancel route, so the same overwrite race applies here.
@@ -312,7 +302,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
           );
       } catch (err) {
         console.error("[agent-test] dispatcher run failed", err);
-        await Promise.allSettled(logWrites);
+        await logSink.close();
         await deps.db
           .update(agentRuns)
           .set({ status: "failed", finishedAt: new Date() })

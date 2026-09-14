@@ -11,7 +11,6 @@ import type { AgentSpec } from "@opencara/shared";
 import { and, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
-  agentRunLogs,
   agentRuns,
   agents,
   flowRuns,
@@ -19,6 +18,7 @@ import {
   projects,
   prompts,
 } from "../db/schema.js";
+import { AgentLogSink } from "../agents/logSink.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
 import { requireGithubApp } from "../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
@@ -2005,7 +2005,9 @@ async function dispatchAgentRun(
   const STDERR_TAIL_BYTES = 4000;
   const stderrChunks: string[] = [];
   let stderrBytes = 0;
-  let seq = 0;
+  // Batched log persistence — one insert+notify per flush instead of two
+  // pool checkouts per chunk (see AgentLogSink / OpenCara#245).
+  const logSink = new AgentLogSink(ctx.db, ctx.pg, opts.agentRunId);
   const onLog = (stream: LogStream, chunk: string) => {
     if (stream === "stderr") {
       stderrChunks.push(chunk);
@@ -2015,14 +2017,7 @@ async function dispatchAgentRun(
         stderrChunks.shift();
       }
     }
-    const mySeq = seq++;
-    void ctx.db
-      .insert(agentRunLogs)
-      .values({ agentRunId: opts.agentRunId, seq: mySeq, stream, chunk })
-      .then(() => ctx.pg.notify("agent_run_logs", opts.agentRunId))
-      .catch((err: unknown) => {
-        console.error("[flows] log persist failed", err);
-      });
+    logSink.push(stream, chunk);
   };
 
   try {
@@ -2032,6 +2027,10 @@ async function dispatchAgentRun(
       hostId: opts.hostId ?? undefined,
       projectId: ctx.projectId,
     });
+    // Drain buffered log chunks before the terminal status write below —
+    // the run's SSE end is driven by that write, so the tail must be
+    // durable first.
+    await logSink.close();
     // Record the resulting acpSessionId on the row so post-run consumers
     // (steering chat scoped to this step, audit views) can resume the
     // agent's conversation without spelunking the on-device JSONL.
@@ -2065,6 +2064,9 @@ async function dispatchAgentRun(
       );
     return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
+    // A failed dispatch can still have emitted chunks — drain them before
+    // the status flip so the run's log tail is complete.
+    await logSink.close();
     await ctx.db
       .update(agentRuns)
       .set({ status: "failed", finishedAt: new Date() })

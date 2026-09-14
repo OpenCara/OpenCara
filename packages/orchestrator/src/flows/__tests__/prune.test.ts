@@ -10,13 +10,20 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import {
   deleteInBatches,
+  expiredSessionsBatch,
   internalAgentRunsBatch,
+  pruneExpiredSessions,
   pruneInternalAgentRuns,
+  pruneTerminalAgentRuns,
+  pruneTerminalFlowRuns,
   pruneTriggerSkipFlowRuns,
   pruneUnreferencedPlatformEvents,
   retentionCutoff,
+  terminalAgentRunsBatch,
+  terminalFlowRunsBatch,
   triggerSkipFlowRunsBatch,
   unreferencedPlatformEventsBatch,
+  DEFAULT_DATA_RETENTION_DAYS,
   DEFAULT_INTERNAL_RUN_RETENTION_DAYS,
   DEFAULT_TRIGGER_SKIP_RETENTION_DAYS,
   DEFAULT_UNREFERENCED_EVENT_RETENTION_DAYS,
@@ -143,6 +150,59 @@ describe("prune entry points", () => {
     const { sql, params } = render(executed[0]!);
     assert.match(sql, /DELETE FROM agent_runs/);
     assert.deepEqual(params, [cutoffIso, PRUNE_BATCH_SIZE]);
+  });
+});
+
+describe("general retention batches (DATA_RETENTION_DAYS)", () => {
+  it("defaults to 7 days", () => {
+    assert.equal(DEFAULT_DATA_RETENTION_DAYS, 7);
+  });
+
+  it("terminalAgentRunsBatch deletes every kind of terminal run past the cutoff", () => {
+    const { sql, params } = render(terminalAgentRunsBatch(cutoff, 1000));
+    assert.match(sql, /DELETE FROM agent_runs WHERE id IN \(SELECT id FROM victims\)/);
+    assert.match(sql, /created_at < \$1::timestamptz/);
+    assert.match(sql, /status::text IN \('succeeded', 'failed', 'cancelled'\)/);
+    assert.match(sql, /LIMIT \$2/);
+    // Unlike internalAgentRunsBatch there is NO spec->>'kind' filter — the
+    // general retention covers user-visible runs too.
+    assert.doesNotMatch(sql, /internal:%/);
+    assert.deepEqual(params, [cutoffIso, 1000]);
+  });
+
+  it("terminalFlowRunsBatch deletes every terminal flow run past the cutoff", () => {
+    const { sql, params } = render(terminalFlowRunsBatch(cutoff, 500));
+    assert.match(sql, /DELETE FROM flow_runs WHERE id IN \(SELECT id FROM victims\)/);
+    assert.match(sql, /created_at < \$1::timestamptz/);
+    assert.match(sql, /status::text IN \('succeeded', 'failed', 'cancelled'\)/);
+    assert.match(sql, /LIMIT \$2/);
+    // No cancel_reason filter — trigger_skip is covered by the general pass.
+    assert.doesNotMatch(sql, /trigger_skip/);
+    assert.deepEqual(params, [cutoffIso, 500]);
+  });
+
+  it("expiredSessionsBatch deletes sessions past their expiry, batch-bounded", () => {
+    const now = new Date("2026-06-04T12:00:00.000Z");
+    const { sql, params } = render(expiredSessionsBatch(now, 200));
+    assert.match(sql, /DELETE FROM sessions WHERE id IN \(SELECT id FROM victims\)/);
+    assert.match(sql, /expires_at < \$1::timestamptz/);
+    assert.match(sql, /LIMIT \$2/);
+    assert.deepEqual(params, [now.toISOString(), 200]);
+  });
+
+  it("pruneTerminalAgentRuns / pruneTerminalFlowRuns / pruneExpiredSessions bind the window", async () => {
+    const now = new Date("2026-06-04T12:00:00.000Z");
+    const { db: d1, executed: e1 } = scriptedDb([3]);
+    assert.equal(await pruneTerminalAgentRuns(d1, 7, now), 3);
+    assert.deepEqual(render(e1[0]!).params, [cutoffIso, PRUNE_BATCH_SIZE]);
+
+    const { db: d2, executed: e2 } = scriptedDb([0]);
+    assert.equal(await pruneTerminalFlowRuns(d2, 7, now), 0);
+    assert.deepEqual(render(e2[0]!).params, [cutoffIso, PRUNE_BATCH_SIZE]);
+
+    const { db: d3, executed: e3 } = scriptedDb([5]);
+    assert.equal(await pruneExpiredSessions(d3, now), 5);
+    assert.deepEqual(render(e3[0]!).params, [now.toISOString(), PRUNE_BATCH_SIZE]);
   });
 });
 

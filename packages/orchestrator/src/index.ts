@@ -4,7 +4,8 @@ import { Hono } from "hono";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { loadConfig } from "./config.js";
-import { createDb } from "./db/client.js";
+import { createDb, intFromEnv } from "./db/client.js";
+import { startPoolMonitor } from "./db/poolMonitor.js";
 import { DevicePool, WebSocketDispatcher } from "./dispatch/devices.js";
 import { createGithubAppClient } from "./github/app.js";
 import { GithubOAuth } from "./github/oauth.js";
@@ -34,8 +35,9 @@ import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
 import { reapOrphanedRuns } from "./flows/reaper.js";
 import {
-  pruneInternalAgentRuns,
-  pruneTriggerSkipFlowRuns,
+  pruneExpiredSessions,
+  pruneTerminalAgentRuns,
+  pruneTerminalFlowRuns,
   pruneUnreferencedPlatformEvents,
 } from "./flows/prune.js";
 import { pruneStaleWorktrees, sweepDeviceWorktrees } from "./worktrees/cleanup.js";
@@ -82,6 +84,15 @@ await migrate(db, {
 });
 console.log("[orchestrator] migrations up to date");
 
+// Pool utilisation telemetry (OpenCara#245): the 503 bursts were invisible
+// until session lookups started timing out — nobody could see the acquire
+// queue forming. Sampling pg_stat_activity for OUR application_name logs a
+// warning (with the longest-running query) whenever the pool nears
+// saturation, instead of discovering it via user-facing 503s.
+startPoolMonitor(pg, {
+  intervalMs: intFromEnv(process.env, "DB_POOL_MONITOR_INTERVAL_MS", 30_000),
+});
+
 const devicePool = new DevicePool(db);
 const dispatcher = new WebSocketDispatcher(devicePool, config.JOB_TIMEOUT_MS);
 
@@ -105,6 +116,22 @@ app.onError((err, c) => {
 // invalidation) so a logout takes effect immediately instead of after the TTL.
 const sessionCache = createSessionCache(db);
 app.use("*", currentUser(db, config.SESSION_COOKIE_NAME, sessionCache));
+
+// Slow-request log (OpenCara#245): the auth watchdog only sees the session
+// lookup, not the handler. The endpoints that CAUSED the bursts — /api/
+// activity at ~1.5s, kanban snapshot rebuilds — need their own trace, so
+// the next saturation event is diagnosable from logs alone.
+const SLOW_REQUEST_MS = intFromEnv(process.env, "SLOW_REQUEST_MS", 2_000);
+app.use("*", async (c, next) => {
+  const start = Date.now();
+  await next();
+  const ms = Date.now() - start;
+  if (ms >= SLOW_REQUEST_MS && c.req.path.startsWith("/api/")) {
+    console.warn(
+      `[http] slow request: ${c.req.method} ${c.req.path} -> ${c.res.status} in ${ms}ms`,
+    );
+  }
+});
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -184,20 +211,26 @@ reapOrphanedRuns(db)
   })
   .catch((err: unknown) => console.error("[orchestrator] reap failed", err));
 
-// Prune the `trigger_skip` flow_run backlog (webhook fan-out noise) on boot
-// and once a day. Left unbounded it grows without limit and bloats every
-// flow_id scan the kanban board issues (OpenCara#146). Best-effort: a failure
-// here never blocks startup or serving.
+// Data retention prune (DATA_RETENTION_DAYS, default 7): on boot and once a
+// day, delete terminal agent_runs / flow_runs / unreferenced platform_events /
+// expired sessions older than the window. Left unbounded these tables grew to
+// hundreds of MB inside months — agent_runs 130MB, platform_events 226MB —
+// and every byte the Activity feed wades through is latency on a hot endpoint
+// (OpenCara#146/#245). Best-effort: a failure here never blocks startup or
+// serving.
 //
-// The same daily pass also drops the two other unbounded populations that
-// the Activity feed / run lists never show: housekeeping agent runs
-// (internal:*) and webhook events nothing references. Run in this order so
-// events behind just-pruned runs become unreferenced in the same pass.
-const runFlowRunPrune = async () => {
+// Run order follows the FK graph: agent_runs first (agent_run_logs cascade)
+// so they're gone before their steps vanish; flow_runs next (flow_run_steps
+// cascade); events last so runs just deleted free their trigger_event refs
+// for the NOT EXISTS guards.
+const runDataRetentionPrune = async () => {
+  const days = config.DATA_RETENTION_DAYS;
+  if (days <= 0) return;
   const steps: [string, () => Promise<number>][] = [
-    ["trigger_skip flow_run(s)", () => pruneTriggerSkipFlowRuns(db)],
-    ["internal agent_run(s)", () => pruneInternalAgentRuns(db)],
-    ["unreferenced platform_event(s)", () => pruneUnreferencedPlatformEvents(db)],
+    ["terminal agent_run(s)", () => pruneTerminalAgentRuns(db, days)],
+    ["terminal flow_run(s)", () => pruneTerminalFlowRuns(db, days)],
+    ["unreferenced platform_event(s)", () => pruneUnreferencedPlatformEvents(db, days)],
+    ["expired session(s)", () => pruneExpiredSessions(db)],
   ];
   for (const [label, run] of steps) {
     try {
@@ -208,10 +241,10 @@ const runFlowRunPrune = async () => {
     }
   }
 };
-void runFlowRunPrune();
-const FLOW_RUN_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+void runDataRetentionPrune();
+const DATA_RETENTION_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // unref so the daily timer never keeps the process alive on its own.
-setInterval(() => void runFlowRunPrune(), FLOW_RUN_PRUNE_INTERVAL_MS).unref();
+setInterval(() => void runDataRetentionPrune(), DATA_RETENTION_PRUNE_INTERVAL_MS).unref();
 
 // Worktrees are torn down when their attempt finishes; this reclaims the
 // leftovers (orchestrator crash, device offline at teardown) and asks every
