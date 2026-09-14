@@ -47,7 +47,12 @@ import { cleanupClosedPrWorktree, removeAttemptWorktree } from "../worktrees/cle
 import { deriveWorktreeBranch, worktreeKeyForStep } from "../worktrees/branch.js";
 import { extractScopedLabelValues } from "./labelRouting.js";
 
-import { AgentUnusableError, FlowConfigError, SkipFlowError } from "./errors.js";
+import {
+  AgentUnusableError,
+  FlowConfigError,
+  PoolAttemptCancelledError,
+  SkipFlowError,
+} from "./errors.js";
 import {
   effectivePoolShape,
   clampRetrySame,
@@ -902,7 +907,12 @@ export async function runAgentAttempt(
   node: AgentNode,
   agent: typeof agents.$inferSelect,
   promptBody: string | null,
+  cancellationSignal?: AbortSignal,
 ): Promise<NodeRunResult> {
+  const throwIfCancelled = () => {
+    if (cancellationSignal?.aborted) throw new PoolAttemptCancelledError();
+  };
+  throwIfCancelled();
   await enforceMaxIterations(ctx, node);
 
   const env: Record<string, string> = { ...agent.env };
@@ -973,6 +983,7 @@ export async function runAgentAttempt(
     const derived = deriveWorktreeBranch({
       expected: worktreeBranchExpectation(ctx),
       prHeadRef: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_REF"],
+      prHeadSha: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_SHA"],
       issueNumber: ctx.issueContext?.stdin.issue?.number ?? null,
       flowRunId: ctx.flowRunId,
       fromBranch: fromBranchRendered,
@@ -1034,6 +1045,7 @@ export async function runAgentAttempt(
       "--key",
       key,
     ];
+    if (derived.commit) allocateArgs.push("--commit", derived.commit);
     if (ctx.scm.platform === "azure_devops") {
       // Azure DevOps remotes are org/project/_git/repo — three segments, which
       // `--repo OWNER/NAME` cannot express — and the basic-auth username must
@@ -1072,7 +1084,6 @@ export async function runAgentAttempt(
         `worktree allocation on host ${host} exited with code ${allocateResult.exitCode}${detail}`,
       );
     }
-
     // Parse {workdir, branch, sessionDir} from the CLI's
     // single-line JSON. Defensive last→first scan in case future
     // versions interleave progress lines.
@@ -1334,6 +1345,7 @@ export async function runAgentAttempt(
       instructionsFile: projectInstructionsFile,
     });
 
+    throwIfCancelled();
     const result = await dispatchAgentRun(ctx, {
       agentRunId,
       kind: agent.name,

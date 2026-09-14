@@ -223,6 +223,12 @@ describe("internal worktree create — existing-checkout branch resolution", () 
       writeFileSync(join(seed, "x.txt"), "x\n");
       git(seed, ["add", "."]);
       git(seed, ["commit", "-m", "x"]);
+      const triggeredHead = execFileSync("git", ["-C", seed, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      writeFileSync(join(seed, "later.txt"), "later\n");
+      git(seed, ["add", "."]);
+      git(seed, ["commit", "-m", "branch advanced after webhook"]);
       git(seed, ["push", "origin", "feature/x"]);
 
       const repo = "owner/name";
@@ -239,6 +245,7 @@ describe("internal worktree create — existing-checkout branch resolution", () 
           "--repo", repo,
           "--branch", branch,
           "--from-branch", "main",
+          "--commit", triggeredHead,
           "--key", key,
         ],
       );
@@ -247,6 +254,10 @@ describe("internal worktree create — existing-checkout branch resolution", () 
         encoding: "utf8",
       }).trim();
       assert.equal(head, branch);
+      const checkedOutCommit = execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(checkedOutCommit, triggeredHead);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

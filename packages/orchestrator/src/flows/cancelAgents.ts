@@ -49,3 +49,54 @@ export async function cancelFlowRunAgents(
   }
   return { cancelled: ids.length, signalled };
 }
+
+/** Cancel only the outstanding attempts of one agent-pool node. */
+export async function cancelFlowNodeAttempts(
+  db: Db,
+  dispatcher: AgentDispatcher,
+  flowRunId: string,
+  nodeId: string,
+  attempts: readonly number[],
+): Promise<{ cancelled: number; signalled: number }> {
+  if (attempts.length === 0) return { cancelled: 0, signalled: 0 };
+  const steps = await db
+    .select({ id: flowRunSteps.id })
+    .from(flowRunSteps)
+    .where(
+      and(
+        eq(flowRunSteps.flowRunId, flowRunId),
+        eq(flowRunSteps.nodeId, nodeId),
+        inArray(flowRunSteps.attempt, [...attempts]),
+        eq(flowRunSteps.status, "running"),
+      ),
+    );
+  if (steps.length === 0) return { cancelled: 0, signalled: 0 };
+
+  const stepIds = steps.map((step) => step.id);
+  const runs = await db
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(
+      and(
+        inArray(agentRuns.flowRunStepId, stepIds),
+        inArray(agentRuns.status, [...IN_FLIGHT]),
+      ),
+    );
+  const runIds = runs.map((run) => run.id);
+  if (runIds.length > 0) {
+    await db
+      .update(agentRuns)
+      .set({ status: "cancelled", cancelReason: "wave_cancelled", finishedAt: new Date() })
+      .where(and(inArray(agentRuns.id, runIds), inArray(agentRuns.status, [...IN_FLIGHT])));
+  }
+  await db
+    .update(flowRunSteps)
+    .set({ status: "skipped", error: "pool quorum reached", finishedAt: new Date() })
+    .where(and(inArray(flowRunSteps.id, stepIds), eq(flowRunSteps.status, "running")));
+
+  let signalled = 0;
+  for (const id of runIds) {
+    if (dispatcher.cancel(id, "wave_cancelled")) signalled += 1;
+  }
+  return { cancelled: runIds.length, signalled };
+}

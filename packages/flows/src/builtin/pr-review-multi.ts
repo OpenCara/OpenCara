@@ -57,6 +57,7 @@ export const prReviewMultiFlow: FlowDefinition = {
       config: {
         label: "Reviewer pool",
         draftPr: false,
+        stopOnQuorum: true,
         contextInjection: reviewerContext,
       },
     },

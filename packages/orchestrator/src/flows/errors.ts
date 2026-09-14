@@ -43,3 +43,11 @@ export class FlowConfigError extends Error {
     this.name = "FlowConfigError";
   }
 }
+
+/** An in-flight pool attempt was superseded after another attempt met quorum. */
+export class PoolAttemptCancelledError extends Error {
+  constructor() {
+    super("agent pool quorum reached; cancelling outstanding attempt");
+    this.name = "PoolAttemptCancelledError";
+  }
+}

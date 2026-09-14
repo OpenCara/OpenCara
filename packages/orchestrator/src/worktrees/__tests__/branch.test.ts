@@ -8,12 +8,18 @@ describe("deriveWorktreeBranch", () => {
       deriveWorktreeBranch({
         expected: "pr",
         prHeadRef: "opencara/issue-42",
+        prHeadSha: "a".repeat(40),
         issueNumber: null,
         flowRunId: "01RUN",
         fromBranch: "develop",
         defaultBranch: "main",
       }),
-      { branch: "opencara/issue-42", fromBranch: "opencara/issue-42", source: "pr" },
+      {
+        branch: "opencara/issue-42",
+        fromBranch: "opencara/issue-42",
+        source: "pr",
+        commit: "a".repeat(40),
+      },
     );
   });
 
@@ -22,17 +28,19 @@ describe("deriveWorktreeBranch", () => {
       deriveWorktreeBranch({
         expected: "issue",
         prHeadRef: undefined,
+        prHeadSha: undefined,
         issueNumber: 7,
         flowRunId: "01RUN",
         fromBranch: "develop",
         defaultBranch: "main",
       }),
-      { branch: "opencara/issue-7", fromBranch: "develop", source: "issue" },
+      { branch: "opencara/issue-7", fromBranch: "develop", source: "issue", commit: null },
     );
     assert.equal(
       deriveWorktreeBranch({
         expected: "issue",
         prHeadRef: "",
+        prHeadSha: undefined,
         issueNumber: 7,
         flowRunId: "01RUN",
         fromBranch: null,
@@ -47,12 +55,13 @@ describe("deriveWorktreeBranch", () => {
       deriveWorktreeBranch({
         expected: null,
         prHeadRef: null,
+        prHeadSha: null,
         issueNumber: undefined,
         flowRunId: "01M1H5VWBQ",
         fromBranch: "",
         defaultBranch: null,
       }),
-      { branch: "opencara/run-01m1h5vwbq", fromBranch: "", source: "run" },
+      { branch: "opencara/run-01m1h5vwbq", fromBranch: "", source: "run", commit: null },
     );
   });
 });
@@ -64,6 +73,7 @@ describe("deriveWorktreeBranch — missing trigger context fails loud", () => {
         deriveWorktreeBranch({
           expected: "pr",
           prHeadRef: undefined,
+          prHeadSha: undefined,
           issueNumber: null,
           flowRunId: "01RUN",
           fromBranch: null,
@@ -73,12 +83,29 @@ describe("deriveWorktreeBranch — missing trigger context fails loud", () => {
     );
   });
 
+  it("throws when a PR-triggered run has no immutable head SHA", () => {
+    assert.throws(
+      () =>
+        deriveWorktreeBranch({
+          expected: "pr",
+          prHeadRef: "feature/review",
+          prHeadSha: undefined,
+          issueNumber: null,
+          flowRunId: "01RUN",
+          fromBranch: null,
+          defaultBranch: "main",
+        }),
+      /head SHA is unavailable/,
+    );
+  });
+
   it("throws when an issue-triggered run has no issue number", () => {
     assert.throws(
       () =>
         deriveWorktreeBranch({
           expected: "issue",
           prHeadRef: null,
+          prHeadSha: null,
           issueNumber: undefined,
           flowRunId: "01RUN",
           fromBranch: null,

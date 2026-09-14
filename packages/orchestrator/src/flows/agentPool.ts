@@ -155,6 +155,8 @@ export interface PoolAttemptInfo {
   /** 0 for the first try on this candidate, 1.. for retries. */
   retryIndex: number;
   candidateCount: number;
+  /** Aborted when an opted-in pool reaches quorum before this attempt settles. */
+  signal: AbortSignal;
 }
 
 export interface PoolAttemptRecord<C> {
@@ -200,12 +202,15 @@ export interface RunWithAgentPoolOpts<C, T> {
   preferred?: number | null;
   /** Minimum successes to succeed. Default 1; capped to the live target. */
   quorum?: number;
+  /** Return at quorum and ask the caller to cancel attempts still in flight. */
+  stopOnQuorum?: boolean;
   /** Runs one attempt. Throwing = failed attempt; resolving = success. */
   attempt: (candidate: C, info: PoolAttemptInfo) => Promise<T>;
   classify?: (err: unknown) => AttemptDisposition;
   describe?: (candidate: C) => string;
   /** Observability hook, called after each failed (non-abort) attempt. */
   onAttemptFailed?: (record: PoolAttemptRecord<C>) => void;
+  onQuorumReached?: (outstanding: readonly PoolAttemptInfo[]) => Promise<void> | void;
 }
 
 export interface PoolResult<C, T> {
@@ -257,17 +262,21 @@ export async function runWithAgentPool<C, T>(
   const pending: Array<{ candidate: C; candidateIndex: number; retryIndex: number }> =
     opts.candidates.map((candidate, candidateIndex) => ({ candidate, candidateIndex, retryIndex: 0 }));
   const inFlight = new Map<number, Promise<Settled<C, T>>>();
+  const inFlightTasks = new Map<number, { candidate: C; info: PoolAttemptInfo }>();
+  const inFlightControllers = new Map<number, AbortController>();
   const successes: PoolSuccess<C, T>[] = [];
   const failures: PoolAttemptRecord<C>[] = [];
   let attempt = 0;
 
   const start = (job: (typeof pending)[number]) => {
     const id = attempt++;
+    const controller = new AbortController();
     const info: PoolAttemptInfo = {
       attempt: id,
       candidateIndex: job.candidateIndex,
       retryIndex: job.retryIndex,
       candidateCount,
+      signal: controller.signal,
     };
     const task = { candidate: job.candidate, info };
     const p: Promise<Settled<C, T>> = Promise.resolve()
@@ -277,6 +286,8 @@ export async function runWithAgentPool<C, T>(
         (error: unknown) => ({ id, task, ok: false, error }),
       );
     inFlight.set(id, p);
+    inFlightTasks.set(id, task);
+    inFlightControllers.set(id, controller);
   };
 
   for (;;) {
@@ -290,8 +301,20 @@ export async function runWithAgentPool<C, T>(
     if (inFlight.size === 0) break;
     const settled = await Promise.race(inFlight.values());
     inFlight.delete(settled.id);
+    inFlightTasks.delete(settled.id);
+    inFlightControllers.delete(settled.id);
     if (settled.ok) {
       successes.push({ candidate: settled.task.candidate, info: settled.task.info, value: settled.value as T });
+      if (opts.stopOnQuorum && successes.length >= quorum) {
+        const outstanding = [...inFlightTasks.values()].map((task) => task.info);
+        await opts.onQuorumReached?.(outstanding);
+        for (const controller of inFlightControllers.values()) controller.abort("quorum reached");
+        for (const promise of inFlight.values()) void promise.catch(() => undefined);
+        inFlight.clear();
+        inFlightTasks.clear();
+        inFlightControllers.clear();
+        break;
+      }
       continue;
     }
     const disposition = classify(settled.error);

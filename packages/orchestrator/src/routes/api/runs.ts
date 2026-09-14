@@ -6,6 +6,7 @@ import type { Db } from "../../db/client.js";
 import { agentRunLogs, agentRuns } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
+import { SseLifecycle } from "./sseLifecycle.js";
 
 interface RunRoutesDeps {
   db: Db;
@@ -72,6 +73,8 @@ export function runRoutes(deps: RunRoutesDeps) {
     const resumeHeader = c.req.header("Last-Event-ID") ?? c.req.header("last-event-id");
     const resumeSeq = resumeHeader != null ? Number.parseInt(resumeHeader, 10) : Number.NaN;
     return streamSSE(c, async (sse) => {
+      const lifecycle = new SseLifecycle();
+      sse.onAbort(() => lifecycle.cleanup());
       let lastSeq = Number.isFinite(resumeSeq) ? resumeSeq : -1;
 
       const flush = async () => {
@@ -109,16 +112,21 @@ export function runRoutes(deps: RunRoutesDeps) {
       }
 
       const subscription = await deps.pg.listen("agent_run_logs", (payload) => {
+        if (lifecycle.closed) return;
         if (payload !== runId) return;
         flush().catch((err: unknown) => {
           console.error("[sse] flush error", err);
+          void lifecycle.cleanup();
         });
       });
+      lifecycle.add(() => subscription.unlisten());
+      if (lifecycle.closed) return;
 
       // Heartbeat every 15s so proxies don't close idle connections.
       const heartbeat = setInterval(() => {
-        sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
+        sse.writeSSE({ event: "ping", data: "" }).catch(() => lifecycle.cleanup());
       }, 15_000);
+      lifecycle.add(() => clearInterval(heartbeat));
 
       // Poll terminal state every 2s; close stream when run finishes.
       // Status-only projection — see the initial check above.
@@ -137,21 +145,14 @@ export function runRoutes(deps: RunRoutesDeps) {
           if (r2 && TERMINAL.has(r2.status)) {
             await flush();
             await sse.writeSSE({ event: "end", data: JSON.stringify({ status: r2.status }) });
-            clearInterval(heartbeat);
-            clearInterval(terminalCheck);
-            await subscription.unlisten();
+            await lifecycle.cleanup();
             await sse.close();
           }
         } catch (err) {
           console.error("[sse] terminal check error", err);
         }
       }, 2_000);
-
-      sse.onAbort(async () => {
-        clearInterval(heartbeat);
-        clearInterval(terminalCheck);
-        await subscription.unlisten().catch(() => undefined);
-      });
+      lifecycle.add(() => clearInterval(terminalCheck));
     });
   });
 

@@ -49,6 +49,7 @@ import {
   type ResolvedAgentPool,
 } from "./nodeRunners.js";
 import { runWithAgentPool } from "./agentPool.js";
+import { cancelFlowNodeAttempts } from "./cancelAgents.js";
 import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
 import { cancelPreemptedReviewRuns } from "./preempt.js";
 import { flowMayMatchEvent } from "./eventMatch.js";
@@ -1163,6 +1164,23 @@ export class FlowEngine {
       concurrency: pool.concurrency,
       preferred: pool.preferred,
       quorum: pool.quorum,
+      stopOnQuorum: node.config.stopOnQuorum,
+      onQuorumReached: async (outstanding) => {
+        const result = await cancelFlowNodeAttempts(
+          this.deps.db,
+          this.deps.dispatcher,
+          flowRunId,
+          node.id,
+          outstanding.map((info) => info.attempt),
+        );
+        await this.deps.pg.notify("flow_run_steps", flowRunId);
+        console.log("[flow-engine] pool quorum reached; cancelled outstanding attempts", {
+          flowRunId,
+          nodeId: node.id,
+          attempts: outstanding.map((info) => info.attempt),
+          ...result,
+        });
+      },
       describe: (agent) => agent.name,
       onAttemptFailed: (rec) => {
         console.warn("[flow-engine] agent pool attempt failed", {
@@ -1192,7 +1210,7 @@ export class FlowEngine {
               quorum: pool.quorum,
             },
           },
-          (ctx) => runAgentAttempt(ctx, node, agent, pool.promptBody),
+          (ctx) => runAgentAttempt(ctx, node, agent, pool.promptBody, info.signal),
         ),
     });
     // A skip (maxIterations etc.) is decided per node, not per agent — any
@@ -1263,7 +1281,7 @@ export class FlowEngine {
           outputJson: (result.output ?? null) as object | null,
           finishedAt: new Date(),
         })
-        .where(eq(flowRunSteps.id, stepId));
+        .where(and(eq(flowRunSteps.id, stepId), eq(flowRunSteps.status, "running")));
       await this.deps.pg.notify("flow_run_steps", flowRunId);
 
       return {
@@ -1276,7 +1294,7 @@ export class FlowEngine {
         await this.deps.db
           .update(flowRunSteps)
           .set({ status: "skipped", finishedAt: new Date(), error: err.message })
-          .where(eq(flowRunSteps.id, stepId));
+          .where(and(eq(flowRunSteps.id, stepId), eq(flowRunSteps.status, "running")));
         await this.deps.pg.notify("flow_run_steps", flowRunId);
         return {
           skipped: true,
@@ -1288,7 +1306,7 @@ export class FlowEngine {
       await this.deps.db
         .update(flowRunSteps)
         .set({ status: "failed", finishedAt: new Date(), error: message })
-        .where(eq(flowRunSteps.id, stepId));
+        .where(and(eq(flowRunSteps.id, stepId), eq(flowRunSteps.status, "running")));
       await this.deps.pg.notify("flow_run_steps", flowRunId);
       throw err;
     }

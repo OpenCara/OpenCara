@@ -56,6 +56,7 @@ import {
   parseFlowRunsNotify,
 } from "../../flows/notify.js";
 import { normalizeNodeKind } from "@opencara/flows";
+import { SseLifecycle } from "./sseLifecycle.js";
 
 interface KanbanRoutesDeps {
   db: Db;
@@ -968,6 +969,8 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
     if (!ctx) return c.json({ error: "project not found" }, 404);
     const projectRepo = { owner: ctx.project.owner, name: ctx.project.name };
     return streamSSE(c, async (sse) => {
+      const lifecycle = new SseLifecycle();
+      sse.onAbort(() => lifecycle.cleanup());
       const loadSnapshot = async () => {
 
         const link = await deps.db.query.projectV2Links.findFirst({
@@ -1024,12 +1027,14 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
             });
           } catch (err) {
             console.error("[kanban-sse] snapshot failed", { id, err });
+            await lifecycle.cleanup();
           }
         });
         return writeChain;
       };
 
       const onNotify = (raw: string) => {
+        if (lifecycle.closed) return;
         // Payload is JSON: { projectId, linkId }. Filter by projectId so
         // unrelated projects' notifies don't trigger a snapshot here.
         let payload: KanbanNotify | null = null;
@@ -1047,6 +1052,7 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       // many runs at once). One timer per connection; cleared on abort.
       let flowRebuildTimer: ReturnType<typeof setTimeout> | null = null;
       const scheduleFlowRebuild = () => {
+        if (lifecycle.closed) return;
         if (flowRebuildTimer) return;
         flowRebuildTimer = setTimeout(() => {
           flowRebuildTimer = null;
@@ -1066,29 +1072,26 @@ export function kanbanRoutes(deps: KanbanRoutesDeps) {
       };
 
       const heartbeat = setInterval(() => {
-        sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
+        sse.writeSSE({ event: "ping", data: "" }).catch(() => lifecycle.cleanup());
       }, 15_000);
+      lifecycle.add(() => clearInterval(heartbeat));
+      lifecycle.add(() => {
+        if (flowRebuildTimer) clearTimeout(flowRebuildTimer);
+      });
 
       let sub: { unlisten: () => Promise<void> } | null = null;
       let flowSub: { unlisten: () => Promise<void> } | null = null;
       try {
         await enqueueSnapshot();
         sub = await deps.pg.listen(KANBAN_NOTIFY_CHANNEL, onNotify);
+        lifecycle.add(() => sub?.unlisten());
+        if (lifecycle.closed) return;
         flowSub = await deps.pg.listen(FLOW_RUNS_CHANNEL, onFlowRunNotify);
+        lifecycle.add(() => flowSub?.unlisten());
       } catch (err) {
-        clearInterval(heartbeat);
-        if (flowRebuildTimer) clearTimeout(flowRebuildTimer);
-        if (sub) await sub.unlisten().catch(() => undefined);
-        if (flowSub) await flowSub.unlisten().catch(() => undefined);
+        await lifecycle.cleanup();
         throw err;
       }
-
-      sse.onAbort(async () => {
-        clearInterval(heartbeat);
-        if (flowRebuildTimer) clearTimeout(flowRebuildTimer);
-        if (sub) await sub.unlisten().catch(() => undefined);
-        if (flowSub) await flowSub.unlisten().catch(() => undefined);
-      });
     });
   });
 
