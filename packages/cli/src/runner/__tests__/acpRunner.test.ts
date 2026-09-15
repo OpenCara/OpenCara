@@ -723,4 +723,99 @@ describe("createUpdateTranslator", () => {
     });
   });
 
+
+  describe("sawAgentMessage (silent end_turn detection)", () => {
+    // The verified agy failure: the agent abandons a turn mid-investigation
+    // (tool call fails agy's own args validation, DB row lands status=4 with
+    // error_details) and agy-acp still resolves prompt() with `end_turn`.
+    // ACP has no error stop reason, so "end_turn + zero agent messages" is
+    // the only client-observable signature — runAcpJob maps it to exit 1.
+    function tracked(updates: SessionUpdate[]) {
+      const t = createUpdateTranslator(() => {});
+      for (const u of updates) t.handle(u);
+      t.flush();
+      return t.sawAgentMessage;
+    }
+    const msg = (text: string): MessageChunkUpdate => ({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    });
+
+    it("is false for a tool-only turn — the agy abandoned-turn signature", () => {
+      assert.equal(
+        tracked([
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "tc1",
+            title: "Viewing Foo.cs lines 101-200",
+            status: "pending",
+          } satisfies ToolCallStartUpdate,
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tc1",
+            status: "completed",
+          } satisfies ToolCallProgressUpdate,
+        ]),
+        false,
+      );
+    });
+
+    it("is false for thought-only turns — reasoning is not output", () => {
+      assert.equal(
+        tracked([
+          {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "planning the review" },
+          } satisfies MessageChunkUpdate,
+        ]),
+        false,
+      );
+    });
+
+    it("is false when the only message chunks are whitespace or user echoes", () => {
+      assert.equal(
+        tracked([
+          msg("   \n  "),
+          {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "the prompt itself" },
+          } satisfies MessageChunkUpdate,
+        ]),
+        false,
+      );
+    });
+
+    it("is true once any agent_message_chunk carries text", () => {
+      assert.equal(
+        tracked([
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "tc1",
+            title: "grep TODO",
+            status: "pending",
+          } satisfies ToolCallStartUpdate,
+          msg("verdict: approve"),
+        ]),
+        true,
+      );
+    });
+
+    it("is false for messages replayed during session/load (gate drops before the translator)", () => {
+      const t = createUpdateTranslator(() => {});
+      const gate = createLoadReplayGate(t, () => {});
+      gate.beginLoad();
+      gate.handle(msg("previous review body"));
+      gate.endLoad();
+      gate.handle({
+        sessionUpdate: "tool_call",
+        toolCallId: "tc1",
+        title: "ls",
+        status: "completed",
+      } satisfies ToolCallStartUpdate);
+      assert.equal(t.sawAgentMessage, false);
+      gate.handle(msg("fresh answer"));
+      assert.equal(t.sawAgentMessage, true);
+    });
+  });
+
 });
