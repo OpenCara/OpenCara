@@ -6,7 +6,8 @@ import type { Db } from "../../db/client.js";
 
 // A Db stand-in that records whether the session lookup touched the DB at all,
 // and can be made to hang to exercise the fast-fail path. Only the surface
-// loadSession() reaches is implemented.
+// loadSession() reaches is implemented: the single sessions⋈users join select
+// (OpenCara#245 merged the two findFirsts into one query).
 function fakeDb(opts: {
   hangMs?: number;
   session?: { id: string; userId: string; expiresAt: Date; lastSeenAt: Date } | null;
@@ -19,26 +20,46 @@ function fakeDb(opts: {
     opts.hangMs
       ? new Promise<T>((resolve) => setTimeout(() => resolve(value), opts.hangMs))
       : Promise.resolve(value);
+  // The inner join yields a row only when BOTH sides exist — a session with a
+  // missing user resolves to no row, same as loadSession's old `!u → null`.
+  const joined =
+    sessionRow && userRow
+      ? [
+          {
+            sessionId: sessionRow.id,
+            sessionUserId: sessionRow.userId,
+            sessionExpiresAt: sessionRow.expiresAt,
+            sessionLastSeenAt: sessionRow.lastSeenAt,
+            userId: userRow.id,
+            githubUserId: null,
+            githubLogin: null,
+            userName: null,
+            avatarUrl: null,
+            email: null,
+          },
+        ]
+      : [];
   const db = {
-    query: {
-      sessions: {
-        findFirst: () => {
+    select: () => {
+      const chain = {
+        from: () => chain,
+        innerJoin: () => chain,
+        where: () => chain,
+        limit: (n: number) => {
           calls++;
-          return maybeHang(sessionRow);
+          return maybeHang(joined.slice(0, n));
         },
-      },
-      users: {
-        findFirst: () => {
-          calls++;
-          return maybeHang(userRow);
-        },
-      },
+      };
+      return chain;
     },
     // loadSession only ever reaches update() when lastSeenAt is stale; the
     // tests below keep it fresh, so this should never be called — fail loudly
     // if it is.
     update: () => {
       throw new Error("unexpected db.update in test");
+    },
+    delete: () => {
+      throw new Error("unexpected db.delete in test");
     },
   } as unknown as Db;
   return { db, calls: () => calls };
@@ -93,7 +114,7 @@ describe("currentUser middleware", () => {
   it("coalesces concurrent same-cookie lookups into a single DB read (fan-out fix)", async () => {
     const now = new Date();
     // Hang each query briefly so the 10 requests overlap in-flight; without
-    // single-flight that would be 10 loadSession()s (= 20 findFirst calls).
+    // single-flight that would be 10 loadSession()s.
     const { db, calls } = fakeDb({
       hangMs: 30,
       session: { id: "abc", userId: "u1", expiresAt: new Date(now.getTime() + 1e6), lastSeenAt: now },
@@ -109,9 +130,9 @@ describe("currentUser middleware", () => {
       ),
     );
     for (const res of results) assert.equal(res.status, 200);
-    // One loadSession() = sessions.findFirst + users.findFirst = 2 calls, shared
-    // across all 10 concurrent requests.
-    assert.equal(calls(), 2, "10 concurrent requests must share one session lookup");
+    // One loadSession() = a single sessions⋈users join select, shared across
+    // all 10 concurrent requests.
+    assert.equal(calls(), 1, "10 concurrent requests must share one session lookup");
   });
 
   it("serves a cached identity on a second request without re-reading the DB", async () => {
@@ -126,7 +147,7 @@ describe("currentUser middleware", () => {
 
     await app.request("/api/me", { headers: { cookie: "sid=abc" } });
     await app.request("/api/me", { headers: { cookie: "sid=abc" } });
-    assert.equal(calls(), 2, "second request within TTL must be served from cache");
+    assert.equal(calls(), 1, "second request within TTL must be served from cache");
   });
 
   it("returns 503 (not a hang) when the session lookup exceeds the deadline", async () => {

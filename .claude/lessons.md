@@ -9,10 +9,23 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Before writing a migration: `git fetch -q origin main && git ls-tree --name-only origin/main packages/orchestrator/drizzle/ | tail -1` and take that number + 1. The journal `when` must stay monotonically increasing.
 
 
-### [hits: 2] DB is Postgres (Supabase); the PROD url is in /opt/opencara/.env.production
-- Not SQLite. Since the container cutover the live url is `/opt/opencara/.env.production` → `DATABASE_URL` (chmod 600, owned by `quabug`, so no sudo needed). `packages/orchestrator/.env` is the local-dev copy.
-- Quick query against prod: `psql "$(grep -m1 '^DATABASE_URL=' /opt/opencara/.env.production | cut -d= -f2- | tr -d '\"')" -c "..."`. `psql` is installed at /usr/bin/psql.
+### [hits: 3] DB is Postgres — LOCAL container `opencara_db` since 2026-09-14 (#245 migration)
+- Migrated OFF Supabase (aws-1-us-east-2 pooler, ~57ms RTT, ~15-conn Supavisor ceiling) to a `postgres:17-alpine` compose service on the prod host. App reaches it at `db:5432` over the internal compose network; host tooling via `127.0.0.1:5433` (loopback only — never expose it).
+- Quick query: `docker exec opencara_db psql -U opencara -d opencara -c "..."` or `psql "postgres://opencara:$POSTGRES_PASSWORD@127.0.0.1:5433/opencara"`. `POSTGRES_PASSWORD` lives in `/opt/opencara/.env` (compose interpolation file), `DATABASE_URL` in `/opt/opencara/.env.production`. Pre-migration dump: `/opt/opencara/backups/pre-localpg-*.dump`; old Supabase URL in `/opt/opencara/.env.production.bak-*`.
 - Useful tables: `flow_runs`, `flow_run_steps`, `agent_runs`, `agent_run_logs`, `agent_hosts`, `worktree_pins`, `flows` (config in `graph_json` jsonb), `flow_node_settings` (per-node agent/prompt/host bindings), `sessions` (auth cookies).
+- `pg_stat_statements` IS loaded locally (`shared_preload_libraries` set in compose `command`) — the pool-saturation observability still works.
+
+### [hits: 1] Compose `${VAR}` interpolation reads `.env`, NOT `env_file`
+- `env_file: .env.production` injects vars into the container, but `${POSTGRES_PASSWORD:?}` in the compose file resolves from `/opt/opencara/.env` (or shell env) only. Putting service creds in `.env.production` gives "required variable is missing a value" at `docker compose config`. Split: container env → `.env.production`, compose-file interpolation → `.env`.
+
+### [hits: 1] postgres-js: `options.ssl` beats URL `?sslmode=disable`
+- Verified: `postgres(url + '?sslmode=disable', { ssl: 'require' })` still attempts TLS and fails against non-SSL servers. `poolOptions()` in `db/client.ts` now sniffs the hostname itself (dotless service names + RFC-1918 + loopback → `ssl:false`) with `DB_SSL=require|disable` as the escape hatch. Don't rely on URL params to undo an explicit `ssl` option.
+
+### [hits: 1] `WHERE col IN (SELECT id FROM cte)` top-N arms degenerate to seq scans — use CROSS JOIN LATERAL per group
+- `/api/activity` feed arms did `project_id IN (SELECT id FROM mine)` + `ORDER BY ts DESC LIMIT 50`. Once ANALYZE estimated a large qualifying fraction, Postgres abandoned the `(project_id, created_at)` indexes for a seq scan over the FAT `agent_runs` heap (25.5k buffers, 577ms). Rewriting each arm as `FROM mine m CROSS JOIN LATERAL (SELECT ... WHERE project_id = m.id ORDER BY ts DESC LIMIT 50)` forces per-project index-backed top-N: 577ms→26ms remote, 9ms local with `Heap Fetches: 0`. Correctness: a global top-N is always a subset of the union of per-group top-Ns.
+
+### [hits: 1] VACUUM ANALYZE can make a plan WORSE (stats flip seq↔index), and multiple VACUUMs need separate `-c`
+- `VACUUM ANALYZE` on the remote fixed visibility maps (heap fetches→0 later) but fresh stats flipped the activity arms from index-only scans to seq scans — the real fix was the LATERAL rewrite, not the vacuum. Also: `psql -c "VACUUM a; VACUUM b;"` wraps in one implicit transaction → `ERROR: VACUUM cannot run inside a transaction block`; run one per `-c`.
 
 ### [hits: 1] Adding a pg enum value: drizzle runs ALL pending migrations in ONE transaction, and a fresh-DB test gives a FALSE PASS
 - `ALTER TYPE x ADD VALUE 'v'` followed by any use of `'v'` fails with `ERROR: unsafe use of new value "v" of enum type x` — Postgres won't let a new enum value be used in the transaction that added it.
@@ -59,6 +72,12 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - 2026-09-02: the v0.124.0 boot prune failed all three passes; unit tests were green because they only rendered the SQL. Column-aware builders (`lt(table.createdAt, date)`) serialise Dates through the column type; the raw template path does not. Bind `${date.toISOString()}::timestamptz` instead.
 - Any new raw-SQL statement that runs against the DB should be executed once against a real database before merging (a no-op cutoff / `LIMIT 0` is enough) — rendered-SQL assertions don't catch driver-level parameter issues.
 
+### [hits: 1] The 503 bursts are pool-QUEUE timeouts, reproducible on demand with ~14 concurrent `/api/activity` calls
+- 2026-09-14: bursts of `[auth] session lookup exceeded 3000ms … returning 503` (06:12–06:18, 07:25–07:39 UTC) were reproduced synthetically: 14 parallel `GET /api/activity?limit=50` against `localhost:3030` pushed interleaved `/api/me` calls to 3.9 s and produced the same log line at 09:02:07. Mechanism: every query costs ≥57 ms WAN RTT (host → `aws-1-us-east-2` Supabase pooler); `/api/activity` holds a pooled conn ~0.6–1.3 s, so ~12 concurrent heavy requests fill the 12-conn pool and the acquire queue stalls session lookups past the 3 s middleware timeout.
+- The failure mode is **occupancy-time × concurrency**, not query count: per-chunk `agent_run_logs` insert+notify (~0.8 ms each) and SSE terminal polls are individually cheap but add baseline occupancy; page-load fan-out (6–8 parallel endpoints) plus an activity/kanban call is enough to tip it.
+- `pg_stat_activity` `application_name='Supavisor'` sits at ~14 of the ~15 pooler slots even at idle once psql monitors attach — **any ad-hoc psql session competes with the app for the same pooler ceiling** (observer effect). Keep monitoring sessions short.
+- `pg_stat_statements` is cumulative since cluster start — `stats_reset` column tells the window; snapshot to a file BEFORE `pg_stat_statements_reset()` or old data is lost.
+
 ## Dispatch
 
 ### [hits: 1] pickIdle() ignores device capability/version
@@ -82,14 +101,19 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Releases
 
-### [hits: 3] Devices on this box live in npx cache 35cf602f65bb4257 — NEVER purge it while the device is running
+### [hits: 5] Devices on this box live in npx cache 35cf602f65bb4257 — NEVER purge it while the device is running
 - Cache path: `~/.npm/_npx/35cf602f65bb4257/node_modules/opencara/dist/bin.js` (hash is for spec `opencara@latest`; a pinned spec like `opencara@0.112.1` gets a DIFFERENT hash dir).
 - After publish, force a refresh: `rm -rf ~/.npm/_npx/35cf602f65bb4257 && npm exec opencara@latest`. The cache won't re-download otherwise (see user-wide lesson on `npm exec @latest` caching).
 - 2026-07-16 incident: the cache dir backing the LIVE device process was deleted (~04:53 UTC) while the device kept running from memory. Every claude-acp job after that failed in ~3s with `[device] acp connection closed: child error: spawn claude-acp ENOENT` — `resolveLocalAcpAdapter` (`packages/cli/src/runner/acpRunner.ts`) does `existsSync` on `dist/claude-acp.js` *next to the (deleted) bundle* at job time, misses, and falls back to bare `claude-acp` on PATH, which doesn't exist. Non-claude ACP jobs (`npx pi-acp …`) and internal jobs kept succeeding, so the device looked healthy.
+- 2026-09-07 recurrence, DIFFERENT symptom — the whole `~/.npm/_npx` directory was gone (not just the one hash dir) while the device kept running from memory. This time the **internal** jobs are what died, not the ACP ones: every `worktree allocation on host <id> exited with code 1` with `Error: Cannot find module '/home/quabug/.npm/_npx/35cf602f65bb4257/node_modules/.bin/opencara'` / `MODULE_NOT_FOUND`, because the device re-execs its OWN bin path for `opencara internal …` subcommands and that path no longer exists. The flow surfaces it as `agent pool exhausted: 0/N needed succeeded after K failed attempts` — every pool member fails identically at worktree allocation before any model is ever contacted.
+- **Triage rule: an "agent pool exhausted" where every pool member failed with the SAME error is never a model/pool problem — read the `last:` clause, it is the shared infrastructure underneath.** A per-member difference in the errors is what points at the models.
+- Cheap first check for any device-side weirdness: `ls -la ~/.npm/_npx/35cf602f65bb4257/node_modules/.bin/` and compare against the path in the running process's argv. If the dir is missing while the process lives, this is the bug — go straight to the restart sequence.
 - **Read "Killing `npm exec opencara` does NOT kill the device" under Shell / process management BEFORE step 2 below** — the device survives a kill that looks successful, and that entry has the correct process match. Recurred 2026-08-17 purely from skipping it.
 - Full restart sequence, in this order (purging before the kill is what caused the 2026-07-16 ENOENT): **(1)** check nothing is in flight — `select count(*) from agent_runs where status in ('running','queued','assigned')` and `flow_runs` in `('pending','running')`; **(2)** kill every device PID (match the `.bin/opencara` path, NOT the `npm exec` wrapper) and verify empty; **(3)** `rm -rf ~/.npm/_npx/35cf602f65bb4257`; **(4)** `cd ~ && setsid bash -c 'exec npm exec --yes opencara@latest' >> ~/opencara-device.log 2>&1 < /dev/null &`; **(5)** verify `dist/claude-acp.js` exists next to the new bundle and the log shows ONE stable hello at the expected version. It re-acks under the same host id (token in `~/.opencara`). Then rerun failed flows from the failed step via the rerun API.
 - Rule: any `rm -rf ~/.npm/_npx/<hash>` MUST be immediately followed by a device restart on that box. Device log lives at `~/opencara-device.log`.
 - The cache can be **many** releases stale, not just one — it was on 0.114.0 when 0.115.5 shipped. Don't assume "the device is one version behind"; read the version out of `~/.npm/_npx/<hash>/node_modules/opencara/package.json`.
+- **Step 2.5 — reap orphaned ACP adapters before the purge.** Killing the device orphans every adapter subprocess it spawned, and the codex adapter does not exit on its own when a session ends: on 2026-09-07 the box had SIX live `_npx/e3854e347c184741/.../codex-acp` process pairs (plus their `opencara-mcp.js` children) from runs that had already reported `end_turn exit=0`, the oldest days old. They keep the deprecated adapter resident and pin its cache dir.
+  `ps -eo pid,args --no-headers | grep -E "_npx/[a-f0-9]+/node_modules/(\.bin/)?(codex-acp|opencara/dist/opencara-mcp)" | grep -v grep | awk '{print $1}' | xargs -r kill` — check it comes back empty before relaunching.
 
 ### [hits: 1] CLI publish is tag-driven; package.json stays at 0.0.0
 - Trigger: pushing a tag matching `v*.*.*` (literally `vX.Y.Z`, NOT `cli-v*`) → `.github/workflows/publish-cli.yml` runs.
@@ -136,7 +160,7 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Fix: bracket one character so the pattern cannot match the literal text — `pkill -f "npm exec [o]pencara"`, `pgrep -f "[s]rc/index.ts"`. Or match precisely: `ps -eo pid,args --no-headers | grep -E "[n]pm exec opencara" | awk '{print $1}' | xargs -r kill`.
 - Corollary for ANY kill -> purge -> relaunch sequence: verify each step's effect before assuming the next ran. A non-zero exit from the compound command means later steps silently did not happen. Confirm the process is gone AND the dir is gone AND the new process exists — never infer from "the command returned".
 
-### [hits: 3] Killing `npm exec opencara` does NOT kill the device — the real process is a grandchild that survives as an orphan
+### [hits: 4] Killing `npm exec opencara` does NOT kill the device — the real process is a grandchild that survives as an orphan
 - The device runs as a 3-process tree: `npm exec opencara@latest` -> `sh -c "opencara"` -> `node ~/.npm/_npx/<hash>/node_modules/.bin/opencara`. Only the LAST one is the device. Killing the `npm exec` wrapper leaves the grandchild running, reparented to init (PPID 1), still executing whatever code it loaded at start.
 - 2026-08-12: after a botched refresh I checked with `ps ... grep "[n]pm exec [o]pencara"` — which only matches the WRAPPER — saw nothing, and concluded "device stopped". The real device (12 days old, PID with PPID 1) was still running. The relaunch then started a SECOND device sharing the same `agentHostId` from `~/.opencara/config.json`.
 - Symptom of the duplicate: the orchestrator log alternates `connected` / `disconnected` with `code=4000 reason="superseded"` every second or so, and the reported version FLIPS between the two builds (0.113.1 / 0.112.3) as each evicts the other. **Any agent run dispatched into that churn fails with `device <id> disconnected`**, which is what killed flow run 01KZTXZJWMDAMXKCDX54EJAMWG.
@@ -351,3 +375,12 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - The router answers with distinct, meaningful 401/403 bodies — `Invalid API key format`, `API key is disabled`, and `403 Client not allowed {"allowedClients":["claude_code"],"userAgent":…}`. Curl the endpoint directly to tell "wrong key" from "route not entitled": the cc-connect token is scoped to the `claude_code` client and `/openai` is disabled for it, so it can never drive codex. Codex needs its OWN router key with `/openai` access (2026-09-06: one was issued and works).
 - Probe `/openai/responses` with curl before touching config: it rejects a bad payload with `400 {"detail":"Input must be a list"}` / `{"detail":"Stream must be set to true"}` and a bad key with `401`, so even a malformed 400 proves the key authenticated. `input` must be a list and `stream` must be true.
 - `~/.codex/auth.json` holds a *different* `sk-…` key; env `OPENAI_API_KEY` overrides it, so probes must control the env explicitly or they silently test the wrong credential.
+
+### [hits: 1] A stale `@zed-industries/codex-acp` looks exactly like "codex ignores thought_level" and "codex doesn't know this model"
+- 2026-09-07: three fresh `gpt-5.6-*` agents logged `[acp] thought level "high" requested but the agent advertised no thought-level option` AND `Model metadata for \`gpt-5.6-sol\` not found. Defaulting to fallback metadata`. Both read like model/kind limitations. Neither is: prod was still on the v0.125.0 image, whose `ACP_ADAPTERS` spawned the DEPRECATED `@zed-industries/codex-acp`. #240 (`@agentclientprotocol/codex-acp`) was merged on main but undeployed.
+- Probed side by side over raw JSON-RPC (`initialize` + `session/new`, print `configOptions`):
+  - `@zed-industries/codex-acp` → only `mode` and `model`. No thought-level option at all, and an old bundled `@openai/codex` that has never heard of gpt-5.6.
+  - `@agentclientprotocol/codex-acp` 1.10.0 → `mode`, `collaboration_mode`, `model`, `reasoning_effort` (**`category: "thought_level"`**, values low/medium/high/xhigh), `fast-mode`; deps `@openai/codex ^0.153.3`, and its model list names `gpt-5.6-sol` / `-terra` / `-luna`.
+- **Read `agent_runs.spec->'args'` before theorising about an adapter's capabilities** — it names the exact package the device spawned. Guessing from `ACP_ADAPTERS` on main is wrong whenever the deployed image is older than HEAD; `git log <deployed tag>..HEAD` is the check.
+- Corollary: `agents.thought_level` IS honoured for kind=codex on the maintained adapter. Don't record "codex ignores it" from a single run log.
+- Also from that probe: the old adapter applies argv `-c model="X"` (its `model` currentValue came back as `gpt-5.6-sol`); the maintained one does NOT — argv `-c` leaves currentValue at config.toml's `model`, and the model gets set over ACP `session/set_config_option` instead. Both end up on the right model by different routes.

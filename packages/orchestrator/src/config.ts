@@ -51,6 +51,13 @@ const BaseSchema = z.object({
   JOB_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(60 * 60 * 1000),
   SESSION_COOKIE_NAME: z.string().min(1).default("ocara_sid"),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(14),
+  /**
+   * Days of history to keep for run/event/session data. The daily retention
+   * pass (flows/prune.ts) deletes terminal agent_runs, terminal flow_runs,
+   * unreferenced platform_events and expired sessions older than this.
+   * 0 disables the pass entirely.
+   */
+  DATA_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(7),
   SESSION_ENCRYPTION_KEY: z
     .string()
     .optional()
@@ -100,6 +107,7 @@ export interface AppConfig {
   JOB_TIMEOUT_MS: number;
   SESSION_COOKIE_NAME: string;
   SESSION_TTL_DAYS: number;
+  DATA_RETENTION_DAYS: number;
   SESSION_ENCRYPTION_KEY?: string | undefined;
   github:
     | {
@@ -132,6 +140,7 @@ export function loadConfig(): AppConfig {
     JOB_TIMEOUT_MS: process.env["JOB_TIMEOUT_MS"],
     SESSION_COOKIE_NAME: process.env["SESSION_COOKIE_NAME"],
     SESSION_TTL_DAYS: process.env["SESSION_TTL_DAYS"],
+    DATA_RETENTION_DAYS: process.env["DATA_RETENTION_DAYS"],
     SESSION_ENCRYPTION_KEY: process.env["SESSION_ENCRYPTION_KEY"],
   });
 

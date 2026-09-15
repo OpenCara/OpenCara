@@ -86,6 +86,29 @@ On the deploy host:
 > fight over the port. From then on `restart: unless-stopped` gives the
 > supervisor the bare process never had.
 
+## Local PostgreSQL
+
+`docker-compose.prod.yml` includes a `db` service (postgres:17-alpine, named
+volume `opencara_pgdata`, `shared_preload_libraries=pg_stat_statements`). The
+server connects over the internal compose network at `db:5432`; the only host
+port is a loopback `127.0.0.1:5433` for `pg_dump` backups and ad-hoc `psql`.
+
+Its credentials live in **`/opt/opencara/.env`** (Compose's interpolation
+file — `env_file` vars are NOT visible to `${VAR}` expansion):
+
+```bash
+POSTGRES_USER=opencara
+POSTGRES_PASSWORD=<generated>
+POSTGRES_DB=opencara
+```
+
+and the app's `.env.production` points at it:
+`DATABASE_URL=postgres://opencara:<same-password>@db:5432/opencara`.
+
+`DATA_RETENTION_DAYS` (default `7`, `0` disables) controls the on-boot + daily
+prune of terminal `agent_runs`/`flow_runs`, unreferenced `platform_events`, and
+expired `sessions` (batched, FK-cascade safe). Set it in `.env.production`.
+
 ## Rollback
 
 Every release is an immutable GHCR tag, so rolling back is redeploying a prior

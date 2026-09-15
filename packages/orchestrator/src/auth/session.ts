@@ -444,17 +444,33 @@ export async function loadSession(
   db: Db,
   sessionId: string,
 ): Promise<{ session: SessionRecord; user: UserRecord } | null> {
-  const row = await db.query.sessions.findFirst({
-    where: eq(sessions.id, sessionId),
-  });
+  // Single join, not two sequential findFirsts: on the ~57ms-RTT hosted
+  // pooler every extra round-trip doubles the pooled-connection occupancy
+  // on the hottest lookup in the app (OpenCara#245).
+  const rows = await db
+    .select({
+      sessionId: sessions.id,
+      sessionUserId: sessions.userId,
+      sessionExpiresAt: sessions.expiresAt,
+      sessionLastSeenAt: sessions.lastSeenAt,
+      userId: users.id,
+      githubUserId: users.githubUserId,
+      githubLogin: users.githubLogin,
+      userName: users.name,
+      avatarUrl: users.avatarUrl,
+      email: users.email,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.userId))
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const row = rows[0];
   if (!row) return null;
-  if (row.expiresAt.getTime() < Date.now()) {
+  if (row.sessionExpiresAt.getTime() < Date.now()) {
     await db.delete(sessions).where(eq(sessions.id, sessionId));
     return null;
   }
-  const u = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
-  if (!u) return null;
-  if (Date.now() - row.lastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
+  if (Date.now() - row.sessionLastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
     void db
       .update(sessions)
       .set({ lastSeenAt: new Date() })
@@ -464,14 +480,18 @@ export async function loadSession(
       });
   }
   return {
-    session: { id: row.id, userId: row.userId, expiresAt: row.expiresAt },
+    session: {
+      id: row.sessionId,
+      userId: row.sessionUserId,
+      expiresAt: row.sessionExpiresAt,
+    },
     user: {
-      id: u.id,
-      githubUserId: u.githubUserId,
-      githubLogin: u.githubLogin,
-      name: u.name,
-      avatarUrl: u.avatarUrl,
-      email: u.email,
+      id: row.userId,
+      githubUserId: row.githubUserId,
+      githubLogin: row.githubLogin,
+      name: row.userName,
+      avatarUrl: row.avatarUrl,
+      email: row.email,
     },
   };
 }

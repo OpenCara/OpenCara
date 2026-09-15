@@ -53,11 +53,29 @@ function resolveCacheTtlMs(): number {
   return Number.isFinite(n) && n >= 0 ? n : 10_000;
 }
 
+// How long a JUST-expired cache entry may still be served while a background
+// revalidation runs. This is the burst-shock absorber: when the pool is
+// saturated, expiring entries keep requests off the acquire queue instead of
+// dropping them into the 3s-deadline race (OpenCara#245). Bounded so a dead
+// DB can't serve identity forever — after the window, requests fall back to
+// the blocking load (and its 503 fail-fast). Override with
+// AUTH_SESSION_STALE_MS; 0 disables stale serving.
+function resolveStaleMs(): number {
+  const raw = process.env["AUTH_SESSION_STALE_MS"];
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 30_000;
+}
+
 // Build the process-wide session cache. Constructed once and shared between the
 // auth middleware (reads) and the logout route (eager invalidation), so a logout
 // is reflected immediately rather than lingering for the TTL.
 export function createSessionCache(db: Db): SessionCache {
-  return new SessionCache((sid) => loadSession(db, sid), resolveCacheTtlMs());
+  return new SessionCache(
+    (sid) => loadSession(db, sid),
+    resolveCacheTtlMs(),
+    Date.now,
+    resolveStaleMs(),
+  );
 }
 
 class SessionLookupTimeout extends Error {}

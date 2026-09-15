@@ -170,7 +170,13 @@ export function activityRoutes(deps: ActivityRouteDeps) {
     //
     //   1. `cand`: per arm, the newest `limit` (kind, id, ts) triples via the
     //      (project_id, created_at) indexes — no jsonb touched — merged and
-    //      cut to `limit` again.
+    //      cut to `limit` again. Each arm is a CROSS JOIN LATERAL over `mine`
+    //      so Postgres runs a per-project index-backed top-N: `WHERE
+    //      project_id IN (SELECT ...)` degenerates to a seq scan once the
+    //      planner estimates a large fraction of the table qualifies
+    //      (verified on prod: 577ms → 26ms, OpenCara#245). The per-project
+    //      LIMIT is safe: the global top-`limit` of an arm is always a
+    //      subset of the union of per-project top-`limit`s.
     //   2. Join the heavy columns (payload, spec, flow / step / trigger event)
     //      for those rows only.
     //
@@ -188,24 +194,33 @@ export function activityRoutes(deps: ActivityRouteDeps) {
       ),
       cand AS (
         SELECT kind, id, ts FROM (
-          (SELECT 'event'::text as kind, e.id, e.received_at as ts
-           FROM platform_events e
-           WHERE e.project_id IN (SELECT id FROM mine) ${beforeCond(sql`e.received_at`)}
-           ORDER BY e.received_at DESC LIMIT ${limit})
+          (SELECT 'event'::text as kind, r.id, r.ts
+           FROM mine m CROSS JOIN LATERAL (
+             SELECT e.id, e.received_at as ts
+             FROM platform_events e
+             WHERE e.project_id = m.id ${beforeCond(sql`e.received_at`)}
+             ORDER BY e.received_at DESC LIMIT ${limit}
+           ) r)
           UNION ALL
-          (SELECT 'run'::text as kind, r.id, r.created_at as ts
-           FROM agent_runs r
-           WHERE r.project_id IN (SELECT id FROM mine)
-             AND COALESCE(r.spec->>'kind', '') NOT LIKE 'internal:%'
-             ${beforeCond(sql`r.created_at`)}
-           ORDER BY r.created_at DESC LIMIT ${limit})
+          (SELECT 'run'::text as kind, r.id, r.ts
+           FROM mine m CROSS JOIN LATERAL (
+             SELECT a.id, a.created_at as ts
+             FROM agent_runs a
+             WHERE a.project_id = m.id
+               AND COALESCE(a.spec->>'kind', '') NOT LIKE 'internal:%'
+               ${beforeCond(sql`a.created_at`)}
+             ORDER BY a.created_at DESC LIMIT ${limit}
+           ) r)
           UNION ALL
-          (SELECT 'flow_run'::text as kind, fr.id, fr.created_at as ts
-           FROM flow_runs fr
-           WHERE fr.project_id IN (SELECT id FROM mine)
-             AND (fr.cancel_reason IS NULL OR fr.cancel_reason <> 'trigger_skip')
-             ${beforeCond(sql`fr.created_at`)}
-           ORDER BY fr.created_at DESC LIMIT ${limit})
+          (SELECT 'flow_run'::text as kind, r.id, r.ts
+           FROM mine m CROSS JOIN LATERAL (
+             SELECT fr.id, fr.created_at as ts
+             FROM flow_runs fr
+             WHERE fr.project_id = m.id
+               AND (fr.cancel_reason IS NULL OR fr.cancel_reason <> 'trigger_skip')
+               ${beforeCond(sql`fr.created_at`)}
+             ORDER BY fr.created_at DESC LIMIT ${limit}
+           ) r)
         ) c
         ORDER BY ts DESC
         LIMIT ${limit}
