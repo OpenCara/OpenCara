@@ -12,6 +12,8 @@ import {
 } from "@/lib/queries";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { AgentOutputBlocks, TypingDots } from "@/components/chat/AgentOutput";
 
 interface Props {
   /** flow_run_steps.id — drives the (user, 'flow_run_step', stepId) chat row. */
@@ -388,9 +390,7 @@ function Bubble({
     return (
       <div className="ml-6">
         <div className="rounded-lg bg-secondary px-3 py-2 text-sm">
-          <pre className="whitespace-pre-wrap break-words font-sans">
-            {message.text}
-          </pre>
+          <ChatMarkdown>{message.text}</ChatMarkdown>
         </div>
       </div>
     );
@@ -402,9 +402,8 @@ function Bubble({
           "rounded-lg border bg-muted/30 px-3 py-2 text-sm leading-relaxed",
         )}
       >
-        <pre className="whitespace-pre-wrap break-words font-sans">
-          {streamed || (message.pending ? "…" : "")}
-        </pre>
+        <AgentOutputBlocks text={streamed} />
+        {message.pending && streamed === "" && <TypingDots />}
         {message.endStatus && (
           <p
             className={cn(
