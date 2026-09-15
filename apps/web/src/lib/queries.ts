@@ -922,6 +922,7 @@ export type AgentKind =
   | "omp"
   | "cursor"
   | "agy"
+  | "devin"
   | "custom";
 
 export interface AgentRow {
@@ -948,7 +949,7 @@ export interface AgentRow {
   /** Whether the agent's reasoning stream is captured into the run logs.
    *  false = the device drops thought chunks at the source, so there is no
    *  `[think]` block to show and nothing stored to turn back on later.
-   *  Only the reasoning adapters (omp, pi, cursor) emit thoughts at all. */
+   *  Only the reasoning adapters (omp, pi, cursor, agy, devin) emit thoughts. */
   captureThinking: boolean;
   /** Reasoning effort / thinking level selected over ACP for every run
    *  (claude: low…max, codex: minimal…xhigh, pi/omp: off…xhigh). Free text;

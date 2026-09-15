@@ -103,7 +103,7 @@ export function ProjectDetailPage() {
 
   return (
     <div className="min-w-0 space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">
             {p.owner}/{p.name}

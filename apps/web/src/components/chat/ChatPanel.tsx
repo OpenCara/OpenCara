@@ -658,7 +658,11 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     <aside
       className={cn(
         "fixed right-0 top-0 z-40 flex h-screen flex-row border-l bg-card shadow-xl transition-transform",
-        wantPersistence && sessionPanelOpen ? "w-[42rem]" : "w-[28rem]",
+        // Phones get a full-screen drawer; the fixed panel widths only apply
+        // from sm up, where there's room beside the content.
+        wantPersistence && sessionPanelOpen
+          ? "w-full sm:w-[42rem]"
+          : "w-full sm:w-[28rem]",
         open ? "translate-x-0" : "translate-x-full",
       )}
       aria-hidden={!open}
