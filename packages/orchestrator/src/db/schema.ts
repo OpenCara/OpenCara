@@ -61,6 +61,7 @@ export const agentKindEnum = pgEnum("agent_kind", [
   "omp",
   "cursor",
   "agy",
+  "devin",
 ]);
 
 export const users = pgTable(
@@ -591,8 +592,8 @@ export const agents = pgTable(
     // Per-agent rather than per-kind because "is the reasoning worth the
     // noise" is a property of how you use an agent, not of the adapter.
     // Defaults true: claude/codex emit no thought chunks anyway, so the
-    // default only matters for the reasoners (omp, pi, cursor), and the
-    // safe default is "capture" — a run's thinking can't be recovered
+    // default only matters for the reasoners (omp, pi, cursor, agy, devin),
+    // and the safe default is "capture" — a run's thinking can't be recovered
     // after the fact, but it can always be hidden.
     captureThinking: boolean("capture_thinking").notNull().default(true),
     // Reasoning effort / thinking level requested for every run of this

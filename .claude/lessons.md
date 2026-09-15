@@ -345,6 +345,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - `session/set_config_option` validates strictly: `grok-4.6` and `cursor-grok-4.6-high` both fail with `Invalid params / Invalid model value`. Only an exactly-advertised id is accepted, so the agent's `--model` arg must carry the bracketed form verbatim (jsonb args, so no shell quoting worries).
 - Consequence for the orchestrator: `resolveAdapterInvocation` strips `--model` from cursor's argv and lets `acp.model` do the selection — passing the ACP-form id to the CLI's own `--model` would mean a different (or invalid) model.
 
+### [hits: 1] `devin acp` rejects bare model family names over ACP — wants `<family>-<tier>`
+- `session/set_config_option` with `--model swe-2` returns `-32002 "Model not found: swe-2"` plus the full advertised list; the run then continues on the *default* model with only a warn line (`[acp] model "swe-2" not among available models ...; using the default`), so a misconfigured agent silently runs the wrong model — every agent tested "worked" while none ran the intended model.
+- Valid ids are tier-qualified: `swe-2-high/medium/max`, `adaptive`, `claude-opus-5-medium…max`, `glm-5-3-*` — note dash forms (`deepseek-v4-1-flash`, `glm-5-3`), not the dotted names a user naturally types. Interactive `/model` may fuzzy-match; the ACP path does not.
+- `devin acp --model <v>` also lands on argv (pass-through in `resolveAdapterInvocation`), but the argv flag is not what selects the session model — only the ACP `set_config_option` value matters.
+
 ### [hits: 1] `npx omp` is NOT Oh My Pi — the npm name is @oh-my-pi/pi-coding-agent
 - The `omp` package on npm is an unrelated placeholder (`1.0.0`, description "new "). The real CLI is `@oh-my-pi/pi-coding-agent` (bin `omp`), and `npx --yes @oh-my-pi/pi-coding-agent@latest acp` is the correct fetch-and-run form.
 - Its dist is a Bun build (`#!/usr/bin/env bun`, `engines.bun >= 1.3.14`) — the device needs `bun` on PATH, node alone won't run it.

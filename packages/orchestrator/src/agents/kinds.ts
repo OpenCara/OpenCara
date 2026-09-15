@@ -8,9 +8,17 @@
 // resume, etc.) for the legacy stdin-JSON dispatch path. The cutover
 // in #30 deleted that path entirely; per-kind specifics now live
 // inside the per-kind ACP adapter binaries (claude-acp, codex-acp,
-// opencode acp, pi-acp).
+// opencode acp, pi-acp, devin acp).
 
-export type AgentKind = "claude" | "codex" | "opencode" | "pi" | "omp" | "cursor" | "agy";
+export type AgentKind =
+  | "claude"
+  | "codex"
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "cursor"
+  | "agy"
+  | "devin";
 
 export const AGENT_KINDS: AgentKind[] = [
   "claude",
@@ -20,6 +28,7 @@ export const AGENT_KINDS: AgentKind[] = [
   "omp",
   "cursor",
   "agy",
+  "devin",
 ];
 
 export function isAgentKind(s: unknown): s is AgentKind {
@@ -108,6 +117,16 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
         "option and are parameterized, e.g. " +
         "`grok-4.6[effort=high,fast=true]` — see the list in the run log if " +
         "a name is rejected.",
+    },
+  ],
+  devin: [
+    {
+      name: "(Devin CLI login on the device) / WINDSURF_API_KEY",
+      description:
+        "Install Devin CLI on the paired device with the official installer, " +
+        "then run `devin auth login` once. For a headless device, use " +
+        "`devin auth login --force-manual-token-flow` or set WINDSURF_API_KEY " +
+        "in the agent env. OpenCara launches the CLI's native `devin acp` server.",
     },
   ],
 };

@@ -54,6 +54,27 @@ describe("agy adapter", () => {
   });
 });
 
+describe("devin adapter", () => {
+  it("uses Devin CLI's native ACP server", () => {
+    const spec = buildAcpSpec({
+      ...baseOpts,
+      agent: {
+        kind: "devin",
+        name: "devin opus",
+        cwd: "/wt/branch",
+        args: ["--model", "opus"],
+      },
+    });
+
+    assert.equal(checkAcpEligibility("devin").useAcp, true);
+    assert.equal(checkAcpEligibility("DEVIN").useAcp, true);
+    assert.equal(acpCommandFor("devin"), "devin");
+    assert.deepEqual(defaultAcpArgsFor("devin", []), ["acp"]);
+    assert.deepEqual(spec.args, ["acp", "--model", "opus"]);
+    assert.equal(spec.acp?.model, "opus");
+  });
+});
+
 describe("buildAcpSpec priorSessionId", () => {
   it("threads priorSessionId onto the AcpSpec when set", () => {
     const spec = buildAcpSpec({ ...baseOpts, priorSessionId: "abc-123" });

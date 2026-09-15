@@ -126,6 +126,15 @@ const KIND_HINTS: Record<
     argsPlaceholder: "--model gemini-3.8-flash",
     argsHint: "Select a base model from `agy models` and set thinking level separately. The adapter auto-approves its local tools and URL fetches; it does not forward OpenCara MCP tools.",
   },
+  devin: {
+    label: "Devin CLI",
+    defaultCommand: "devin",
+    envHint:
+      "Install Devin CLI on the device and run `devin auth login` once. On a headless device, use `devin auth login --force-manual-token-flow` or set WINDSURF_API_KEY here.",
+    argsPlaceholder: "--model swe-2-max",
+    argsHint:
+      "OpenCara launches Devin's native `devin acp` server. Model ids are tier-qualified (e.g. `swe-2-max`, `adaptive`); a bare family name like `swe-2` is rejected and the run falls back to Devin's default.",
+  },
   custom: {
     label: "Custom (no resume)",
     defaultCommand: null,
@@ -140,7 +149,7 @@ const KIND_HINTS: Record<
 // kind, so switching a quiet agent to a reasoning kind later needs no
 // migration. claude-acp and codex-acp emit no thoughts, so the switch is a
 // no-op for them.
-const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor", "agy"]);
+const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor", "agy", "devin"]);
 
 // Reasoning-effort vocabularies per adapter, for the placeholder / hint of
 // the "Thinking level" field. Advisory: the value is free text and the
@@ -210,6 +219,23 @@ function ThoughtLevelField({
 const COMMAND_OVERRIDE_HINT =
   "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
 
+// Look up display hints for a kind, tolerating kinds this build doesn't
+// know: an agent row can carry a kind added by a newer release (or a local
+// WIP build — e.g. 'devin' crashed this page, OpenCara#245 follow-up) while
+// an older UI is still deployed. Unknown kinds render under their raw name
+// instead of taking the whole page down.
+function kindHints(kind: string): (typeof KIND_HINTS)[AgentKind] {
+  return (
+    KIND_HINTS[kind as AgentKind] ?? {
+      label: kind,
+      defaultCommand: kind,
+      envHint: "",
+      argsPlaceholder: "",
+      argsHint: "This agent kind isn't recognised by this build of the UI.",
+    }
+  );
+}
+
 const KIND_ORDER: AgentKind[] = [
   "claude",
   "codex",
@@ -218,6 +244,7 @@ const KIND_ORDER: AgentKind[] = [
   "omp",
   "cursor",
   "agy",
+  "devin",
   "custom",
 ];
 
@@ -759,7 +786,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                     id={`agent-extra-args-${agent.id}`}
                     value={extraArgs}
                     onChange={(e) => setExtraArgs(e.target.value)}
-                    placeholder={KIND_HINTS[kind].argsPlaceholder}
+                    placeholder={kindHints(kind).argsPlaceholder}
                     className="font-mono text-xs"
                   />
                 </div>
@@ -808,7 +835,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 onChange={(e) => setEnvText(e.target.value)}
                 className="min-h-20 font-mono text-xs"
               />
-              <p className="mt-1 text-xs text-muted-foreground">{KIND_HINTS[kind].envHint}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{kindHints(kind).envHint}</p>
             </div>
             {kind !== "custom" && (
               <ThoughtLevelField
@@ -850,7 +877,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
         ) : (
           <pre className="whitespace-pre-wrap rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
             {[
-              `[${KIND_HINTS[agent.kind].label}]${
+              `[${kindHints(agent.kind).label}]${
                 agent.acpArgs ? " · custom args" : ""
               }`,
               // The effective ACP invocation: fixed command + the override or

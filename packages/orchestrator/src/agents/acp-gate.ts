@@ -42,6 +42,8 @@ import type {
  * - cursor: `cursor-agent acp` — the Cursor CLI's own ACP server. Not on
  *   npm (installed by Cursor's own installer), so the command is the local
  *   binary, same shape as claude-acp.
+ * - devin: `devin acp` — the Devin CLI's native ACP server. Install and
+ *   authenticate the official CLI on the paired device before dispatch.
  */
 const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] }>([
   [
@@ -64,6 +66,7 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
   // agy print mode otherwise ends active reviews at five minutes with exit 0.
   // Requires the adapter's configurable print-timeout support (see docs/agy-acp.md).
   ["agy", { command: "agy-acp", args: ["--dangerously-skip-permissions", "--print-timeout", "30m"] }],
+  ["devin", { command: "devin", args: ["acp"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
