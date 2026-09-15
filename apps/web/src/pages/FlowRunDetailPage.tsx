@@ -30,6 +30,7 @@ import {
 } from "@/lib/flowStepStatus";
 import type { StepStatus } from "@/components/flow/nodes";
 import { StepSteeringChat } from "@/components/flow/StepSteeringChat";
+import { AgentLogStream } from "@/components/chat/AgentOutput";
 import { useEventSource } from "@/lib/sse";
 
 interface LogLine {
@@ -391,18 +392,9 @@ function AgentLogPanel({ agentRunId }: { agentRunId: string }) {
         <span>Agent logs</span>
         <span>{ended ? "ended" : error ? `error: ${error}` : "live"}</span>
       </div>
-      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
-        {events.length === 0
-          ? "(no output)"
-          : events.map((e) => (
-              <span
-                key={e.seq}
-                className={e.stream === "stderr" ? "text-destructive" : undefined}
-              >
-                {e.chunk}
-              </span>
-            ))}
-      </pre>
+      <div className="max-h-96 overflow-auto rounded-md bg-muted/30 p-3">
+        <AgentLogStream events={events} />
+      </div>
     </div>
   );
 }

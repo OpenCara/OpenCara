@@ -36,6 +36,10 @@ import {
   type DeviceRow,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
+import {
+  AgentLogStream,
+  type AgentLogLine,
+} from "@/components/chat/AgentOutput";
 import { formatRelative } from "@/lib/format";
 import { useRegisterChatAction } from "@/lib/chatActions";
 
@@ -1097,19 +1101,23 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
 }
 
 function TestRunLog({ agentRunId }: { agentRunId: string }) {
-  const [chunks, setChunks] = useState("");
+  const [events, setEvents] = useState<AgentLogLine[]>([]);
   const [status, setStatus] = useState<"live" | "ended" | "error">("live");
 
   useEffect(() => {
-    setChunks("");
+    setEvents([]);
     setStatus("live");
     const es = new EventSource(`/api/runs/${agentRunId}/logs/stream`, {
       withCredentials: true,
     });
     es.addEventListener("log", (e: MessageEvent) => {
       try {
-        const row = JSON.parse(e.data) as { stream: string; chunk: string };
-        setChunks((prev) => prev + row.chunk);
+        const row = JSON.parse(e.data) as {
+          seq: number;
+          stream: "stdout" | "stderr";
+          chunk: string;
+        };
+        setEvents((prev) => [...prev, row]);
       } catch {
         // ignore malformed frame
       }
@@ -1132,15 +1140,10 @@ function TestRunLog({ agentRunId }: { agentRunId: string }) {
         <span>Output</span>
         <span>{status}</span>
       </div>
-      {/* whitespace-pre-wrap + break-all so long unbroken lines (JSON, URLs,
-          stack traces) wrap inside the dialog instead of blowing the
-          DialogContent's max-w-2xl out horizontally. min-w-0 on the
-          wrapper lets flex/grid parents shrink the pre below its content
-          width — without it the pre dictates the dialog width. */}
-      <div className="min-w-0">
-        <pre className="max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
-          {chunks || "(waiting…)"}
-        </pre>
+      {/* min-w-0 lets flex/grid parents shrink the panel below its content
+          width — without it the content dictates the dialog width. */}
+      <div className="min-w-0 max-h-72 overflow-auto rounded-md bg-muted/30 p-3">
+        <AgentLogStream events={events} empty="(waiting…)" />
       </div>
     </div>
   );

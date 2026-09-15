@@ -25,6 +25,7 @@ import {
 } from "@/lib/queries";
 import { formatAbsolute, formatRelative } from "@/lib/format";
 import { normalizeNodeKind } from "@/lib/nodeKinds";
+import { AgentLogStream } from "@/components/chat/AgentOutput";
 import { useEventSource } from "@/lib/sse";
 
 interface FlowRunSnapshot {
@@ -444,20 +445,9 @@ function AgentLogTail({ agentRunId }: { agentRunId: string }) {
         <span>Live output</span>
         <span>{ended ? "ended" : error ? `error: ${error}` : "live"}</span>
       </div>
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-2 font-mono text-[11px] leading-snug">
-        {tail.length === 0
-          ? "(no output yet)"
-          : tail.map((e) => (
-              <span
-                key={e.seq}
-                className={
-                  e.stream === "stderr" ? "text-destructive" : undefined
-                }
-              >
-                {e.chunk}
-              </span>
-            ))}
-      </pre>
+      <div className="max-h-40 overflow-auto rounded-md bg-muted/30 p-2">
+        <AgentLogStream events={tail} empty="(no output yet)" />
+      </div>
     </div>
   );
 }
