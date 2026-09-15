@@ -325,8 +325,23 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
           ? { permissionMode: acpSpec.permissionMode }
           : {}),
       });
+      // ACP has no error stop reason — adapters report internally-failed
+      // turns as `end_turn` too (agy-acp emits it even on `v2 turn failed`,
+      // and agy itself abandons the turn when a model's tool call fails its
+      // own args validation). The only reliable signature of a dead turn is
+      // end_turn with zero agent_message output: treat it as failed so the
+      // step is marked failed/rerunnable instead of flowing an empty string
+      // downstream (a silently empty `## From <agent>` review section).
+      const silentEndTurn =
+        promptResult.stopReason === "end_turn" && !translator.sawAgentMessage;
+      if (silentEndTurn) {
+        handlers.onLog(
+          "stderr",
+          "[opencara] turn ended (end_turn) without any agent message output — treating as failed\n",
+        );
+      }
       result = {
-        exitCode: promptResult.stopReason === "end_turn" ? 0 : 1,
+        exitCode: promptResult.stopReason === "end_turn" && !silentEndTurn ? 0 : 1,
         stopReason: promptResult.stopReason,
         sessionId,
       };
@@ -561,6 +576,15 @@ export interface UpdateTranslator {
   handle(update: SessionUpdate): void;
   /** Close any open thought fence. Call at run end before teardown. */
   flush(): void;
+  /**
+   * True once the turn produced at least one `agent_message_chunk` with
+   * non-whitespace text. ACP has no error stop reason — adapters report
+   * internally-failed turns as `end_turn` too (agy-acp does so even after
+   * logging `v2 turn failed`), so "end_turn with zero agent output" is the
+   * only observable signature of a turn the agent abandoned mid-flight
+   * (e.g. agy dying on a tool call that failed its own args validation).
+   */
+  readonly sawAgentMessage: boolean;
 }
 
 /**
@@ -652,6 +676,7 @@ export function createUpdateTranslator(
   // keeps today's behaviour rather than silently going quiet.
   const captureThinking = opts.captureThinking !== false;
   let inThought = false;
+  let sawAgentMessage = false;
   // toolCallId → best title seen so far. ACP sends the title once, on the
   // `tool_call` start; every `tool_call_update` afterwards carries ONLY the
   // fields that changed, so `title` is absent on nearly all of them. The
@@ -698,6 +723,7 @@ export function createUpdateTranslator(
         }
         // agent_message_chunk
         leaveThought();
+        if (text.trim().length > 0) sawAgentMessage = true;
         onLog("stdout", text);
         return;
       }
@@ -736,6 +762,9 @@ export function createUpdateTranslator(
     },
     flush() {
       leaveThought();
+    },
+    get sawAgentMessage() {
+      return sawAgentMessage;
     },
   };
 }

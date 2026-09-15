@@ -135,6 +135,13 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - (Removed 2026-09-02: flow runs no longer resume sessions at all.) Flow agent nodes used to resume whatever `agent-session.json` the worktree held when the agent *kind* matched — the pr-review `single_reviewer` (cursor) resumed the previous `review_synthesizer`'s (also cursor) session on ParadiseEngine#214, so review 5087773518 = old review text + new re-review, and `parseReviewVerdict` (first match wins) picked the OLD `verdict: request_changes` line.
 - Diagnose from `agent_runs.spec->'acp'->>'priorSessionId'` (rewritten in place to the resulting session id after the run) — identical ids across two runs mean a resume happened. Cursor's transcript lives in `~/.cursor/acp-sessions/<id>/store.db`.
 
+### [hits: 1] agy abandons a turn on tool-arg validation errors → agy-acp reports clean `end_turn` → run "succeeds" with empty output
+- 2026-09-15: two `agy gemini-flash` review runs produced `## From agy gemini-flash` with an EMPTY body — run marked succeeded, exit 0, `stopReason: end_turn`, ~1.7KB stdout ending on a `[tool] Viewing…` line mid-investigation.
+- Verified cause in agy's own conversation DB (`~/.gemini/antigravity-cli/conversations/<id>.db`, `steps` table — read with python3's sqlite3 module, no sqlite3 CLI installed): the last step is a tool row (stepType 132) with `status=4` and `error_details` like `invalid arguments: missing property 'toolSummary'` / `at '/Includes': got string, want array`. The model emits a tool call that fails agy's OWN args-schema validation; agy abandons the turn — no stepType-101 end marker, no recovery text, no agent message.
+- agy-acp gap: `StreamPoller` decodes `error_details` into `row.error` but `isConclusiveTurnEnd`/`isSuccessfulToolOnlyEnd`/`detectStopReason` never read it — only `stepPayload.modelProviderError`. `isTerminalStepStatus`={3,6,7} so status-4 isn't even terminal; the turn closes via the status-3 snapshot / `isSuccessfulToolOnlyEnd` path and `detectStopReason` falls through to `end_turn`.
+- ACP has NO error stop reason — agy-acp's own failure path (`acp/session/prompt.js`) also emits `end_turn` after logging `v2 turn failed` to stderr. So the ONLY client-observable signature of a dead turn is: `end_turn` + zero `agent_message_chunk`. Guard in `acpRunner.ts` at the `promptResult` site, not by parsing stderr.
+- Healthy agy runs end on a stepType-15 (agent text) status-3 row carrying the review; diagnosing = `SELECT idx, step_type, status FROM steps ORDER BY idx DESC LIMIT 4`.
+
 ## API access
 
 ### [hits: 1] Session cookie name is ocara_sid
