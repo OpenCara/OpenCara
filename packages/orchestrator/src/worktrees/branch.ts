@@ -19,6 +19,7 @@ export interface DeriveWorktreeBranchInput {
    */
   expected: "pr" | "issue" | null;
   prHeadRef: string | null | undefined;
+  prHeadSha: string | null | undefined;
   issueNumber: number | null | undefined;
   flowRunId: string;
   /** Rendered `worktree.fromBranch`; empty/null = project default branch. */
@@ -33,6 +34,8 @@ export interface DerivedWorktreeBranch {
   /** Base ref passed to `worktree create --from-branch` ("" = clone default). */
   fromBranch: string;
   source: WorktreeBranchSource;
+  /** Exact trigger commit for PR runs; keeps a moving branch from changing review scope. */
+  commit: string | null;
 }
 
 export class WorktreeBranchError extends Error {
@@ -56,16 +59,31 @@ export function deriveWorktreeBranch(input: DeriveWorktreeBranchInput): DerivedW
   if (input.prHeadRef && input.prHeadRef.length > 0) {
     // branch === fromBranch is the CLI's "check out the existing remote
     // branch" path; it never creates a new ref for PR-triggered runs.
-    return { branch: input.prHeadRef, fromBranch: input.prHeadRef, source: "pr" };
+    if (!(input.prHeadSha && input.prHeadSha.length > 0)) {
+      throw new WorktreeBranchError(
+        "worktree: this run was triggered by a pull request but the PR head SHA is unavailable; refusing to review a moving branch",
+      );
+    }
+    return {
+      branch: input.prHeadRef,
+      fromBranch: input.prHeadRef,
+      source: "pr",
+      commit: input.prHeadSha,
+    };
   }
   const base =
     input.fromBranch && input.fromBranch.length > 0
       ? input.fromBranch
       : (input.defaultBranch ?? "");
   if (input.issueNumber != null && Number.isFinite(input.issueNumber)) {
-    return { branch: `opencara/issue-${input.issueNumber}`, fromBranch: base, source: "issue" };
+    return { branch: `opencara/issue-${input.issueNumber}`, fromBranch: base, source: "issue", commit: null };
   }
-  return { branch: `opencara/run-${input.flowRunId.toLowerCase()}`, fromBranch: base, source: "run" };
+  return {
+    branch: `opencara/run-${input.flowRunId.toLowerCase()}`,
+    fromBranch: base,
+    source: "run",
+    commit: null,
+  };
 }
 
 /**

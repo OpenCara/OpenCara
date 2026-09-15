@@ -65,6 +65,7 @@ function worktreeCreate(args: string[]): void {
   const branch = pickFlag(args, "--branch");
   const fromRaw = pickFlag(args, "--from-branch") ?? "";
   const fromBranch = fromRaw.length > 0 ? fromRaw : null;
+  const commit = pickFlag(args, "--commit");
   // Stable per-PR-branch slug. Engine passes `owner/repo/branch-<safe>`;
   // CLI mkdir's both `~/.opencara/work/<key>/checkout/` and
   // `~/.opencara/sessions/<key>/`, and reads any pre-existing session
@@ -88,6 +89,9 @@ function worktreeCreate(args: string[]): void {
   }
   if (!rawKey) {
     fail("worktree create requires --key <slug>");
+  }
+  if (commit && !/^[0-9a-f]{40,64}$/i.test(commit)) {
+    fail(`invalid --commit '${commit}' (expected a full hexadecimal commit id)`);
   }
   // Only validate --repo's shape when it is the thing we'll build a URL from.
   // With --clone-url present, --repo is just a label (Azure DevOps sends
@@ -408,6 +412,13 @@ function worktreeCreate(args: string[]): void {
   }
 
   releaseCheckoutLock();
+
+  if (commit) {
+    // Keep the local branch name for diagnostics and possible fix pushes, but
+    // pin its contents to the commit carried by the triggering PR webhook.
+    git(checkoutDir, ["cat-file", "-e", `${commit}^{commit}`], gitEnv);
+    git(checkoutDir, ["reset", "--hard", commit], gitEnv);
+  }
 
   let priorSession: { kind: string; id: string } | null = null;
   const sessionFile = join(sessionDir, "agent-session.json");

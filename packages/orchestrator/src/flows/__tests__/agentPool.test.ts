@@ -217,6 +217,31 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
     assert.equal(r.quorum, 1);
   });
 
+  it("returns at quorum and reports outstanding attempts when opted in", async () => {
+    const h = harness();
+    const cancelled: number[][] = [];
+    const run = runWithAgentPool({
+      candidates: ["a", "b", "c"],
+      retrySame: 0,
+      concurrency: 2,
+      preferred: 2,
+      quorum: 1,
+      stopOnQuorum: true,
+      onQuorumReached: (outstanding) => {
+        cancelled.push(outstanding.map((info) => info.attempt));
+      },
+      attempt: h.attempt,
+    });
+    await h.tick();
+    assert.deepEqual(h.started.map((s) => s.c), ["a", "b"]);
+    await h.ok("a#0");
+    const result = await run;
+    assert.deepEqual(result.successes.map((s) => s.candidate), ["a"]);
+    assert.deepEqual(cancelled, [[1]]);
+    assert.ok(!h.started.some((s) => s.c === "c"));
+    await h.ok("b#0");
+  });
+
   it("refills a failed slot from the next candidate, retries first", async () => {
     const h = harness();
     const run = runWithAgentPool({

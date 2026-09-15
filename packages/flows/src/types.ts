@@ -259,6 +259,9 @@ export const AgentNodeSchema = z.object({
       stdinJson: z.boolean().default(true),
     }),
     draftPr: z.boolean().default(false),
+    // Review pools can race several agents but proceed as soon as quorum is
+    // satisfied. The orchestrator cancels attempts that are still running.
+    stopOnQuorum: z.boolean().optional(),
     autoMerge: z
       .object({
         enabled: z.boolean().default(false),

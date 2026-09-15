@@ -312,4 +312,13 @@ describe("the four stage built-in flows", () => {
       assert.ok(!("branchName" in (node.config.worktree as object)));
     }
   });
+
+  it("lets multi-review pools stop outstanding agents once quorum is met", () => {
+    const standalone = builtinFlows["pr-review-multi"]!.nodes.find((n) => n.id === "reviewer");
+    const unified = developmentLifecycleFlow.nodes.find((n) => n.id === "reviewer");
+    for (const node of [standalone, unified]) {
+      assert.ok(node?.kind === "agent");
+      assert.equal(node.config.stopOnQuorum, true);
+    }
+  });
 });

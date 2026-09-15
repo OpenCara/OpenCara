@@ -28,6 +28,7 @@ import {
   parseFlowRunsNotify,
   serializeFlowRunsNotify,
 } from "../../flows/notify.js";
+import { SseLifecycle } from "./sseLifecycle.js";
 
 interface FlowRoutesDeps {
   db: Db;
@@ -573,6 +574,8 @@ export function flowRoutes(deps: FlowRoutesDeps) {
     const owned = await loadOwnedProject(deps.db, run.projectId, user.id);
     if (!owned) return c.json({ error: "not found" }, 404);
     return streamSSE(c, async (sse) => {
+      const lifecycle = new SseLifecycle();
+      sse.onAbort(() => lifecycle.cleanup());
       const writeSnapshot = async (eventName: "snapshot" | "step") => {
         const snap = await loadFlowRunSnapshot(deps.db, runId);
         if (!snap) return null;
@@ -600,18 +603,24 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       // { flowRunId, projectId } payload (see flows/notify.ts). Accept either:
       // resolve the run id from whichever shape arrived and match on it.
       const onNotify = (raw: string) => {
+        if (lifecycle.closed) return;
         const flowRunId = parseFlowRunsNotify(raw)?.flowRunId ?? raw;
         if (flowRunId !== runId) return;
         writeSnapshot("step").catch((err: unknown) => {
           console.error("[sse] flow snapshot error", err);
+          void lifecycle.cleanup();
         });
       };
       const stepSub = await deps.pg.listen("flow_run_steps", onNotify);
+      lifecycle.add(() => stepSub.unlisten());
       const runSub = await deps.pg.listen(FLOW_RUNS_CHANNEL, onNotify);
+      lifecycle.add(() => runSub.unlisten());
+      if (lifecycle.closed) return;
 
       const heartbeat = setInterval(() => {
-        sse.writeSSE({ event: "ping", data: "" }).catch(() => undefined);
+        sse.writeSSE({ event: "ping", data: "" }).catch(() => lifecycle.cleanup());
       }, 15_000);
+      lifecycle.add(() => clearInterval(heartbeat));
 
       // The on-NOTIFY handler above ships snapshot updates; this poll is
       // only a fallback to detect terminal status and close the stream
@@ -638,23 +647,14 @@ export function flowRoutes(deps: FlowRoutesDeps) {
                 data: JSON.stringify({ status: snap.run.status }),
               });
             }
-            clearInterval(heartbeat);
-            clearInterval(terminalCheck);
-            await stepSub.unlisten();
-            await runSub.unlisten();
+            await lifecycle.cleanup();
             await sse.close();
           }
         } catch (err) {
           console.error("[sse] flow terminal check error", err);
         }
       }, 2_000);
-
-      sse.onAbort(async () => {
-        clearInterval(heartbeat);
-        clearInterval(terminalCheck);
-        await stepSub.unlisten().catch(() => undefined);
-        await runSub.unlisten().catch(() => undefined);
-      });
+      lifecycle.add(() => clearInterval(terminalCheck));
     });
   });
 
