@@ -202,7 +202,7 @@ function Header({
           </span>
         )}
       </div>
-      <div className="mt-2 flex items-start justify-between gap-4">
+      <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
             <span className="text-sm text-muted-foreground">#{issue.number}</span>

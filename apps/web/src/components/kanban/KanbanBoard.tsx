@@ -420,7 +420,9 @@ function Column({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex max-h-[calc(100vh-14rem)] w-72 shrink-0 flex-col rounded-md border bg-muted/30 transition-colors",
+        // On phones a column takes ~85vw so a sliver of the next column hints
+        // the board scrolls sideways; sm+ keeps the fixed 18rem width.
+        "flex max-h-[calc(100vh-14rem)] w-[85vw] shrink-0 flex-col rounded-md border bg-muted/30 transition-colors sm:w-72",
         isOver && "border-primary bg-accent/40",
       )}
     >

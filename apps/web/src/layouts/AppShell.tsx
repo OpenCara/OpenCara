@@ -15,6 +15,7 @@ import {
   LogOut,
   Cpu,
   Bot,
+  Menu,
   MessageCircle,
   Sparkles,
   Workflow,
@@ -82,6 +83,8 @@ export function AppShell() {
   // close/reopen — and so its lazy chunk only loads when chat is first used.
   const [chatMounted, setChatMounted] = useState(false);
   const [selection, setSelection] = useState<string | null>(null);
+  // Mobile-only drawer state for the sidebar nav; desktop keeps it static.
+  const [navOpen, setNavOpen] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
 
   const onChatWithSelection = useCallback((text: string) => {
@@ -95,10 +98,22 @@ export function AppShell() {
     window.getSelection()?.removeAllRanges();
   }, []);
 
-  // Clear stale selection when navigating to a different page.
+  // Clear stale selection when navigating to a different page. Also close the
+  // mobile nav drawer — a tapped link shouldn't leave it covering the new page.
   useEffect(() => {
     setSelection(null);
-  }, [location.pathname]);
+    setNavOpen(false);
+  }, [location.pathname, location.hash]);
+
+  // Escape dismisses the mobile drawer like any overlay.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
   const projects = projectsQ.data?.projects ?? [];
   const templates = templatesQ.data?.templates ?? [];
   const agents = agentsQ.data?.agents ?? [];
@@ -110,7 +125,20 @@ export function AppShell() {
   return (
     <ChatActionsProvider>
     <div className="flex h-screen bg-background text-foreground">
-      <aside className="flex w-60 flex-col border-r bg-card">
+      {/* Backdrop behind the mobile nav drawer */}
+      {navOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+      {/* On <md the sidebar is an off-canvas drawer; on md+ it is a static column. */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r bg-card shadow-xl transition-transform duration-200 md:static md:z-auto md:translate-x-0 md:shadow-none",
+          navOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
         <div className="flex h-14 items-center border-b px-4 font-semibold tracking-tight">
           OpenCara
         </div>
@@ -224,7 +252,19 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-end gap-3 border-b bg-card px-4">
+        <header className="flex h-14 items-center gap-3 border-b bg-card px-4">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="-ml-2 md:hidden"
+            onClick={() => setNavOpen(true)}
+            title="Open navigation"
+            aria-label="Open navigation"
+          >
+            <Menu className="size-5" />
+          </Button>
+          <span className="font-semibold tracking-tight md:hidden">OpenCara</span>
+          <div className="ml-auto flex items-center gap-3">
           <Button
             size="sm"
             variant={chatOpen ? "secondary" : "ghost"}
@@ -276,9 +316,10 @@ export function AppShell() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </header>
 
-        <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-4 md:p-6">
           {/* Inner boundary so a lazily-loaded page chunk suspends here,
               keeping the surrounding nav shell painted during the fetch. */}
           <Suspense fallback={<RouteFallback />}>
