@@ -115,3 +115,40 @@ export function requireGithubApp(app: GithubAppClient | undefined): GithubAppCli
   }
   return app;
 }
+
+/** Delays between mint attempts. GitHub occasionally 500s on
+ *  POST /app/installations/{id}/access_tokens for tens of seconds at a
+ *  stretch (observed in prod, issue #48 investigation); a short retry
+ *  inside dispatch absorbs those blips without stalling on a real outage —
+ *  the flow's pool retries handle anything longer. */
+export const MINT_RETRY_DELAYS_MS = [2000, 5000];
+
+/** Octokit's RequestError carries `.status`. 5xx and transport failures
+ *  (no status) are transient; 4xx means the request itself is wrong —
+ *  ungranted permission, unknown repo id — and won't heal on a retry. */
+export function isRetryableMintError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status !== "number" || status >= 500;
+}
+
+export async function mintEphemeralTokenWithRetry(
+  github: GithubAppClient,
+  opts: MintEphemeralTokenOptions,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<EphemeralToken> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= MINT_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await github.mintEphemeralToken(opts);
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableMintError(err) || attempt === MINT_RETRY_DELAYS_MS.length) break;
+      await sleep(MINT_RETRY_DELAYS_MS[attempt]!);
+    }
+  }
+  throw lastErr;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

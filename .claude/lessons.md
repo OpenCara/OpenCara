@@ -85,6 +85,11 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Unpinned `opencara internal …` jobs (worktree create/write-session/remove) can land on devices missing the v0.105.2 fast-path → rejected with `legacy stdin-JSON dispatch removed in v0.30 — orchestrator must send spec.acp`.
 - Workaround for a single flow: set `node.config.worktree.hostId` in `graph_json` to a known-current device's id. Long-term fix: filter `pickIdle` by advertised `capabilities`.
 
+### [hits: 1] `internal:*` runs can't survive a token-mint failure — GitHub access_tokens does 500
+- `POST /app/installations/{id}/access_tokens` returned HTTP 500 (empty body) for a ~26s+ window (2026-09-15 10:55 UTC). The mint in `dispatchAgentRun` is deliberately non-fatal → every pool attempt dispatched a `worktree-allocate` run guaranteed to exit 1 with "needs GH_TOKEN" — 6 dead runs in 30s, step error pointed at the wrong layer.
+- Diagnose via orchestrator log `token mint failed` + `agent_runs` rows with `kind: internal:worktree-allocate` dying in ~1.5s. Verify the mint directly inside `opencara_server` with `createAppAuth` + `POST /app/installations/{id}/access_tokens` — needs the app JWT, not an installation token (that 401s "JWT could not be decoded").
+- Fixed (uncommitted): `mintEphemeralTokenWithRetry` retries 5xx/transport at +2s/+5s (4xx is never retried), and mint failure on `internal:*` kinds now throws the real cause instead of dispatching tokenless.
+
 ### [hits: 1] Trigger env vars: PR flows vs issue flows are disjoint
 - `github.pull_request` triggers inject: `OPENCARA_REPO`, `OPENCARA_PR_NUMBER`, `OPENCARA_PR_HEAD_SHA`, `OPENCARA_PR_BASE_SHA`, `OPENCARA_PR_HEAD_REF`, `OPENCARA_AGENT_RUN_ID`. **Not** `OPENCARA_ISSUE_NUMBER`.
 - Issue triggers inject `OPENCARA_ISSUE_NUMBER`. The two sets don't overlap.

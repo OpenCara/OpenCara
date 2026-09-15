@@ -20,7 +20,7 @@ import {
 } from "../db/schema.js";
 import { AgentLogSink } from "../agents/logSink.js";
 import type { AgentDispatcher, LogStream, RunResult } from "../dispatch/dispatcher.js";
-import { requireGithubApp } from "../github/app.js";
+import { mintEphemeralTokenWithRetry, requireGithubApp } from "../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../github/app.js";
 import { clientForConnection, type AzureDevopsClientDeps } from "../azure/client.js";
 import {
@@ -1963,9 +1963,10 @@ async function dispatchAgentRun(
   // org-wide and cannot be revoked early — see the trust boundary note in the
   // README. `revokeMintedToken` below therefore only has work to do on GitHub.
   let mintedToken: EphemeralToken | null = null;
+  let mintError: Error | null = null;
   try {
     if (ctx.scm.platform === "github") {
-      mintedToken = await requireGithubApp(ctx.app).mintEphemeralToken({
+      mintedToken = await mintEphemeralTokenWithRetry(requireGithubApp(ctx.app), {
         installationId: ctx.scm.installation.githubInstallationId,
         repositoryIds: [ctx.scm.githubRepoId],
         permissions: {
@@ -2008,6 +2009,21 @@ async function dispatchAgentRun(
     delete opts.env["GITHUB_TOKEN"];
     delete opts.env["OPENCARA_SCM_TOKEN"];
     delete opts.env["AZURE_DEVOPS_EXT_PAT"];
+    // internal:* subcommands (worktree-allocate etc.) are pure SCM
+    // operations — without the token the dispatched command is guaranteed
+    // to fail with a misleading "needs GH_TOKEN" error ~1.5s in. Carry the
+    // error into the dispatch try below so the agent_runs row is flipped to
+    // failed (not orphaned as "running") and flow_run_steps.error shows the
+    // real cause while the pool retries the mint. (Surfaced by a GitHub
+    // access_tokens 500 window — see the issue #48 investigation.)
+    if (opts.kind.startsWith("internal:")) {
+      const status = (err as { status?: unknown } | null)?.status;
+      const msg = err instanceof Error && err.message ? err.message : String(err);
+      mintError = new Error(
+        `${ctx.scm.platform} token mint failed${typeof status === "number" ? ` (HTTP ${status})` : ""} — ${opts.kind} cannot run without a platform token: ${msg}`,
+        { cause: err },
+      );
+    }
   }
 
   // Bounded stderr ring buffer so non-zero exits can carry the real
@@ -2033,6 +2049,7 @@ async function dispatchAgentRun(
   };
 
   try {
+    if (mintError) throw mintError;
     const result = await ctx.dispatcher.run(spec, {
       stdinJson: opts.stdinJson,
       onLog,
