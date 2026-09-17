@@ -399,6 +399,17 @@ function worktreeCreate(args: string[]): void {
       } else {
         git(checkoutDir, ["checkout", "-b", branch], gitEnv);
       }
+      if (cacheDir) {
+        // `--no-checkout` leaves the index empty and the worktree bare; a
+        // same-commit `checkout`/`checkout -b` (cases 1 and 3 above — the
+        // typical issue-implement first run, where the new branch is not on
+        // origin yet) then materializes NOTHING, and the agent opens on a
+        // tree where `git status` reports every tracked file as deleted.
+        // `reset --hard` unconditionally writes index + worktree from HEAD.
+        // (ParadiseEngine issue #48: codex refused the "destroyed" checkout;
+        // devin silently re-materialized it mid-run.)
+        git(checkoutDir, ["reset", "--hard", "HEAD"], gitEnv);
+      }
       git(checkoutDir, ["config", "credential.helper", HELPER_SNIPPET], gitEnv);
     } catch (err) {
       // Best-effort cleanup of the half-built dir before bubbling.

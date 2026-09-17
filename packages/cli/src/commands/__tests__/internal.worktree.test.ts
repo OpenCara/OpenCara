@@ -262,6 +262,84 @@ describe("internal worktree create — existing-checkout branch resolution", () 
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("materializes the worktree on a fresh --cache-repo clone when the branch is absent from origin", () => {
+    // Regression: `clone --no-checkout --reference <cache>` leaves the index
+    // empty and the worktree bare; a same-commit `checkout -b` — the case for
+    // a brand-new issue branch that is not on origin yet — then materializes
+    // NOTHING, and the agent opens on a directory where `git status` reports
+    // every tracked file as deleted. (ParadiseEngine issue #48: codex refused
+    // the "destroyed" checkout; devin burned run time re-materializing it.)
+    const root = mkdtempSync(join(tmpdir(), "opencara-wt-nocheckout-"));
+    try {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".opencara", "work"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "sessions"), { recursive: true });
+      mkdirSync(join(home, ".opencara", "cache"), { recursive: true });
+
+      const origin = join(root, "origin.git");
+      execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+        stdio: "ignore",
+      });
+
+      const seed = join(root, "seed");
+      mkdirSync(seed);
+      git(seed, ["init", "--initial-branch=main"]);
+      git(seed, ["config", "user.email", "t@example.com"]);
+      git(seed, ["config", "user.name", "t"]);
+      writeFileSync(join(seed, "README"), "hi\n");
+      writeFileSync(join(seed, "main.py"), "print('x')\n");
+      git(seed, ["add", "."]);
+      git(seed, ["commit", "-m", "init"]);
+      git(seed, ["remote", "add", "origin", origin]);
+      git(seed, ["push", "origin", "main"]);
+
+      const repo = "octo/repo";
+      const branch = "opencara/issue-48"; // deliberately NOT pushed to origin
+      const key = "octo/repo/step-test-empty-checkout";
+      const checkout = join(home, ".opencara", "work", key, "checkout");
+
+      const r = runInternal(
+        {
+          ...process.env,
+          HOME: home,
+          GH_TOKEN: "ghs_test123",
+          // Rewrite the github.com clone URL at the local bare origin so the
+          // fresh-clone path (both the cache clone and the per-key clone)
+          // runs offline.
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: `url.file://${origin}.insteadOf`,
+          GIT_CONFIG_VALUE_0: "https://github.com/octo/repo.git",
+        },
+        [
+          "worktree", "create",
+          "--repo", repo,
+          "--branch", branch,
+          "--from-branch", "main",
+          "--key", key,
+          "--cache-repo",
+        ],
+      );
+
+      assert.equal(r.status, 0, `expected exit 0, got ${r.status}\nstderr: ${r.stderr}`);
+      const head = execFileSync("git", ["-C", checkout, "branch", "--show-current"], {
+        encoding: "utf8",
+      }).trim();
+      assert.equal(head, branch);
+      assert.ok(
+        existsSync(join(checkout, "README")),
+        `fresh --cache-repo checkout has no working tree (index/worktree left empty)`,
+      );
+      const porcelain = execFileSync(
+        "git",
+        ["-C", checkout, "status", "--porcelain"],
+        { encoding: "utf8" },
+      );
+      assert.equal(porcelain, "", `expected clean status, got:\n${porcelain}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // Regression: a PM-wave fanout of N issue-implement runs against the
