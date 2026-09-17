@@ -1072,6 +1072,7 @@ export async function runAgentAttempt(
       hostId: pinnedHostId,
       triggerEventId: ctx.event.id,
       flowRunStepId: null,
+      cancellationSignal,
     });
     if (allocateResult.exitCode !== 0) {
       // Surface the real cause into flow_run_steps.error so operators
@@ -1957,12 +1958,9 @@ async function dispatchAgentRun(
     await ctx.db
       .update(agentRuns)
       .set({ status: "cancelled", cancelReason: "wave_cancelled", finishedAt: new Date() })
-      .where(
-        and(
-          eq(agentRuns.id, opts.agentRunId),
-          inArray(agentRuns.status, ["queued", "assigned", "running"]),
-        ),
-      );
+      // The pool signal is authoritative even if dispatch completion raced
+      // ahead and briefly wrote a terminal status.
+      .where(eq(agentRuns.id, opts.agentRunId));
   };
   if (opts.cancellationSignal?.aborted) {
     await markPoolCancelled();
@@ -2087,6 +2085,10 @@ async function dispatchAgentRun(
     // the run's SSE end is driven by that write, so the tail must be
     // durable first.
     await logSink.close();
+    if (opts.cancellationSignal?.aborted) {
+      await markPoolCancelled();
+      throw new PoolAttemptCancelledError();
+    }
     // Record the resulting acpSessionId on the row so post-run consumers
     // (steering chat scoped to this step, audit views) can resume the
     // agent's conversation without spelunking the on-device JSONL.
@@ -2118,13 +2120,20 @@ async function dispatchAgentRun(
           inArray(agentRuns.status, ["queued", "assigned", "running"]),
         ),
       );
+    if (opts.cancellationSignal?.aborted) {
+      await markPoolCancelled();
+      throw new PoolAttemptCancelledError();
+    }
     return { ...result, stderrTail: stderrChunks.join("") };
   } catch (err) {
     // A failed dispatch can still have emitted chunks — drain them before
     // the status flip so the run's log tail is complete.
     await logSink.close();
-    if (err instanceof PoolAttemptCancelledError) {
+    if (err instanceof PoolAttemptCancelledError || opts.cancellationSignal?.aborted) {
       await markPoolCancelled();
+      if (!(err instanceof PoolAttemptCancelledError)) {
+        throw new PoolAttemptCancelledError();
+      }
     } else {
       await ctx.db
         .update(agentRuns)
