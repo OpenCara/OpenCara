@@ -123,12 +123,16 @@ export function requireGithubApp(app: GithubAppClient | undefined): GithubAppCli
  *  the flow's pool retries handle anything longer. */
 export const MINT_RETRY_DELAYS_MS = [2000, 5000];
 
-/** Octokit's RequestError carries `.status`. 5xx and transport failures
- *  (no status) are transient; 4xx means the request itself is wrong —
- *  ungranted permission, unknown repo id — and won't heal on a retry. */
+/** Octokit's RequestError carries `.status`. 5xx, 429, and transport
+ *  failures (no status) are transient; other 4xx mean the request itself is
+ *  wrong — ungranted permission, unknown repo id — and won't heal on a
+ *  retry. (403 secondary-rate-limit responses are deliberately NOT retried:
+ *  they look identical to a real forbidden and carry Retry-After seconds
+ *  well beyond this helper's delay budget — the flow's pool retry is the
+ *  right layer for those.) */
 export function isRetryableMintError(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
-  return typeof status !== "number" || status >= 500;
+  return typeof status !== "number" || status === 429 || status >= 500;
 }
 
 export async function mintEphemeralTokenWithRetry(

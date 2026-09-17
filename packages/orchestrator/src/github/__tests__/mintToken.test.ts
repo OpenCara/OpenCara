@@ -20,9 +20,10 @@ function httpError(status: number): Error & { status: number } {
 const noSleep = () => Promise.resolve();
 
 describe("isRetryableMintError", () => {
-  it("retries 5xx and transport errors, not 4xx", () => {
+  it("retries 5xx/429/transport errors, not other 4xx", () => {
     assert.equal(isRetryableMintError(httpError(500)), true);
     assert.equal(isRetryableMintError(httpError(502)), true);
+    assert.equal(isRetryableMintError(httpError(429)), true); // secondary rate limit
     assert.equal(isRetryableMintError(new Error("socket hangup")), true); // no status
     assert.equal(isRetryableMintError(httpError(403)), false);
     assert.equal(isRetryableMintError(httpError(404)), false);

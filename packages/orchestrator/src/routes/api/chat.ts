@@ -26,6 +26,7 @@ import {
   buildAcpSpec,
   checkAcpEligibility,
 } from "../../agents/acp-gate.js";
+import { mintEphemeralTokenWithRetry } from "../../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../../github/app.js";
 
 interface ChatRoutesDeps {
@@ -307,7 +308,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       if (projectRow.length > 0 && projectRow[0]!.project.githubRepoId !== null) {
         const { project, installation } = projectRow[0]!;
         try {
-          mintedToken = await deps.app.mintEphemeralToken({
+          mintedToken = await mintEphemeralTokenWithRetry(deps.app, {
             installationId: installation.githubInstallationId,
             repositoryIds: [project.githubRepoId!],
             permissions: {
