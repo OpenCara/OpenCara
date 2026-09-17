@@ -50,6 +50,7 @@ import {
 } from "./nodeRunners.js";
 import { runWithAgentPool } from "./agentPool.js";
 import { cancelFlowNodeAttempts } from "./cancelAgents.js";
+import { PoolAttemptCancelledError } from "./errors.js";
 import { loadEffectiveNodeSettings, type EffectiveNodeSetting } from "./nodeSettings.js";
 import { cancelPreemptedReviewRuns } from "./preempt.js";
 import { flowMayMatchEvent } from "./eventMatch.js";
@@ -1290,6 +1291,14 @@ export class FlowEngine {
         agentName: result.agentName,
       };
     } catch (err) {
+      if (err instanceof PoolAttemptCancelledError) {
+        await this.deps.db
+          .update(flowRunSteps)
+          .set({ status: "skipped", finishedAt: new Date(), error: err.message })
+          .where(and(eq(flowRunSteps.id, stepId), eq(flowRunSteps.status, "running")));
+        await this.deps.pg.notify("flow_run_steps", flowRunId);
+        return { skipped: false };
+      }
       if (err instanceof SkipFlowError) {
         await this.deps.db
           .update(flowRunSteps)

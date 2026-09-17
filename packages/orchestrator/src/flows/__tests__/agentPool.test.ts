@@ -220,6 +220,7 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
   it("returns at quorum and reports outstanding attempts when opted in", async () => {
     const h = harness();
     const cancelled: number[][] = [];
+    const abortedBeforeCallback: boolean[] = [];
     const run = runWithAgentPool({
       candidates: ["a", "b", "c"],
       retrySame: 0,
@@ -229,6 +230,7 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
       stopOnQuorum: true,
       onQuorumReached: (outstanding) => {
         cancelled.push(outstanding.map((info) => info.attempt));
+        abortedBeforeCallback.push(outstanding.every((info) => info.signal.aborted));
       },
       attempt: h.attempt,
     });
@@ -238,6 +240,7 @@ describe("runWithAgentPool (concurrency > 1: parallel slots + quorum)", () => {
     const result = await run;
     assert.deepEqual(result.successes.map((s) => s.candidate), ["a"]);
     assert.deepEqual(cancelled, [[1]]);
+    assert.deepEqual(abortedBeforeCallback, [true]);
     assert.ok(!h.started.some((s) => s.c === "c"));
     await h.ok("b#0");
   });

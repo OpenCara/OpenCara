@@ -1356,6 +1356,7 @@ export async function runAgentAttempt(
       acp: acpSpec.acp,
       hostId: worktree?.hostId ?? agent.hostId ?? null,
       triggerEventId: ctx.event.id,
+      cancellationSignal,
     });
 
     if (result.exitCode !== 0) {
@@ -1903,6 +1904,8 @@ interface DispatchAgentRunOpts {
    *  with another agent dispatch (e.g. a worktree-allocate that
    *  precedes the agent's main dispatch in the same flow_run_step). */
   flowRunStepId?: string | null;
+  /** Cancels this dispatch when a sibling pool attempt satisfies quorum. */
+  cancellationSignal?: AbortSignal;
 }
 
 /**
@@ -1949,6 +1952,22 @@ async function dispatchAgentRun(
     flowRunStepId: stepId,
     startedAt: new Date(),
   });
+
+  const markPoolCancelled = async () => {
+    await ctx.db
+      .update(agentRuns)
+      .set({ status: "cancelled", cancelReason: "wave_cancelled", finishedAt: new Date() })
+      .where(
+        and(
+          eq(agentRuns.id, opts.agentRunId),
+          inArray(agentRuns.status, ["queued", "assigned", "running"]),
+        ),
+      );
+  };
+  if (opts.cancellationSignal?.aborted) {
+    await markPoolCancelled();
+    throw new PoolAttemptCancelledError();
+  }
 
   // Mint AFTER insert. The persisted spec.env snapshot still carries the
   // `<ephemeral>` markers; subsequent mutations of opts.env only affect
@@ -2047,9 +2066,17 @@ async function dispatchAgentRun(
     }
     logSink.push(stream, chunk);
   };
+  const cancelDispatch = () => {
+    ctx.dispatcher.cancel(opts.agentRunId, "wave_cancelled");
+  };
 
   try {
     if (mintError) throw mintError;
+    if (opts.cancellationSignal?.aborted) {
+      await markPoolCancelled();
+      throw new PoolAttemptCancelledError();
+    }
+    opts.cancellationSignal?.addEventListener("abort", cancelDispatch, { once: true });
     const result = await ctx.dispatcher.run(spec, {
       stdinJson: opts.stdinJson,
       onLog,
@@ -2096,17 +2123,22 @@ async function dispatchAgentRun(
     // A failed dispatch can still have emitted chunks — drain them before
     // the status flip so the run's log tail is complete.
     await logSink.close();
-    await ctx.db
-      .update(agentRuns)
-      .set({ status: "failed", finishedAt: new Date() })
-      .where(
-        and(
-          eq(agentRuns.id, opts.agentRunId),
-          inArray(agentRuns.status, ["queued", "assigned", "running"]),
-        ),
-      );
+    if (err instanceof PoolAttemptCancelledError) {
+      await markPoolCancelled();
+    } else {
+      await ctx.db
+        .update(agentRuns)
+        .set({ status: "failed", finishedAt: new Date() })
+        .where(
+          and(
+            eq(agentRuns.id, opts.agentRunId),
+            inArray(agentRuns.status, ["queued", "assigned", "running"]),
+          ),
+        );
+    }
     throw err;
   } finally {
+    opts.cancellationSignal?.removeEventListener("abort", cancelDispatch);
     // `mintedToken` is only ever set on the GitHub path — Azure DevOps has no
     // revoke endpoint, so its token is left to expire (README trust boundary).
     if (mintedToken && ctx.app) {
