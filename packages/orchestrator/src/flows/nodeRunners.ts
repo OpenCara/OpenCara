@@ -1917,7 +1917,7 @@ interface DispatchAgentRunOpts {
  * (synthetic CLI subcommand) flow through here so audit/trace/log
  * behaviour is identical.
  */
-async function dispatchAgentRun(
+export async function dispatchAgentRun(
   ctx: NodeRunCtx,
   opts: DispatchAgentRunOpts,
 ): Promise<RunResult & { stderrTail: string }> {
@@ -2076,6 +2076,12 @@ async function dispatchAgentRun(
     }
     opts.cancellationSignal?.addEventListener("abort", cancelDispatch, { once: true });
     const result = await ctx.dispatcher.run(spec, {
+      // The agent_runs row id as the wire runId: `dispatcher.cancel` resolves
+      // the target device via the pending map keyed on this value, so a flow
+      // run cancel that passes the DB id only reaches the device when the
+      // dispatch keyed the job the same way. Without it the cancel frame is
+      // never sent and the agent keeps running after "cancellation".
+      runId: opts.agentRunId,
       stdinJson: opts.stdinJson,
       onLog,
       hostId: opts.hostId ?? undefined,
