@@ -307,8 +307,8 @@ export async function runWithAgentPool<C, T>(
       successes.push({ candidate: settled.task.candidate, info: settled.task.info, value: settled.value as T });
       if (opts.stopOnQuorum && successes.length >= quorum) {
         const outstanding = [...inFlightTasks.values()].map((task) => task.info);
-        await opts.onQuorumReached?.(outstanding);
         for (const controller of inFlightControllers.values()) controller.abort("quorum reached");
+        await opts.onQuorumReached?.(outstanding);
         for (const promise of inFlight.values()) void promise.catch(() => undefined);
         inFlight.clear();
         inFlightTasks.clear();
