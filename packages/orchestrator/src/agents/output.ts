@@ -30,7 +30,7 @@
 // Why this is in `agents/` and not `flows/`: it's an agent-output concern,
 // not a flow-execution concern. Flow runners delegate to it.
 
-import { stripAcpMarkers } from "@opencara/shared";
+import { acpMessageSegments, stripAcpMarkers } from "@opencara/shared";
 
 export function extractAgentResultText(raw: string): string {
   const trimmed = raw.trim();
@@ -91,11 +91,34 @@ export function extractAgentResultText(raw: string): string {
   // `[think]`/`[tool]` markers on the way to the chat panel. Those are
   // transport, not content, and every caller of this function wants the
   // content: the review body posted to GitHub, and the upstream text a
-  // fan-in node pastes into the next agent's prompt. Without this the
-  // markers went to GitHub verbatim (`[tool] Read File → completed` above
-  // the verdict line) and burned downstream context describing tool calls
-  // the next agent can't act on.
-  return stripAcpMarkers(raw);
+  // fan-in node pastes into the next agent's prompt.
+  //
+  // Marker stripping alone isn't enough: agents like devin narrate their
+  // progress through `agent_message_chunk` — the same channel as the
+  // answer — so "Let me check X…" paragraphs survive the strip and reach
+  // GitHub above the review (PR #322 review 5256477256). The message runs
+  // between constructs are narration; the answer is the tail. When a
+  // `verdict:` contract line exists, its run starts the answer even if
+  // the agent emitted a sign-off after it (a trailing tool call plus
+  // "Done!" must not collapse the output to just that sign-off, which
+  // post_review would refuse as a stub).
+  if (!raw.includes("[think]") && !raw.includes("[tool] ")) {
+    return stripAcpMarkers(raw);
+  }
+  const segments = acpMessageSegments(raw)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return stripAcpMarkers(raw);
+  let firstVerdictSeg = -1;
+  for (let i = 0; i < segments.length; i++) {
+    if (/^verdict\s*:/im.test(segments[i]!)) {
+      firstVerdictSeg = i;
+      break;
+    }
+  }
+  return firstVerdictSeg >= 0
+    ? segments.slice(firstVerdictSeg).join("\n\n")
+    : segments[segments.length - 1]!;
 }
 
 const CODEX_JSONL_TYPE_HINTS = new Set([

@@ -58,3 +58,47 @@ export function stripAcpMarkers(text: string): string {
     .replace(BLANK_RUN_RE, "\n\n")
     .trim();
 }
+
+/**
+ * Every stream construct that ends one message run and starts the next:
+ * a terminated `[think]…[/think]` block, a `[tool] …` line, or a
+ * `[think]` opener with no closing fence (the run ended mid-thought —
+ * everything after it is reasoning in flight, never output). Ordered so
+ * the terminated think shape wins over the unterminated one at the same
+ * position; the dangling alternative is only reachable when no closer
+ * exists downstream.
+ */
+const STREAM_CONSTRUCT_RE =
+  /^\[think\]\n[\s\S]*?^\[\/think\]\n?|^\[tool\] [^\n]*\n?|^\[think\][\s\S]*$/gm;
+
+/**
+ * Split captured ACP stdout into the agent's message runs — the prose
+ * emitted between stream constructs.
+ *
+ * Why this exists: ACP agents (devin, codex-acp, agy) narrate progress on
+ * the same `agent_message_chunk` channel that carries the final answer —
+ * "Let me check X…" — so a run's stdout interleaves working narration
+ * with the reply and `stripAcpMarkers` alone leaves all of it behind
+ * (PR #322 review 5256477256 posted eleven paragraphs of narration above
+ * the review). Consumers that want just the answer pick from the tail of
+ * this list; consumers that want the whole transcript use
+ * `stripAcpMarkers`.
+ *
+ * A trailing unterminated `[think]` truncates the list rather than
+ * returning its reasoning as a segment: text after the opener is a
+ * thought the run never finished, not a message it sent.
+ */
+export function acpMessageSegments(raw: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  for (const m of raw.matchAll(STREAM_CONSTRUCT_RE)) {
+    const idx = m.index!;
+    if (idx > start) segments.push(raw.slice(start, idx));
+    if (m[0].startsWith("[think]") && !m[0].includes("[/think]")) {
+      return segments;
+    }
+    start = idx + m[0].length;
+  }
+  segments.push(raw.slice(start));
+  return segments;
+}

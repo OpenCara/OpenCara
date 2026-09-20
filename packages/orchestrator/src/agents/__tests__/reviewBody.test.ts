@@ -56,4 +56,37 @@ describe("reviewBodyForPublication", () => {
     const body = "verdict: approve\n\nShip it.";
     assert.equal(reviewBodyForPublication(body, "codex"), body);
   });
+
+  it("drops devin narration before the verdict — the PR #322 leak", () => {
+    // devin sends working narration as agent_message chunks on the same
+    // channel as the answer, so its review body began with eleven
+    // paragraphs of "Let me check X…" (review 5256477256).
+    const body = [
+      "All checks complete. The delta is verified end-to-end.",
+      "",
+      "verdict: approve",
+      "",
+      "**Re-review: no blocking issues.**",
+      "",
+      "### Prior review items",
+      "- All resolved.",
+    ].join("\n");
+    assert.equal(
+      reviewBodyForPublication(body, "devin swe-2"),
+      "verdict: approve\n\n**Re-review: no blocking issues.**\n\n### Prior review items\n- All resolved.",
+    );
+  });
+
+  it("keeps a non-agy body when the verdict arrives last", () => {
+    // Contract violation, but the content before the verdict is the real
+    // review — slicing at the verdict would post an empty body. Keep the
+    // whole thing and let parseReviewVerdict strip the marker.
+    const body = "### Findings\n- Looks good.\n\nverdict: approve";
+    assert.equal(reviewBodyForPublication(body, "codex mimo-v2.5-pro"), body);
+  });
+
+  it("keeps a non-agy body verbatim when no verdict line exists", () => {
+    const body = "## Summary\nBoth reviews approve.\n\n## Findings\nNone.";
+    assert.equal(reviewBodyForPublication(body, "codex mimo-v2.5-pro"), body);
+  });
 });
