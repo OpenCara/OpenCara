@@ -276,9 +276,12 @@ describe("extractAgentResultText — ACP narration segments", () => {
     );
   });
 
-  it("takes the last message run when no verdict line exists", () => {
+  it("keeps the whole stripped stream when no verdict line exists", () => {
     // codex synthesizer shape: narration between tool calls, then the
-    // structured review as the final message run with no verdict line.
+    // structured review with no verdict line. extract can't tell
+    // narration from content without guessing, and non-review consumers
+    // (add_comment, fan-in) need the full stream — the review layer's
+    // ## Summary anchor drops the narration when this is posted.
     const raw = [
       "[think]",
       "Let me extract the findings.",
@@ -294,8 +297,20 @@ describe("extractAgentResultText — ACP narration segments", () => {
     ].join("\n");
     assert.equal(
       extractAgentResultText(raw),
-      "## Summary\nBoth upstream reviews approve.\n\n## Findings\nNone blocking.",
+      "Now let me verify the ordering:\n\n## Summary\nBoth upstream reviews approve.\n\n## Findings\nNone blocking.",
     );
+  });
+
+  it("does not anchor on a quoted or non-contract verdict mention", () => {
+    // "verdict: pending further inspection" isn't a contract token — the
+    // segment scan must not start the answer there.
+    const raw = [
+      "verdict: pending further inspection",
+      "[tool] git diff → completed",
+      "verdict: approve",
+      "Ship it.",
+    ].join("\n");
+    assert.equal(extractAgentResultText(raw), "verdict: approve\nShip it.");
   });
 
   it("excludes a trailing unterminated [think] from the answer", () => {

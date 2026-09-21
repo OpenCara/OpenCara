@@ -93,15 +93,18 @@ export function extractAgentResultText(raw: string): string {
   // content: the review body posted to GitHub, and the upstream text a
   // fan-in node pastes into the next agent's prompt.
   //
-  // Marker stripping alone isn't enough: agents like devin narrate their
-  // progress through `agent_message_chunk` — the same channel as the
+  // Marker stripping alone isn't enough for review agents: devin narrates
+  // its progress through `agent_message_chunk` — the same channel as the
   // answer — so "Let me check X…" paragraphs survive the strip and reach
-  // GitHub above the review (PR #322 review 5256477256). The message runs
-  // between constructs are narration; the answer is the tail. When a
-  // `verdict:` contract line exists, its run starts the answer even if
-  // the agent emitted a sign-off after it (a trailing tool call plus
-  // "Done!" must not collapse the output to just that sign-off, which
-  // post_review would refuse as a stub).
+  // GitHub above the review (PR #322 review 5256477256). The `verdict:`
+  // contract line is the reliable boundary between working narration and
+  // reply, so when a segment carries one, the answer starts there —
+  // including any post-verdict sign-off, which post_review tolerates
+  // better than a refusal. With no verdict we can't tell narration from
+  // content without guessing, so keep the whole stripped stream; the
+  // review-layer `## Summary`/`## Findings` anchor in reviewBody.ts covers
+  // the structured-review shape, and non-review consumers (add_comment,
+  // fan-in) see exactly what they saw before this change.
   if (!raw.includes("[think]") && !raw.includes("[tool] ")) {
     return stripAcpMarkers(raw);
   }
@@ -111,14 +114,14 @@ export function extractAgentResultText(raw: string): string {
   if (segments.length === 0) return stripAcpMarkers(raw);
   let firstVerdictSeg = -1;
   for (let i = 0; i < segments.length; i++) {
-    if (/^verdict\s*:/im.test(segments[i]!)) {
+    if (/^verdict\s*:\s*(approve|request_changes|comment)\s*$/im.test(segments[i]!)) {
       firstVerdictSeg = i;
       break;
     }
   }
   return firstVerdictSeg >= 0
     ? segments.slice(firstVerdictSeg).join("\n\n")
-    : segments[segments.length - 1]!;
+    : stripAcpMarkers(raw);
 }
 
 const CODEX_JSONL_TYPE_HINTS = new Set([
