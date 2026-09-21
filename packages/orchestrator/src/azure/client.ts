@@ -37,6 +37,48 @@ export interface AzureDevopsClientDeps {
   entra?: EntraOAuth;
 }
 
+/**
+ * Connect-stage failures worth retrying. Every code here means the request
+ * never left this process — DNS miss, refused/blackholed SYN — so retrying
+ * cannot double-apply anything, including POSTs like `threads` that mint a
+ * review. Mid-flight failures (socket destroyed, body timeouts, a reset
+ * after bytes moved) are deliberately NOT retried: a write may already
+ * have landed on the server and a blind retry would double-post it.
+ * (flow_run 01M31D37N0FC5ZPCQ3DAPWA7FP: a ~15min container→dev.azure.com
+ * connect outage failed post_review outright.)
+ */
+const RETRYABLE_CONNECT_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+const CONNECT_RETRY_BACKOFF_MS = [250, 1000];
+
+function isRetryableConnectError(err: unknown): boolean {
+  const code =
+    (err as { cause?: { code?: unknown } })?.cause?.code ??
+    (err as { code?: unknown })?.code;
+  return typeof code === "string" && RETRYABLE_CONNECT_CODES.has(code);
+}
+
+async function fetchWithConnectRetry(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      if (!isRetryableConnectError(err) || attempt >= CONNECT_RETRY_BACKOFF_MS.length) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_BACKOFF_MS[attempt]));
+    }
+  }
+}
+
 export class AzureDevopsApiError extends Error {
   constructor(
     message: string,
@@ -176,7 +218,7 @@ export class AzureDevopsClient {
     if (!target.searchParams.has("api-version")) {
       target.searchParams.set("api-version", init.apiVersion ?? AZDO_API_VERSION);
     }
-    const res = await fetch(target.toString(), {
+    const res = await fetchWithConnectRetry(target.toString(), {
       method: init.method ?? "GET",
       headers: {
         // Entra tokens are Bearer; PATs are HTTP Basic with an empty username

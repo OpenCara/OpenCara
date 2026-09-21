@@ -42,6 +42,7 @@ export const flowStepStatusEnum = pgEnum("flow_step_status", [
   "succeeded",
   "failed",
   "skipped",
+  "cancelled",
 ]);
 
 // Supported agent kinds. `custom` is the escape hatch for arbitrary

@@ -418,3 +418,21 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - **Read `agent_runs.spec->'args'` before theorising about an adapter's capabilities** — it names the exact package the device spawned. Guessing from `ACP_ADAPTERS` on main is wrong whenever the deployed image is older than HEAD; `git log <deployed tag>..HEAD` is the check.
 - Corollary: `agents.thought_level` IS honoured for kind=codex on the maintained adapter. Don't record "codex ignores it" from a single run log.
 - Also from that probe: the old adapter applies argv `-c model="X"` (its `model` currentValue came back as `gpt-5.6-sol`); the maintained one does NOT — argv `-c` leaves currentValue at config.toml's `model`, and the model gets set over ACP `session/set_config_option` instead. Both end up on the right model by different routes.
+
+### [hits: 1] ACP `agent_message_chunk` carries working narration — the `verdict:` line is the only reliable boundary
+- devin/codex-acp/agy all emit "Let me check X…" progress text as message chunks on the same stdout channel as the final answer; only `agent_thought_chunk` gets `[think]` fences. `stripAcpMarkers` removes fences but leaves narration, which then ships as the GitHub review body (PR #322 reviews 5256477256 et al).
+- Fix layers (v0.125.11): `acpMessageSegments` splits stdout on stream constructs; `extractAgentResultText` returns the first standalone-verdict segment forward (no verdict → full stripped stream, never last-segment-only — that was the #253 review finding, since add_comment/fan-in consumers need the whole output); `reviewBodyForPublication` slices at the verdict for all agents and anchors on the last `## Summary`+`## Findings` pair (the synthesizer contract — rescues codex, which omits the verdict line).
+- Editing a posted review body is `PUT /pulls/{n}/reviews/{id}` (PATCH → 404), needs admin or the author identity.
+
+### [hits: 1] Ruleset pull_request rule: CHANGES_REQUESTED blocks even `--admin` squash merges
+- Repo ruleset `main` (required_linear_history + pull_request) isn't visible via `/branches/main/protection` (404) — use `gh api repos/.../rulesets`. A CHANGES_REQUESTED review blocks `gh pr merge --admin` with "Repository rule violations found"; the only paths are a follow-up APPROVE from that reviewer or `PUT .../reviews/{id}/dismissals` then merge.
+- The opencara self-review flow re-reviews on `synchronize`, so pushing fixes spawns a fresh review run — the stale CHANGES_REQUESTED still needs dismissing to merge before it lands.
+
+### [hits: 1] Container→dev.azure.com connect timeouts are transient AND diagnosable from inside the container
+- `docker exec opencara_server node -e 'fetch("https://dev.azure.com",...)'` vs host `curl` splits container-network vs host-wide instantly; raw `net.connect` to the resolved IPs splits DNS/connect vs TLS/request stage. The 07:15–07:31 outage hit container→dev.azure.com:443 twice while host-side git fetches succeeded — connectivity self-healed (~16min window).
+- Fix landed in AzureDevopsClient.request: `fetchWithConnectRetry` retries only provably pre-send codes (UND_ERR_CONNECT_TIMEOUT, ECONNREFUSED, ETIMEDOUT, ENETUNREACH, EHOSTUNREACH, ENOTFOUND, EAI_AGAIN) — never mid-flight socket/body errors, so a POST /threads retry can't double-post.
+- Reposting a failed Azure review by hand: run a script inside opencara_server importing dist modules — `createDb(DATABASE_URL)` + `new TokenCipher(SESSION_ENCRYPTION_KEY)` + `clientForConnection` + `createAzureProvider({client, projectName, repositoryId, repositoryName}).postReview({number}, 'APPROVE', body)`. Then UPDATE flow_run_steps/flow_runs to succeeded with the real {reviewId, htmlUrl}.
+
+### [hits: 1] Quorum-cancelled pool steps now read 'cancelled' — 'skipped' means never-ran
+- `flowStepStatusEnum` gained 'cancelled' (migration 0058); `cancelFlowNodeAttempts` writes it for aborted in-flight attempts. The UI badge variant already maps 'cancelled' → outline, no web change needed.
+- Structural bias worth remembering: with `quorum=2, stopOnQuorum=true`, devin swe-2 (~9min) will almost always lose the race to gemini (~3min) — "fastest two" is what the config delivers, `preferred:3` only sets the dispatch budget.
