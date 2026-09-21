@@ -89,9 +89,12 @@ export async function cancelFlowNodeAttempts(
       .set({ status: "cancelled", cancelReason: "wave_cancelled", finishedAt: new Date() })
       .where(and(inArray(agentRuns.id, runIds), inArray(agentRuns.status, [...IN_FLIGHT])));
   }
+  // 'cancelled', not 'skipped': these steps were dispatched and burning
+  // compute when quorum landed — 'skipped' reads as "never ran" on the run
+  // page and hides the aborted work.
   await db
     .update(flowRunSteps)
-    .set({ status: "skipped", error: "pool quorum reached", finishedAt: new Date() })
+    .set({ status: "cancelled", error: "pool quorum reached", finishedAt: new Date() })
     .where(and(inArray(flowRunSteps.id, stepIds), eq(flowRunSteps.status, "running")));
 
   let signalled = 0;
