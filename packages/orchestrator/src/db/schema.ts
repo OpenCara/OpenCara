@@ -63,6 +63,7 @@ export const agentKindEnum = pgEnum("agent_kind", [
   "cursor",
   "agy",
   "devin",
+  "commandcode",
 ]);
 
 export const users = pgTable(

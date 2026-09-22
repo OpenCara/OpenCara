@@ -923,6 +923,7 @@ export type AgentKind =
   | "cursor"
   | "agy"
   | "devin"
+  | "commandcode"
   | "custom";
 
 export interface AgentRow {

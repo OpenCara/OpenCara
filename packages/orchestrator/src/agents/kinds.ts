@@ -18,7 +18,8 @@ export type AgentKind =
   | "omp"
   | "cursor"
   | "agy"
-  | "devin";
+  | "devin"
+  | "commandcode";
 
 export const AGENT_KINDS: AgentKind[] = [
   "claude",
@@ -29,6 +30,7 @@ export const AGENT_KINDS: AgentKind[] = [
   "cursor",
   "agy",
   "devin",
+  "commandcode",
 ];
 
 export function isAgentKind(s: unknown): s is AgentKind {
@@ -113,10 +115,10 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
       description:
         "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY " +
         "here. The `cursor-agent` binary must be installed on the device — " +
-        "it is not fetchable via npx. Model ids come from the ACP session " +
-        "option and are parameterized, e.g. " +
-        "`grok-4.6[effort=high,fast=true]` — see the list in the run log if " +
-        "a name is rejected.",
+        "it is not fetchable via npx. Model ids are parameterized — " +
+        "`grok-4.7[context=500k,reasoning_effort=high,fast=false]` — and any " +
+        "combination the model's parameters allow works; invalid parameters " +
+        "are skipped with a warning in the run log.",
     },
   ],
   devin: [
@@ -127,6 +129,20 @@ export const AUTH_HINTS: Record<AgentKind, Array<{ name: string; description: st
         "then run `devin auth login` once. For a headless device, use " +
         "`devin auth login --force-manual-token-flow` or set WINDSURF_API_KEY " +
         "in the agent env. OpenCara launches the CLI's native `devin acp` server.",
+    },
+  ],
+  commandcode: [
+    {
+      name: "COMMAND_CODE_API_KEY",
+      description:
+        "Install Command Code on the device (`npm i -g command-code`, Node >= 22) " +
+        "and authenticate once — `cmd login`, or set COMMAND_CODE_API_KEY here. " +
+        "The device spawns `npx cmd-acp` which drives `cmd -p`. Model ids are " +
+        "catalog-qualified without a prefix, e.g. `xiaomi/mimo-v2.5` — see `cmd " +
+        "--list-models`. The adapter defaults sessions to safe permissions " +
+        "(edits/shell blocked); either set `cmd config set permissions.defaultMode " +
+        "yolo` on the device or pin `[permission_mode=yolo]` in the model args. " +
+        "Thought level maps to cmd's `--effort` (low, medium, high).",
     },
   ],
 };

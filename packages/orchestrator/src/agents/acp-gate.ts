@@ -67,6 +67,10 @@ const ACP_ADAPTERS = new Map<string, { command: string; args: readonly string[] 
   // Requires the adapter's configurable print-timeout support (see docs/agy-acp.md).
   ["agy", { command: "agy-acp", args: ["--dangerously-skip-permissions", "--print-timeout", "30m"] }],
   ["devin", { command: "devin", args: ["acp"] }],
+  // Command Code (`cmd`) has no native ACP mode; `cmd-acp` bridges its
+  // headless NDJSON stream over stdio. npm-fetchable, but it shells out to a
+  // `cmd` binary that must be installed + authed on the device (like cursor).
+  ["commandcode", { command: "npx", args: ["--yes", "cmd-acp@latest"] }],
 ]);
 
 /** Lowercase keys derived from the adapter map; match incoming kind case-insensitively. */
@@ -390,14 +394,14 @@ export function resolveAdapterInvocation(
   }
   if (k === "cursor") {
     // cursor-agent has a `--model` flag, but its argv namespace and its ACP
-    // namespace are DIFFERENT: argv wants `cursor-grok-4.6-high`, while the
-    // ACP model option only accepts the parameterized ids it advertises
-    // (`grok-4.6[effort=high,fast=true]`) and hard-rejects anything else with
-    // "Invalid model value". Operators configure the ACP form (that's what
-    // `acp.model` selects over `session/set_config_option`), so passing the
-    // same string on argv would either be rejected by a future stricter parse
-    // or silently mean a different model. Strip it — ACP owns model selection
-    // for this kind.
+    // namespace are DIFFERENT: argv wants `grok-4.7-high-fast`, while ACP
+    // takes the parameterized form (`grok-4.7[context=500k,fast=false]`).
+    // The device runner negotiates `_meta.parameterizedModelPicker`, so the
+    // model option carries bare family names and each `k=v` becomes its own
+    // set_config_option — combos beyond the curated variant list work.
+    // Passing the ACP-form string on argv would either be rejected by a
+    // future stricter parse or silently mean a different model. Strip it —
+    // ACP owns model selection for this kind.
     const { rest } = splitModelArg(agentArgs);
     return { args: [...adapterArgs, ...rest], env: baseEnv };
   }

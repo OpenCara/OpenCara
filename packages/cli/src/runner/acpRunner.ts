@@ -50,6 +50,7 @@ import {
   type AcpConfigOption,
   type ContentBlock,
   type SessionUpdate,
+  type SetConfigOptionResponse,
 } from "../acp/types.js";
 import { McpHost } from "../mcp/host.js";
 import { WsAgentCallBridge } from "../mcp/wsBridge.js";
@@ -220,7 +221,13 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
 
       const initResult = await client.initialize({
         protocolVersion: ACP_PROTOCOL_VERSION,
-        clientCapabilities: {},
+        // Ask for the parameterized model picker when the agent has one
+        // (cursor-agent): the model option then advertises bare family
+        // names and each parameter (context, reasoning_effort, fast) is
+        // its own config option, so `grok-4.7[context=500k,fast=false]`
+        // style ids become reachable — the exploded variant list only
+        // carries one curated combo per family. Ignored by other shims.
+        clientCapabilities: { _meta: { parameterizedModelPicker: true } },
       });
       // Resume vs. fresh: the orchestrator sets `priorSessionId` when
       // a prior agent-session.json exists for this (repo, branch) on
@@ -274,26 +281,42 @@ export function runAcpJob(opts: RunAcpJobOpts): RunAcpJobHandle {
       // here via session/set_config_option. Best-effort — a miss or the agent's
       // "model not found" is logged and the run continues on the adapter default,
       // never failing the job on a model-name typo.
+      let modelPinnedOptions: ReadonlySet<string> | undefined;
       if (acpSpec.model) {
-        await selectAcpModel(
+        const selection = await selectAcpModel(
           client,
           sessionId,
           acpSpec.model,
           configOptions,
           handlers.onLog,
         );
+        modelPinnedOptions = selection.appliedOptionIds;
+        // Parameterized pickers return refreshed options after each set —
+        // parameter choices track the newly selected model.
+        if (selection.configOptions) configOptions = selection.configOptions;
       }
       // Reasoning effort / thinking level, same mechanism: only when the
       // adapter advertised a `thought_level` option (claude-acp, codex-acp,
-      // pi, omp). Best-effort, never fails the run.
+      // pi, omp). Best-effort, never fails the run. Skipped when the model
+      // id already pinned that parameter (e.g. `reasoning_effort=high`
+      // inside `grok-4.7[...]` vs the agent's generic thought_level field)
+      // — the more specific directive wins.
       if (acpSpec.thoughtLevel) {
-        await selectAcpThoughtLevel(
-          client,
-          sessionId,
-          acpSpec.thoughtLevel,
-          configOptions,
-          handlers.onLog,
-        );
+        const tlOption = findThoughtLevelOption(configOptions);
+        if (tlOption && modelPinnedOptions?.has(tlOption.id)) {
+          handlers.onLog(
+            "stderr",
+            `[acp] thought level "${acpSpec.thoughtLevel}" skipped — model id already pinned ${tlOption.id}\n`,
+          );
+        } else {
+          await selectAcpThoughtLevel(
+            client,
+            sessionId,
+            acpSpec.thoughtLevel,
+            configOptions,
+            handlers.onLog,
+          );
+        }
       }
       // Cancel arrived before the session was minted. Forward the
       // notification so the agent's bookkeeping records a cancel, then
@@ -511,6 +534,117 @@ export async function selectAcpThoughtLevel(
   }
 }
 
+/** Outcome of `selectAcpModel`, for callers that chain further selections. */
+export interface AcpModelSelection {
+  /** Option ids explicitly set via a parameterized `model[k=v]` id —
+   *  e.g. {"context","reasoning_effort"} for `grok-4.7[context=500k,...]`.
+   *  A later thought-level selection should not re-set an option the model
+   *  id already pinned. */
+  appliedOptionIds: ReadonlySet<string>;
+  /** The newest advertised options — refreshed from each set_config_option
+   *  response, since per-parameter options track the selected model. */
+  configOptions: AcpConfigOption[] | undefined;
+}
+
+/**
+ * Split a parameterized model id (`grok-4.7[context=500k,fast=false]`) into
+ * its bare model name and `k=v` parameter pairs. Returns null when the string
+ * isn't the bracketed form or a segment lacks `=`.
+ */
+export function parseParameterizedModelValue(
+  raw: string,
+): { name: string; params: Array<{ id: string; value: string }> } | null {
+  const m = /^([^[\]]+?)\[([^[\]]*)\]\s*$/.exec(raw.trim());
+  if (!m) return null;
+  const params: Array<{ id: string; value: string }> = [];
+  for (const seg of (m[2] ?? "").split(",")) {
+    const part = seg.trim();
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq <= 0) return null;
+    params.push({ id: part.slice(0, eq).trim(), value: part.slice(eq + 1).trim() });
+  }
+  return { name: (m[1] ?? "").trim(), params };
+}
+
+/**
+ * Parameterized-picker path (cursor-agent negotiated via the
+ * `_meta.parameterizedModelPicker` client capability): the `model` option
+ * holds bare family names and every parameter is its own config option, so
+ * `grok-4.7[context=500k,reasoning_effort=high,fast=false]` decomposes into
+ * one set for the model plus one set per parameter. Any combination the
+ * model's parameter definitions allow becomes reachable — the exploded
+ * variant list only advertises one curated combo per family.
+ *
+ * Returns undefined when the model option doesn't carry bare names matching
+ * `parsed.name` (i.e. the agent isn't in parameterized mode) so the caller
+ * can fall through to the freeform attempt.
+ */
+async function applyParameterizedModelValue(
+  client: AcpClient,
+  sessionId: string,
+  modelOption: AcpConfigOption,
+  parsed: { name: string; params: Array<{ id: string; value: string }> },
+  configOptions: AcpConfigOption[] | undefined,
+  onLog: LogSink,
+): Promise<AcpModelSelection | undefined> {
+  const values = (modelOption.options ?? []).map((o) => o.value);
+  const nameTarget =
+    values.find((v) => v === parsed.name) ??
+    values.find((v) => v.toLowerCase() === parsed.name.toLowerCase());
+  if (!nameTarget) return undefined;
+  const appliedOptionIds = new Set<string>();
+  let options = configOptions;
+  try {
+    const resp = (await client.setConfigOption({
+      sessionId,
+      configId: modelOption.id,
+      value: nameTarget,
+    })) as SetConfigOptionResponse | undefined;
+    options = resp?.configOptions ?? options;
+    onLog("stderr", `[acp] selected model ${nameTarget}\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);
+    return { appliedOptionIds, configOptions: options };
+  }
+  for (const p of parsed.params) {
+    const opt = options?.find(
+      (o) => o.id === p.id || o.id.toLowerCase() === p.id.toLowerCase(),
+    );
+    if (!opt) {
+      onLog(
+        "stderr",
+        `[acp] model parameter "${p.id}" not advertised for ${nameTarget}; skipping\n`,
+      );
+      continue;
+    }
+    const allowed = (opt.options ?? []).map((o) => o.value);
+    const vTarget =
+      allowed.find((v) => v === p.value) ??
+      allowed.find((v) => v.toLowerCase() === p.value.toLowerCase()) ??
+      p.value;
+    try {
+      const resp = (await client.setConfigOption({
+        sessionId,
+        configId: opt.id,
+        value: vTarget,
+      })) as SetConfigOptionResponse | undefined;
+      options = resp?.configOptions ?? options;
+      appliedOptionIds.add(opt.id);
+      onLog("stderr", `[acp] selected ${opt.id} ${vTarget}\n`);
+    } catch {
+      onLog(
+        "stderr",
+        `[acp] model parameter "${opt.id}" rejected value "${p.value}"` +
+          (allowed.length ? ` — available: [${allowed.join(", ")}]` : "") +
+          "; skipping\n",
+      );
+    }
+  }
+  return { appliedOptionIds, configOptions: options };
+}
+
 /**
  * Select the requested model via ACP `session/set_config_option`. Best-effort:
  * logs a note and returns when the agent advertised no model option or the
@@ -524,7 +658,11 @@ export async function selectAcpModel(
   requested: string,
   configOptions: AcpConfigOption[] | undefined,
   onLog: LogSink,
-): Promise<void> {
+): Promise<AcpModelSelection> {
+  const none: AcpModelSelection = {
+    appliedOptionIds: new Set(),
+    configOptions,
+  };
   const modelOption = configOptions?.find(
     (o) => o.id === "model" || o.category === "model",
   );
@@ -533,11 +671,26 @@ export async function selectAcpModel(
       "stderr",
       `[acp] model "${requested}" requested but the agent advertised no model option; using its default\n`,
     );
-    return;
+    return none;
   }
   const values = (modelOption.options ?? []).map((o) => o.value);
   const target = matchModelValue(requested, values);
   if (!target) {
+    // Parameterized picker (cursor): the advertised values are bare family
+    // names, so a `name[k=v,...]` id can never match one verbatim — decompose
+    // it into a model set plus one set per parameter option instead.
+    const parsed = parseParameterizedModelValue(requested);
+    if (parsed) {
+      const applied = await applyParameterizedModelValue(
+        client,
+        sessionId,
+        modelOption,
+        parsed,
+        configOptions,
+        onLog,
+      );
+      if (applied) return applied;
+    }
     // Some agents (claude-acp) accept freeform model ids beyond the
     // advertised list — attempt the raw value before giving up. Agents
     // that validate (pi) reject it and we degrade to their default,
@@ -555,9 +708,9 @@ export async function selectAcpModel(
         `[acp] model "${requested}" not among available models [${values.join(", ")}]; using the default\n`,
       );
     }
-    return;
+    return none;
   }
-  if (modelOption.currentValue === target) return; // already the active model
+  if (modelOption.currentValue === target) return none; // already the active model
   try {
     await client.setConfigOption({
       sessionId,
@@ -569,6 +722,7 @@ export async function selectAcpModel(
     const msg = err instanceof Error ? err.message : String(err);
     onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);
   }
+  return none;
 }
 
 export interface UpdateTranslator {
