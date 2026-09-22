@@ -45,6 +45,14 @@ export interface FileSystemCapability {
 export interface ClientCapabilities {
   fs?: FileSystemCapability;
   terminal?: boolean;
+  /**
+   * Extension metadata. `parameterizedModelPicker` asks the agent to
+   * advertise the model as a bare-name select plus one config option per
+   * model parameter (context, reasoning_effort, fast, …) instead of a
+   * flattened variant list. cursor-agent honors it; adapters that don't
+   * ignore `_meta` entirely (standard JSON-RPC extra-field tolerance).
+   */
+  _meta?: { parameterizedModelPicker?: boolean };
 }
 
 export interface AgentCapabilities {
@@ -138,6 +146,13 @@ export interface SetConfigOptionRequest {
   sessionId: string;
   configId: string;
   value: string;
+}
+
+/** Agents may return the refreshed option list on every set (cursor-agent
+ *  does — per-parameter options track the newly selected model). */
+export interface SetConfigOptionResponse {
+  configOptions?: AcpConfigOption[];
+  [k: string]: unknown;
 }
 
 // ─── session/load ──────────────────────────────────────────────────

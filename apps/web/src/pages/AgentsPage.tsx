@@ -116,9 +116,9 @@ const KIND_HINTS: Record<
     defaultCommand: "cursor-agent",
     envHint:
       "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY here. The binary must already be installed on the device.",
-    argsPlaceholder: "--model grok-4.6[effort=high,fast=true]",
+    argsPlaceholder: "--model grok-4.7[context=500k,reasoning_effort=high,fast=false]",
     argsHint:
-      "Cursor's ACP model ids are parameterized and strictly validated; a rejected name is logged with the accepted list and the run falls back to Cursor's default.",
+      "Cursor model ids are parameterized (name[k=v,...]); any combination the model's parameters allow works — invalid parameters are skipped with a warning in the run log.",
   },
   agy: {
     label: "Antigravity CLI (agy)",
@@ -138,6 +138,15 @@ const KIND_HINTS: Record<
     argsPlaceholder: "--model swe-2-max",
     argsHint:
       "OpenCara launches Devin's native `devin acp` server. Model ids are tier-qualified (e.g. `swe-2-max`, `adaptive`); a bare family name like `swe-2` is rejected and the run falls back to Devin's default.",
+  },
+  commandcode: {
+    label: "Command Code (cmd)",
+    defaultCommand: "cmd-acp",
+    envHint:
+      "Install `command-code` on the device (`npm i -g command-code`, Node >= 22) and run `cmd login` once — or set COMMAND_CODE_API_KEY here. The adapter spawns `cmd -p` per turn.",
+    argsPlaceholder: "--model xiaomi/mimo-v2.5",
+    argsHint:
+      "Model ids are provider-qualified (`cmd --list-models`), e.g. `xiaomi/mimo-v2.5`. Sessions default to safe permissions — set `permissions.defaultMode=yolo` in cmd config on the device, or pin `[permission_mode=yolo]` in the model arg.",
   },
   custom: {
     label: "Custom (no resume)",
@@ -164,6 +173,7 @@ const THOUGHT_LEVEL_HINTS: Partial<Record<AgentKind, string>> = {
   pi: "off, minimal, low, medium, high, xhigh",
   omp: "off, minimal, low, medium, high, xhigh",
   agy: "low, medium, high",
+  commandcode: "low, medium, high",
 };
 
 function ThoughtLevelField({
@@ -249,6 +259,7 @@ const KIND_ORDER: AgentKind[] = [
   "cursor",
   "agy",
   "devin",
+  "commandcode",
   "custom",
 ];
 

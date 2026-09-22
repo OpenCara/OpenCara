@@ -75,6 +75,28 @@ describe("devin adapter", () => {
   });
 });
 
+describe("commandcode adapter", () => {
+  it("routes through cmd-acp via npx and selects the model over ACP", () => {
+    const spec = buildAcpSpec({
+      ...baseOpts,
+      agent: {
+        kind: "commandcode",
+        name: "commandcode mimo",
+        cwd: "/wt/branch",
+        args: ["--model", "xiaomi/mimo-v2.5"],
+      },
+    });
+
+    assert.equal(checkAcpEligibility("commandcode").useAcp, true);
+    assert.equal(acpCommandFor("commandcode"), "npx");
+    // cmd-acp ignores argv — --model staying there is harmless; the ACP
+    // model option is what actually selects (`set_config_option` is
+    // freeform, so unlisted ids like the catalog's still land).
+    assert.deepEqual(spec.args, ["--yes", "cmd-acp@latest", "--model", "xiaomi/mimo-v2.5"]);
+    assert.equal(spec.acp?.model, "xiaomi/mimo-v2.5");
+  });
+});
+
 describe("buildAcpSpec priorSessionId", () => {
   it("threads priorSessionId onto the AcpSpec when set", () => {
     const spec = buildAcpSpec({ ...baseOpts, priorSessionId: "abc-123" });
@@ -476,9 +498,9 @@ describe("checkAcpEligibility", () => {
 // Both CLIs speak ACP natively. Verified against the real binaries on
 // 2026-08-27: `omp acp` advertises a `model` config option whose values are
 // provider-qualified (`volcengine-ark/kimi-k3`), and `cursor-agent acp`
-// advertises parameterized ids (`grok-4.6[effort=high,fast=true]`) that it
-// validates strictly — `set_config_option` with a bare `grok-4.6` is rejected
-// with "Invalid model value".
+// advertises parameterized ids (`grok-4.7[context=256k,reasoning_effort=high,fast=true]`).
+// With `_meta.parameterizedModelPicker` the runner decomposes `name[k=v,...]`
+// into per-option sets, so combos beyond the curated variant list work.
 describe("omp / cursor adapters", () => {
   const ompAdapter = ["--yes", "@oh-my-pi/pi-coding-agent@latest", "acp"];
 
@@ -519,16 +541,16 @@ describe("omp / cursor adapters", () => {
       userPromptMd: "user",
       agent: {
         kind: "cursor",
-        name: "cursor grok-4.6",
+        name: "cursor grok-4.7",
         cwd: null,
-        args: ["--model", "grok-4.6[effort=high,fast=true]", "--force"],
+        args: ["--model", "grok-4.7[context=256k,reasoning_effort=high,fast=true]", "--force"],
       },
     });
     assert.equal(spec.command, "cursor-agent");
     // argv keeps non-model extras, never the model: cursor's argv model names
-    // (`cursor-grok-4.6-high`) are a different namespace from its ACP ids.
+    // (`grok-4.7-high-fast`) are a different namespace from its ACP ids.
     assert.deepEqual(spec.args, ["acp", "--force"]);
-    assert.equal(spec.acp?.model, "grok-4.6[effort=high,fast=true]");
+    assert.equal(spec.acp?.model, "grok-4.7[context=256k,reasoning_effort=high,fast=true]");
   });
 
   it("cursor with no model configured is left untouched", () => {
@@ -551,7 +573,7 @@ describe("omp / cursor adapters", () => {
         kind: "cursor",
         name: "cursor override",
         cwd: null,
-        args: ["--model", "grok-4.6[effort=low,fast=true]"],
+        args: ["--model", "grok-4.7[context=256k,reasoning_effort=low,fast=true]"],
         acpArgs: ["acp", "--model", "claude-opus-5[thinking=true]", "--force"],
       },
     });

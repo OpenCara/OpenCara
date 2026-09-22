@@ -12,6 +12,7 @@ import {
   createUpdateTranslator,
   flattenToolTitle,
   matchModelValue,
+  parseParameterizedModelValue,
   selectAcpModel,
   selectAcpThoughtLevel,
   findThoughtLevelOption,
@@ -111,6 +112,217 @@ describe("selectAcpModel", () => {
     await selectAcpModel(client, "s1", "claude-sonnet-5", undefined, sink);
     assert.equal(calls.length, 0);
     assert.ok(lines.some((l) => l.includes("advertised no model option")));
+  });
+
+  // Parameterized-picker path (cursor-agent + _meta.parameterizedModelPicker):
+  // the model option carries bare family names and every parameter is a
+  // sibling config option, so `name[k=v,...]` decomposes into one set per
+  // option — the only way to reach combos absent from the variant list.
+  const parameterizedOptions = (): AcpConfigOption[] => [
+    {
+      type: "select",
+      id: "model",
+      category: "model",
+      currentValue: "grok-4.6",
+      options: [{ value: "default" }, { value: "grok-4.7" }, { value: "grok-4.6" }],
+    },
+    {
+      type: "select",
+      id: "context",
+      category: "model_config",
+      currentValue: "256k",
+      options: [{ value: "256k" }, { value: "500k" }],
+    },
+    {
+      type: "select",
+      id: "reasoning_effort",
+      category: "thought_level",
+      currentValue: "high",
+      options: [{ value: "low" }, { value: "medium" }, { value: "high" }, { value: "xhigh" }],
+    },
+    {
+      type: "select",
+      id: "fast",
+      category: "model_config",
+      currentValue: "true",
+      options: [{ value: "false" }, { value: "true" }],
+    },
+  ];
+
+  it("decomposes a parameterized id into model + per-parameter sets", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    const sel = await selectAcpModel(
+      client,
+      "s1",
+      "grok-4.7[context=500k,reasoning_effort=high,fast=false]",
+      parameterizedOptions(),
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "grok-4.7" },
+      { sessionId: "s1", configId: "context", value: "500k" },
+      { sessionId: "s1", configId: "reasoning_effort", value: "high" },
+      { sessionId: "s1", configId: "fast", value: "false" },
+    ]);
+    assert.deepEqual([...sel.appliedOptionIds].sort(), ["context", "fast", "reasoning_effort"]);
+    assert.ok(lines.some((l) => l.includes("selected model grok-4.7")));
+    assert.ok(lines.some((l) => l.includes("selected context 500k")));
+  });
+
+  it("uses refreshed configOptions from each set response for later params", async () => {
+    const { client, calls } = fakeClient(async (req) => {
+      const r = req as { configId: string };
+      // After the model switch, only the new model's parameters exist.
+      if (r.configId === "model") return { configOptions: parameterizedOptions() };
+      return {};
+    });
+    const { sink } = collectLogs();
+    const sel = await selectAcpModel(
+      client,
+      "s1",
+      "grok-4.7[context=500k]",
+      [{ type: "select", id: "model", category: "model", options: [{ value: "grok-4.7" }] }],
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "grok-4.7" },
+      { sessionId: "s1", configId: "context", value: "500k" },
+    ]);
+    assert.ok(sel.appliedOptionIds.has("context"));
+  });
+
+  it("skips parameters the selected model doesn't advertise", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "grok-4.7[fast=false,bogus_param=1]",
+      parameterizedOptions(),
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "grok-4.7" },
+      { sessionId: "s1", configId: "fast", value: "false" },
+    ]);
+    assert.ok(lines.some((l) => l.includes('"bogus_param" not advertised')));
+  });
+
+  it("decomposes even when the bare name isn't an enumerated option (freeform adapters)", async () => {
+    // cmd-acp shape: model option is freeform — its select accepts any string,
+    // so the bracketed form must still decompose rather than leaking a literal
+    // `name[k=v]` model id to the agent.
+    const { client, calls } = fakeClient(async () => ({}));
+    const { sink } = collectLogs();
+    const sel = await selectAcpModel(
+      client,
+      "s1",
+      "xiaomi/mimo-v2.5[permission_mode=yolo]",
+      [
+        {
+          type: "select",
+          id: "model",
+          category: "model",
+          currentValue: "deepseek/deepseek-v4-pro",
+          options: [{ value: "deepseek/deepseek-v4-pro" }, { value: "moonshotai/kimi-k3" }],
+        },
+        {
+          type: "select",
+          id: "permission_mode",
+          category: "mode",
+          currentValue: "safe",
+          options: [{ value: "safe" }, { value: "yolo" }],
+        },
+      ],
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "xiaomi/mimo-v2.5" },
+      { sessionId: "s1", configId: "permission_mode", value: "yolo" },
+    ]);
+    assert.deepEqual([...sel.appliedOptionIds], ["permission_mode"]);
+  });
+
+  it("decomposes when the model option enumerates nothing at all", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "xiaomi/mimo-v2.5[permission_mode=yolo]",
+      [
+        { type: "select", id: "model", category: "model", options: [] },
+        {
+          type: "select",
+          id: "permission_mode",
+          category: "mode",
+          options: [{ value: "safe" }, { value: "yolo" }],
+        },
+      ],
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "xiaomi/mimo-v2.5" },
+      { sessionId: "s1", configId: "permission_mode", value: "yolo" },
+    ]);
+  });
+
+  it("logs the enumerated values when a strict adapter rejects the bare name", async () => {
+    const { client } = fakeClient(async () => {
+      throw new Error("Invalid model value");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "grok-4.7[context=999k]",
+      modelOption(["grok-4.7[context=256k,reasoning_effort=high,fast=true]"]),
+      sink,
+    );
+    assert.ok(lines.some((l) => l.includes('not among available models')));
+  });
+
+  it("propagates refreshed configOptions from a plain model set", async () => {
+    const { client } = fakeClient(async () => ({
+      configOptions: parameterizedOptions(),
+    }));
+    const { sink } = collectLogs();
+    const sel = await selectAcpModel(
+      client,
+      "s1",
+      "claude-sonnet-5",
+      modelOption(["claude-sonnet-5", "claude-opus-5"]),
+      sink,
+    );
+    assert.equal(sel.configOptions?.some((o) => o.id === "reasoning_effort"), true);
+  });
+});
+
+describe("parseParameterizedModelValue", () => {
+  it("splits name and k=v params", () => {
+    assert.deepEqual(
+      parseParameterizedModelValue("grok-4.7[context=500k,reasoning_effort=high,fast=false]"),
+      {
+        name: "grok-4.7",
+        params: [
+          { id: "context", value: "500k" },
+          { id: "reasoning_effort", value: "high" },
+          { id: "fast", value: "false" },
+        ],
+      },
+    );
+  });
+  it("returns null without brackets", () => {
+    assert.equal(parseParameterizedModelValue("grok-4.7"), null);
+    assert.equal(parseParameterizedModelValue("commandcode/xai/grok-4.7"), null);
+  });
+  it("returns null on malformed segments", () => {
+    assert.equal(parseParameterizedModelValue("grok-4.7[noequals]"), null);
+    assert.equal(parseParameterizedModelValue("grok-4.7[=500k]"), null);
+  });
+  it("accepts an empty bracket list", () => {
+    assert.deepEqual(parseParameterizedModelValue("default[]"), { name: "default", params: [] });
   });
 });
 
