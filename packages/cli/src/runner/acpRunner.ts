@@ -589,10 +589,13 @@ async function applyParameterizedModelValue(
   onLog: LogSink,
 ): Promise<AcpModelSelection | undefined> {
   const values = (modelOption.options ?? []).map((o) => o.value);
+  // An unenumerated name is still decomposed — freeform adapters (cmd-acp)
+  // accept any model string, and sending the raw `name[k=v]` downstream
+  // would hand a literal bracketed id to the agent's model flag.
   const nameTarget =
     values.find((v) => v === parsed.name) ??
-    values.find((v) => v.toLowerCase() === parsed.name.toLowerCase());
-  if (!nameTarget) return undefined;
+    values.find((v) => v.toLowerCase() === parsed.name.toLowerCase()) ??
+    parsed.name;
   const appliedOptionIds = new Set<string>();
   let options = configOptions;
   try {
@@ -605,7 +608,12 @@ async function applyParameterizedModelValue(
     onLog("stderr", `[acp] selected model ${nameTarget}\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);
+    onLog(
+      "stderr",
+      values.length
+        ? `[acp] model "${parsed.name}" not among available models [${values.join(", ")}]; using the default\n`
+        : `[acp] model selection failed (${msg}); using the default\n`,
+    );
     return { appliedOptionIds, configOptions: options };
   }
   for (const p of parsed.params) {
@@ -696,12 +704,13 @@ export async function selectAcpModel(
     // that validate (pi) reject it and we degrade to their default,
     // same as before but with one extra round trip.
     try {
-      await client.setConfigOption({
+      const resp = (await client.setConfigOption({
         sessionId,
         configId: modelOption.id,
         value: requested.trim(),
-      });
+      })) as SetConfigOptionResponse | undefined;
       onLog("stderr", `[acp] selected model ${requested.trim()} (freeform)\n`);
+      return { appliedOptionIds: new Set(), configOptions: resp?.configOptions ?? configOptions };
     } catch {
       onLog(
         "stderr",
@@ -712,12 +721,13 @@ export async function selectAcpModel(
   }
   if (modelOption.currentValue === target) return none; // already the active model
   try {
-    await client.setConfigOption({
+    const resp = (await client.setConfigOption({
       sessionId,
       configId: modelOption.id,
       value: target,
-    });
+    })) as SetConfigOptionResponse | undefined;
     onLog("stderr", `[acp] selected model ${target}\n`);
+    return { appliedOptionIds: new Set(), configOptions: resp?.configOptions ?? configOptions };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     onLog("stderr", `[acp] model selection failed (${msg}); using the default\n`);

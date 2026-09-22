@@ -209,24 +209,93 @@ describe("selectAcpModel", () => {
     assert.ok(lines.some((l) => l.includes('"bogus_param" not advertised')));
   });
 
-  it("falls back to the freeform set when the bare name isn't a bare option", async () => {
+  it("decomposes even when the bare name isn't an enumerated option (freeform adapters)", async () => {
+    // cmd-acp shape: model option is freeform — its select accepts any string,
+    // so the bracketed form must still decompose rather than leaking a literal
+    // `name[k=v]` model id to the agent.
     const { client, calls } = fakeClient(async () => ({}));
     const { sink } = collectLogs();
-    // variants-style option list: no bare "grok-4.7" value to anchor on.
-    await selectAcpModel(
+    const sel = await selectAcpModel(
       client,
       "s1",
-      "grok-4.7[context=500k]",
-      modelOption(["grok-4.7[context=256k,reasoning_effort=high,fast=true]"]),
+      "xiaomi/mimo-v2.5[permission_mode=yolo]",
+      [
+        {
+          type: "select",
+          id: "model",
+          category: "model",
+          currentValue: "deepseek/deepseek-v4-pro",
+          options: [{ value: "deepseek/deepseek-v4-pro" }, { value: "moonshotai/kimi-k3" }],
+        },
+        {
+          type: "select",
+          id: "permission_mode",
+          category: "mode",
+          currentValue: "safe",
+          options: [{ value: "safe" }, { value: "yolo" }],
+        },
+      ],
       sink,
     );
     assert.deepEqual(calls, [
-      {
-        sessionId: "s1",
-        configId: "model",
-        value: "grok-4.7[context=500k]",
-      },
+      { sessionId: "s1", configId: "model", value: "xiaomi/mimo-v2.5" },
+      { sessionId: "s1", configId: "permission_mode", value: "yolo" },
     ]);
+    assert.deepEqual([...sel.appliedOptionIds], ["permission_mode"]);
+  });
+
+  it("decomposes when the model option enumerates nothing at all", async () => {
+    const { client, calls } = fakeClient(async () => ({}));
+    const { sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "xiaomi/mimo-v2.5[permission_mode=yolo]",
+      [
+        { type: "select", id: "model", category: "model", options: [] },
+        {
+          type: "select",
+          id: "permission_mode",
+          category: "mode",
+          options: [{ value: "safe" }, { value: "yolo" }],
+        },
+      ],
+      sink,
+    );
+    assert.deepEqual(calls, [
+      { sessionId: "s1", configId: "model", value: "xiaomi/mimo-v2.5" },
+      { sessionId: "s1", configId: "permission_mode", value: "yolo" },
+    ]);
+  });
+
+  it("logs the enumerated values when a strict adapter rejects the bare name", async () => {
+    const { client } = fakeClient(async () => {
+      throw new Error("Invalid model value");
+    });
+    const { lines, sink } = collectLogs();
+    await selectAcpModel(
+      client,
+      "s1",
+      "grok-4.7[context=999k]",
+      modelOption(["grok-4.7[context=256k,reasoning_effort=high,fast=true]"]),
+      sink,
+    );
+    assert.ok(lines.some((l) => l.includes('not among available models')));
+  });
+
+  it("propagates refreshed configOptions from a plain model set", async () => {
+    const { client } = fakeClient(async () => ({
+      configOptions: parameterizedOptions(),
+    }));
+    const { sink } = collectLogs();
+    const sel = await selectAcpModel(
+      client,
+      "s1",
+      "claude-sonnet-5",
+      modelOption(["claude-sonnet-5", "claude-opus-5"]),
+      sink,
+    );
+    assert.equal(sel.configOptions?.some((o) => o.id === "reasoning_effort"), true);
   });
 });
 
