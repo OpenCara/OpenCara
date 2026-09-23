@@ -147,28 +147,6 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
     const pool = parseAgentPoolPatch(body);
     if ("error" in pool) return c.json({ error: pool.error }, 400);
 
-    if (promptId !== KEEP && promptId !== null) {
-      const p = await deps.db.query.prompts.findFirst({
-        where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
-      });
-      if (!p) return c.json({ error: "prompt not found" }, 404);
-    }
-    if (agentId !== KEEP && agentId !== null) {
-      const a = await deps.db.query.agents.findFirst({
-        where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
-      });
-      if (!a) return c.json({ error: "agent not found" }, 404);
-    }
-    if (pool.fallbackAgentIds !== POOL_KEEP && pool.fallbackAgentIds.length > 0) {
-      const owned = await deps.db.query.agents.findMany({
-        where: and(inArray(agents.id, pool.fallbackAgentIds), eq(agents.userId, user.id)),
-        columns: { id: true },
-      });
-      if (owned.length !== pool.fallbackAgentIds.length) {
-        return c.json({ error: "agent not found" }, 404);
-      }
-    }
-
     const existing = await deps.db.query.templateNodeSettings.findFirst({
       where: and(
         eq(templateNodeSettings.userId, user.id),
@@ -176,6 +154,36 @@ export function flowTemplateRoutes(deps: FlowTemplateRoutesDeps) {
         eq(templateNodeSettings.nodeId, nodeId),
       ),
     });
+
+    // Only NEWLY linked ids need ownership checks. Ids already stored may
+    // point at deleted agents/prompts — re-validating them would 404 every
+    // edit and make the dead entries unremovable (the UI echoes the whole
+    // stored list back on any change).
+    if (promptId !== KEEP && promptId !== null && promptId !== existing?.promptId) {
+      const p = await deps.db.query.prompts.findFirst({
+        where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
+      });
+      if (!p) return c.json({ error: "prompt not found" }, 404);
+    }
+    if (agentId !== KEEP && agentId !== null && agentId !== existing?.agentId) {
+      const a = await deps.db.query.agents.findFirst({
+        where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
+      });
+      if (!a) return c.json({ error: "agent not found" }, 404);
+    }
+    if (pool.fallbackAgentIds !== POOL_KEEP) {
+      const stored = existing?.fallbackAgentIds ?? [];
+      const newIds = pool.fallbackAgentIds.filter((id) => !stored.includes(id));
+      if (newIds.length > 0) {
+        const owned = await deps.db.query.agents.findMany({
+          where: and(inArray(agents.id, newIds), eq(agents.userId, user.id)),
+          columns: { id: true },
+        });
+        if (owned.length !== newIds.length) {
+          return c.json({ error: "agent not found" }, 404);
+        }
+      }
+    }
     if (existing) {
       const now = new Date();
       const patch: Partial<typeof templateNodeSettings.$inferInsert> = {

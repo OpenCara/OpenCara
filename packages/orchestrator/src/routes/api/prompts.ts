@@ -212,34 +212,45 @@ export function promptRoutes(deps: PromptRoutesDeps) {
         where: and(eq(flows.id, flowId), eq(flows.projectId, projectId)),
       });
       if (!flow) return c.json({ error: "flow not found in project" }, 404);
-      if (promptId && promptId !== "__keep__") {
-        const p = await deps.db.query.prompts.findFirst({
-          where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
-        });
-        if (!p) return c.json({ error: "prompt not found" }, 404);
-      }
-      if (agentId && agentId !== "__keep__") {
-        const a = await deps.db.query.agents.findFirst({
-          where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
-        });
-        if (!a) return c.json({ error: "agent not found" }, 404);
-      }
-      if (pool.fallbackAgentIds !== KEEP && pool.fallbackAgentIds.length > 0) {
-        const owned = await deps.db.query.agents.findMany({
-          where: and(inArray(agents.id, pool.fallbackAgentIds), eq(agents.userId, user.id)),
-          columns: { id: true },
-        });
-        if (owned.length !== pool.fallbackAgentIds.length) {
-          return c.json({ error: "agent not found" }, 404);
-        }
-      }
-
       const existing = await deps.db.query.flowNodeSettings.findFirst({
         where: and(
           eq(flowNodeSettings.flowId, flowId),
           eq(flowNodeSettings.nodeId, nodeId),
         ),
       });
+      // Effective current links: the project override row wins, else the
+      // inherited template setting (first override edit echoes those back).
+      const effective = existing ?? (await loadEffectiveNodeSetting(deps.db, flowId, nodeId));
+
+      // Only NEWLY linked ids need ownership checks. Ids already stored may
+      // point at deleted agents/prompts — re-validating them would 404 every
+      // edit and make the dead entries unremovable (the UI echoes the whole
+      // stored list back on any change).
+      if (promptId && promptId !== "__keep__" && promptId !== (effective?.promptId ?? null)) {
+        const p = await deps.db.query.prompts.findFirst({
+          where: and(eq(prompts.id, promptId), eq(prompts.userId, user.id)),
+        });
+        if (!p) return c.json({ error: "prompt not found" }, 404);
+      }
+      if (agentId && agentId !== "__keep__" && agentId !== (effective?.agentId ?? null)) {
+        const a = await deps.db.query.agents.findFirst({
+          where: and(eq(agents.id, agentId), eq(agents.userId, user.id)),
+        });
+        if (!a) return c.json({ error: "agent not found" }, 404);
+      }
+      if (pool.fallbackAgentIds !== KEEP) {
+        const stored = effective?.fallbackAgentIds ?? [];
+        const newIds = pool.fallbackAgentIds.filter((id) => !stored.includes(id));
+        if (newIds.length > 0) {
+          const owned = await deps.db.query.agents.findMany({
+            where: and(inArray(agents.id, newIds), eq(agents.userId, user.id)),
+            columns: { id: true },
+          });
+          if (owned.length !== newIds.length) {
+            return c.json({ error: "agent not found" }, 404);
+          }
+        }
+      }
       if (existing) {
         const patch: Partial<typeof flowNodeSettings.$inferInsert> = {
           updatedAt: new Date(),
@@ -274,7 +285,7 @@ export function promptRoutes(deps: PromptRoutesDeps) {
       // First edit on an inherited node: the override row starts from the
       // template's values and applies just the fields sent, so a partial
       // PUT (say, only `retrySame`) doesn't silently blank the agent pool.
-      const inherited = await loadEffectiveNodeSetting(deps.db, flowId, nodeId);
+      const inherited = effective;
       const id = ulid();
       await deps.db.insert(flowNodeSettings).values({
         id,
