@@ -33,6 +33,7 @@ import type {
   ScheduleContext,
 } from "./context.js";
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
+import { buildPrReviewFixContractSkill } from "./skills/prReviewFixContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
@@ -1197,6 +1198,35 @@ export async function runAgentAttempt(
       env["OPENCARA_ISSUE_NUMBER"] = String(ctx.issueContext.stdin.issue.number);
     }
 
+    // The PR-triggered counterpart: a worktree'd agent on a PR event that
+    // does NOT feed a `scm.post_review` node is a fixer, expected to commit
+    // and push back onto the PR head branch it checked out. Reviewers are
+    // excluded via the downstream edge — they run in the same PR-ref
+    // worktrees (to build/run the code), but their output is review text
+    // for `scm.post_review`, while a fixer's output is the pushed commit
+    // itself. Event type can't separate them: `@opencara fix` and
+    // `@opencara review` both arrive as issue_comment.
+    //
+    // This skill is the "surrounding workflow explicitly requests it" the
+    // fix prompt's no-commit constraint defers to. Without it the agent
+    // edits, validates, reports, and exits — and the per-attempt teardown
+    // above deletes the unpushed work. Observed on ShiningPie PR 115
+    // (run 01M3RPMK1KHZ5JE7S6PPTKVMH0, 2026-09-30): a 45-minute fix,
+    // `succeeded`, remote branch unmoved, work unrecoverable.
+    const reviewFixSkill =
+      worktree?.branch && ctx.prContext && !ctx.hasDownstreamPostReview
+        ? buildPrReviewFixContractSkill({
+            baseUrl: ctx.publicBaseUrl,
+            runId: agentRunId,
+            branchName: worktree.branch,
+          })
+        : null;
+    // Stamp the env var the skill names, in case an operator-customized
+    // flow dropped it from contextInjection.env — same defensive stamp
+    // the implement contract does for OPENCARA_ISSUE_NUMBER.
+    const prNumber = ctx.prContext?.envExtras["OPENCARA_PR_NUMBER"];
+    if (reviewFixSkill && prNumber) env["OPENCARA_PR_NUMBER"] = prNumber;
+
     // A worktree agent reads the PR via `git diff` in its checkout; the
     // inline diff (when one was fetched at all — see prContextNeeds) would
     // only duplicate it into the prompt at up to 20k lines.
@@ -1248,6 +1278,13 @@ export async function runAgentAttempt(
       injectedSkills.push({
         name: implementSkill.name,
         instructions: implementSkill.instructions,
+      });
+    }
+    if (reviewFixSkill) {
+      systemPromptParts.push(reviewFixSkill.instructions);
+      injectedSkills.push({
+        name: reviewFixSkill.name,
+        instructions: reviewFixSkill.instructions,
       });
     }
     // Auto-injected when this agent's downstream graph contains a
