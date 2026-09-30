@@ -192,3 +192,148 @@ describe("github provider getPullRequestState", () => {
     assert.deepEqual(await provider.getPullRequestState(7), { state: "open", merged: false, labels: [] });
   });
 });
+
+describe("github provider listPullRequestFiles", () => {
+  /** Octokit stand-in whose `paginate` walks canned pages through mapFn. */
+  function fakePaginatingOctokit(
+    pages: { data: Record<string, unknown>[]; headers?: Record<string, string> }[],
+  ): {
+    octokit: Octokit;
+    pageRoutes: string[];
+  } {
+    const pageRoutes: string[] = [];
+    const octokit = {
+      paginate: async (
+        route: string,
+        params: Record<string, unknown>,
+        mapFn: (
+          res: { data: unknown; headers?: Record<string, string> },
+          done: () => void,
+        ) => unknown[],
+      ) => {
+        let finished = false;
+        const out: unknown[] = [];
+        for (const page of pages) {
+          if (finished) break;
+          pageRoutes.push(route);
+          const mapped = mapFn(page, () => {
+            finished = true;
+          });
+          out.push(...mapped);
+        }
+        return out;
+      },
+    } as unknown as Octokit;
+    return { octokit, pageRoutes };
+  }
+
+  const fileEntry = (filename: string, extra: Record<string, unknown> = {}) => ({
+    filename,
+    status: "modified",
+    additions: 3,
+    deletions: 1,
+    ...extra,
+  });
+
+  it("maps file fields and derives diff anchors", async () => {
+    const { octokit } = fakePaginatingOctokit([
+      {
+        data: [
+          fileEntry("src/a.ts", { status: "added" }),
+          fileEntry("src/b.ts", {
+            status: "renamed",
+            previous_filename: "src/old-b.ts",
+          }),
+          fileEntry("src/c.py", { status: "copied" }),
+          fileEntry("src/d.ts", { status: "changed" }),
+        ],
+      },
+    ]);
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 100 });
+
+    assert.equal(listing.prUrl, "https://github.com/o/r/pull/25");
+    assert.equal(listing.truncated, false);
+    assert.equal(listing.files.length, 4);
+    assert.equal(listing.files[0]!.status, "added");
+    assert.equal(listing.files[1]!.status, "renamed");
+    assert.equal(listing.files[1]!.previousPath, "src/old-b.ts");
+    assert.equal(listing.files[2]!.status, "added"); // copied → added
+    assert.equal(listing.files[3]!.status, "modified"); // unknown → modified
+    assert.match(
+      listing.files[0]!.diffUrl!,
+      /^https:\/\/github\.com\/o\/r\/pull\/25\/files#diff-[0-9a-f]{64}$/,
+    );
+  });
+
+  it("stops paginating at maxFiles and flags truncation", async () => {
+    const { octokit, pageRoutes } = fakePaginatingOctokit([
+      { data: Array.from({ length: 3 }, (_, i) => fileEntry(`f${i}.ts`)) },
+      { data: [fileEntry("f3.ts")] },
+    ]);
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+
+    assert.equal(listing.files.length, 2);
+    assert.equal(listing.truncated, true);
+    assert.equal(pageRoutes.length, 1); // second page never fetched
+  });
+
+  it("is not truncated when the file count lands exactly on the cap", async () => {
+    const { octokit } = fakePaginatingOctokit([
+      { data: [fileEntry("a.ts"), fileEntry("b.ts")] },
+    ]);
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+
+    assert.equal(listing.files.length, 2);
+    assert.equal(listing.truncated, false);
+  });
+
+  it("flags truncation at the cap when a rel=next link remains", async () => {
+    const { octokit } = fakePaginatingOctokit([
+      {
+        data: [fileEntry("a.ts"), fileEntry("b.ts")],
+        headers: { link: '<https://api.github.com/x?page=2>; rel="next"' },
+      },
+    ]);
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+
+    assert.equal(listing.files.length, 2);
+    assert.equal(listing.truncated, true);
+  });
+});
+
+describe("github provider readFileAtRef", () => {
+  it("reads raw contents at the requested ref", async () => {
+    const { octokit, requests } = fakeOctokit(() => ({ data: "file body" }));
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    const out = await provider.readFileAtRef!("src/a.ts", "sha9");
+
+    assert.equal(out, "file body");
+    assert.equal(
+      requests[0]!.route,
+      "GET /repos/{owner}/{repo}/contents/{path}",
+    );
+    assert.equal(requests[0]!.params.path, "src/a.ts");
+    assert.equal(requests[0]!.params.ref, "sha9");
+    assert.deepEqual(requests[0]!.params.mediaType, { format: "raw" });
+  });
+
+  it("returns null on 404 and rethrows other errors", async () => {
+    const notFound = Object.assign(new Error("Not found"), { status: 404 });
+    const { octokit } = fakeOctokit(() => {
+      throw notFound;
+    });
+    const provider = createGithubProvider({ octokit, owner: "o", repo: "r" });
+    assert.equal(await provider.readFileAtRef!("gone.ts", "sha"), null);
+
+    const boom = Object.assign(new Error("boom"), { status: 500 });
+    const { octokit: oct2 } = fakeOctokit(() => {
+      throw boom;
+    });
+    const provider2 = createGithubProvider({ octokit: oct2, owner: "o", repo: "r" });
+    await assert.rejects(provider2.readFileAtRef!("x.ts", "sha"), /boom/);
+  });
+});

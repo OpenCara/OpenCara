@@ -1,9 +1,16 @@
 import { z } from "zod";
-import { AzureDevopsAuthError, type AzureDevopsClient } from "../../azure/client.js";
+import type { ReviewMapFileStatus } from "@opencara/shared";
+import {
+  AzureDevopsApiError,
+  AzureDevopsAuthError,
+  type AzureDevopsClient,
+} from "../../azure/client.js";
 import type {
   AddCommentResult,
   AddLabelResult,
   PostReviewResult,
+  PullRequestFile,
+  PullRequestFileListing,
   PullRequestState,
   ScmProvider,
   ScmPullRequestRef,
@@ -93,6 +100,74 @@ const ConnectionDataSchema = z.object({
 // Azure reports `active` | `completed` (merged) | `abandoned`; anything else
 // is treated as closed-not-merged by the caller, so a plain string suffices.
 const PullRequestStatusSchema = z.object({ status: z.string() });
+
+/** Iteration list on a PR: `{value: [{id, ...}]}`. */
+const IterationsSchema = z.object({
+  value: z.array(z.object({ id: z.number() })),
+});
+
+/**
+ * One entry of `GET pullRequests/{n}/iterations/{id}/changes`. Azure's
+ * GitChange carries the rename's OLD path in `sourceServerItem` (with
+ * `originalPath` as the TFVC-era fallback), not on `item`.
+ */
+const IterationChangesSchema = z.object({
+  changeEntries: z
+    .array(
+      z.object({
+        changeType: z.string().optional().default(""),
+        sourceServerItem: z.string().optional(),
+        originalPath: z.string().optional(),
+        // Normally `{objectId, path, isFolder}`; GitChange's `item` is
+        // documented as able to arrive as a bare string too. Accept both so
+        // one odd entry can't fail the whole listing — the loop below skips
+        // anything without a path.
+        item: z
+          .union([
+            z.object({
+              path: z.string().optional(),
+              isFolder: z.boolean().optional(),
+            }),
+            z.string(),
+          ])
+          .optional(),
+      }),
+    )
+    .optional()
+    .default([]),
+  // Present when the server truncated the page at $top. Optional because the
+  // field isn't guaranteed across api-versions; the overfetch check below
+  // covers its absence.
+  hasMore: z.boolean().optional(),
+});
+
+/** `GET .../items?...&includeContent=true` returns `{content: "..."}` for files. */
+const ItemContentSchema = z.object({ content: z.string() });
+
+/**
+ * Map Azure's `changeType` onto the review-map status vocabulary.
+ *
+ * The field is documented as a comma list of GitChangeType flags
+ * ("rename,edit" for a renamed-and-edited file), so match on split tokens,
+ * NOT raw substrings — a substring check for "delete" would misfire on the
+ * real token "undelete". Priority: a rename stays "renamed" even when the
+ * entry also carries "edit"; delete and add are mutually exclusive; anything
+ * else (edit, encoding, merge…) is a content change → "modified".
+ */
+function statusForChangeType(changeType: string): ReviewMapFileStatus {
+  const kinds = new Set(changeType.split(",").map((t) => t.trim()));
+  if (kinds.has("rename") || kinds.has("sourceRename") || kinds.has("targetRename")) {
+    return "renamed";
+  }
+  if (kinds.has("delete")) return "removed";
+  if (kinds.has("add")) return "added";
+  return "modified";
+}
+
+/** Azure paths arrive repo-rooted with a leading `/`; the shared vocabulary wants "src/a.ts". */
+function stripLeadingSlash(path: string): string {
+  return path.replace(/^\//, "");
+}
 const LabelListSchema = z.object({
   value: z.array(z.object({ name: z.string().optional() })).default([]),
 });
@@ -132,14 +207,17 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
     )}/pullRequests/${prNumber}`;
 
   /**
-   * Web URL for a thread — Azure DevOps doesn't return one on the API response.
-   * Built from the repo NAME (the canonical browsable form), not the GUID the
-   * REST calls above use.
+   * Web URL for the PR itself — Azure DevOps doesn't return one on the API
+   * response. Built from the repo NAME (the canonical browsable form), not the
+   * GUID the REST calls above use.
    */
-  const threadUrl = (prNumber: number, threadId: number) =>
+  const prWebUrl = (prNumber: number) =>
     `${client.orgUrl}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(
       repositoryName,
-    )}/pullrequest/${prNumber}?discussionId=${threadId}`;
+    )}/pullrequest/${prNumber}`;
+
+  const threadUrl = (prNumber: number, threadId: number) =>
+    `${prWebUrl(prNumber)}?discussionId=${threadId}`;
 
   const postThread = async (prNumber: number, content: string): Promise<number> => {
     const res = await client.request(`${prBase(prNumber)}/threads`, {
@@ -268,6 +346,93 @@ export function createAzureProvider(opts: AzureProviderOptions): ScmProvider {
           ? labels.data.value.map((l) => l.name).filter((n): n is string => typeof n === "string")
           : [],
       };
+    },
+
+    /**
+     * PR files via the iterations API: `pullRequests/{n}/iterations` → the
+     * LAST iteration (pushes append; ids only grow) → `/changes`. Azure gives
+     * no per-file line counts, so additions/deletions stay 0 — the map uses
+     * them only for display and edge weight, not correctness.
+     */
+    async listPullRequestFiles(pr, opts): Promise<PullRequestFileListing> {
+      const iterationsRes = await client.request(`${prBase(pr.number)}/iterations`, {
+        method: "GET",
+      });
+      const iterations = IterationsSchema.safeParse(iterationsRes);
+      if (!iterations.success || iterations.data.value.length === 0) {
+        throw new Error("azure devops pull request had no iterations to list changes for");
+      }
+      const iterationId = Math.max(...iterations.data.value.map((i) => i.id));
+
+      // Fetch one past the cap so "there was more" is observable rather than
+      // inferred from a hasMore flag the api-version may not return.
+      const changesRes = await client.request(
+        `${prBase(pr.number)}/iterations/${iterationId}/changes?$top=${opts.maxFiles + 1}`,
+        { method: "GET" },
+      );
+      const changes = IterationChangesSchema.safeParse(changesRes);
+      if (!changes.success) {
+        throw new Error("azure devops pull request changes response was malformed");
+      }
+
+      const entries = changes.data.changeEntries;
+      const truncated = entries.length > opts.maxFiles || changes.data.hasMore === true;
+      const files: PullRequestFile[] = [];
+      for (const entry of entries) {
+        if (files.length >= opts.maxFiles) break;
+        const item = entry.item;
+        // Folder entries exist in the change list but aren't files; entries
+        // without a path (a bare-string `item`, the PR root itself) carry
+        // nothing to map.
+        if (typeof item !== "object" || item === null || item.isFolder || !item.path) continue;
+        const status = statusForChangeType(entry.changeType);
+        // For a rename, Azure reports the old path on the ENTRY
+        // (`sourceServerItem`, `originalPath` as fallback) — `item.path` is
+        // the NEW path.
+        const previousPath =
+          status === "renamed"
+            ? (entry.sourceServerItem ?? entry.originalPath)?.replace(/^\//, "")
+            : undefined;
+        files.push({
+          path: stripLeadingSlash(item.path),
+          ...(previousPath ? { previousPath } : {}),
+          status,
+          additions: 0,
+          deletions: 0,
+          // diffUrl left unset: the Azure files view has no reliable
+          // per-file anchor to deep-link to.
+        });
+      }
+      return { files, prUrl: prWebUrl(pr.number), truncated };
+    },
+
+    /**
+     * File contents at a commit via the items endpoint. `path` arrives
+     * WITHOUT the leading slash the API expects, and goes in the query string
+     * — `client.request` re-parses the URL, so interpolating it into the path
+     * segment would mangle `/` and spaces.
+     */
+    async readFileAtRef(path, ref): Promise<string | null> {
+      const apiPath = path.startsWith("/") ? path : `/${path}`;
+      const url =
+        `${client.orgUrl}/${encodeURIComponent(projectName)}/_apis/git/repositories/` +
+        `${encodeURIComponent(repositoryId)}/items` +
+        `?path=${encodeURIComponent(apiPath)}` +
+        `&versionDescriptor.version=${encodeURIComponent(ref)}` +
+        `&versionDescriptor.versionType=commit` +
+        `&includeContent=true`;
+      try {
+        const res = await client.request(url, { method: "GET" });
+        const parsed = ItemContentSchema.safeParse(res);
+        // A 200 without `content` means the path resolved to a folder or a
+        // file Azure won't inline — nothing readable, which is not an error.
+        return parsed.success ? parsed.data.content : null;
+      } catch (err) {
+        // The file not existing at that ref (renamed, deleted on head, bad
+        // sha) is an expected miss, not a failure.
+        if (err instanceof AzureDevopsApiError && err.status === 404) return null;
+        throw err;
+      }
     },
   };
 }

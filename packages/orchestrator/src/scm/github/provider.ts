@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
+import type { ReviewMapFileStatus } from "@opencara/shared";
 import { isSelfReviewError } from "../../github/errors.js";
 import type {
   AddCommentResult,
   AddLabelResult,
   PostReviewResult,
+  PullRequestFile,
+  PullRequestFileListing,
   PullRequestState,
   ScmProvider,
   ScmPullRequestRef,
@@ -121,6 +125,70 @@ export function createGithubProvider(opts: GithubProviderOptions): ScmProvider {
           .map((l) => l.name)
           .filter((n): n is string => typeof n === "string"),
       };
+    },
+
+    async listPullRequestFiles(pr, opts): Promise<PullRequestFileListing> {
+      const prUrl = `https://github.com/${owner}/${repo}/pull/${pr.number}`;
+      // GitHub anchors each file in the PR file view by the sha256 of its
+      // path, so a deep link is derivable without a second API call.
+      const diffAnchor = (path: string) =>
+        `${prUrl}/files#diff-${createHash("sha256").update(path).digest("hex")}`;
+      const statusMap: Record<string, ReviewMapFileStatus> = {
+        added: "added",
+        removed: "removed",
+        renamed: "renamed",
+        copied: "added",
+      };
+      const files: PullRequestFile[] = [];
+      let truncated = false;
+      await octokit.paginate(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        { owner, repo, pull_number: pr.number, per_page: 100 },
+        (res, done) => {
+          const batch = res.data as Array<Record<string, unknown>>;
+          let i = 0;
+          while (i < batch.length && files.length < opts.maxFiles) {
+            const f = batch[i++]!;
+            const path = String(f.filename);
+            files.push({
+              path,
+              ...(f.previous_filename
+                ? { previousPath: String(f.previous_filename) }
+                : {}),
+              status: statusMap[String(f.status)] ?? "modified",
+              additions: Number(f.additions ?? 0),
+              deletions: Number(f.deletions ?? 0),
+              diffUrl: diffAnchor(path),
+            });
+          }
+          if (files.length >= opts.maxFiles) {
+            // Reaching the cap exactly is only "truncated" when more files
+            // actually exist — leftovers in this page or a rel=next link.
+            const link = String(
+              (res.headers as Record<string, unknown> | undefined)?.link ?? "",
+            );
+            truncated = i < batch.length || /rel="next"/.test(link);
+            // Stop paginating — the map builder caps the listing anyway and
+            // the remaining pages would only cost rate limit.
+            done();
+          }
+          return [];
+        },
+      );
+      return { files, prUrl, truncated };
+    },
+
+    async readFileAtRef(path, ref): Promise<string | null> {
+      try {
+        const res = await octokit.request(
+          "GET /repos/{owner}/{repo}/contents/{path}",
+          { owner, repo, path, ref, mediaType: { format: "raw" } },
+        );
+        return String(res.data);
+      } catch (err) {
+        if ((err as { status?: number }).status === 404) return null;
+        throw err;
+      }
     },
   };
 }

@@ -66,6 +66,10 @@ const IssueDetailPage = lazy(() =>
     default: m.IssueDetailPage,
   })),
 );
+// Review maps are linked from public GitHub review bodies — no auth.
+const ReviewMapPage = lazy(() =>
+  import("@/pages/ReviewMapPage").then((m) => ({ default: m.ReviewMapPage })),
+);
 
 export function App() {
   return (
@@ -75,6 +79,7 @@ export function App() {
     <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/review-maps/:id" element={<ReviewMapPage />} />
         <Route
           element={
             <AuthGate>

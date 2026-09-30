@@ -17,6 +17,8 @@
  * implementations to reconcile would be guesswork.
  */
 
+import type { ReviewMapFileStatus } from "@opencara/shared";
+
 /** Matches the `platform` pg enum in db/schema.ts. */
 export type PlatformId = "github" | "azure_devops";
 
@@ -71,6 +73,26 @@ export interface PullRequestState {
   labels: string[];
 }
 
+/** One entry of a PR's changed-file listing, for review-map building. */
+export interface PullRequestFile {
+  path: string;
+  /** For renamed files: the path before the rename. */
+  previousPath?: string;
+  status: ReviewMapFileStatus;
+  additions: number;
+  deletions: number;
+  /** Deep link into the PR's platform-native file view. */
+  diffUrl?: string;
+}
+
+export interface PullRequestFileListing {
+  files: PullRequestFile[];
+  /** Browser URL of the pull request on the platform. */
+  prUrl: string;
+  /** True when `opts.maxFiles` cut the listing short. */
+  truncated: boolean;
+}
+
 /**
  * A provider instance is bound to one repository and one set of credentials —
  * construct it per flow-run step via the registry, do not cache it across
@@ -98,4 +120,21 @@ export interface ScmProvider {
 
   /** Re-read a pull request's open/merged state and labels. */
   getPullRequestState(prNumber: number): Promise<PullRequestState>;
+
+  /**
+   * List a pull request's changed files with churn stats, up to `maxFiles`.
+   * Optional: providers that cannot supply this simply skip the review map
+   * (Azure DevOps has no implementation yet).
+   */
+  listPullRequestFiles?(
+    pr: ScmPullRequestRef,
+    opts: { maxFiles: number },
+  ): Promise<PullRequestFileListing>;
+
+  /**
+   * Read a file's contents at a git ref. Optional for the same reason as
+   * `listPullRequestFiles` — review maps need contents to resolve dependency
+   * edges. Returns null on 404 / not-found; other errors throw.
+   */
+  readFileAtRef?(path: string, ref: string): Promise<string | null>;
 }

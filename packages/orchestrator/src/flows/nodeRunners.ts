@@ -39,6 +39,9 @@ import { parseReviewVerdict } from "../agents/verdict.js";
 import { reviewBodyForPublication } from "../agents/reviewBody.js";
 import { providerFor } from "../scm/registry.js";
 import type { PullRequestState } from "../scm/types.js";
+import { attachReviewMap } from "../reviewMaps/publish.js";
+import type { AttachReviewMapOpts, AttachedReviewMap } from "../reviewMaps/publish.js";
+import { setReviewMapReviewUrl } from "../reviewMaps/store.js";
 import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
@@ -137,6 +140,15 @@ export interface NodeRunCtx {
   hasDownstreamPostReview?: boolean;
   /** True for an operator-triggered rerun from the flow detail page. */
   rerun?: boolean;
+  /**
+   * Test seam for the review-map attach step in `scm.post_review` — the
+   * default is the real `attachReviewMap`; tests substitute a stub.
+   */
+  reviewMaps?: {
+    attach?: (
+      opts: AttachReviewMapOpts,
+    ) => Promise<AttachedReviewMap | null>;
+  };
 }
 
 /** Installation id for a run already known to be GitHub-backed. */
@@ -1844,6 +1856,32 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // otherwise a wall of indistinguishable bot reviews.
       const reviewContent = parsed?.bodyWithoutVerdict ?? publicationBody;
       const reviewBody = withReviewAuthor(reviewContent, ctx.previousAgentName);
+      // Review map: build + persist the changed-file dependency graph and
+      // append its SVG link to the body. Strictly best-effort — the real
+      // attach swallows every error internally, and the defensive catch here
+      // covers injected stubs, so a map failure can never fail the review.
+      let map: AttachedReviewMap | null = null;
+      if (node.config.reviewMap !== false) {
+        const attach = ctx.reviewMaps?.attach ?? attachReviewMap;
+        try {
+          map = await attach({
+            db: ctx.db,
+            provider,
+            projectId: ctx.projectId,
+            flowRunId: ctx.flowRunId,
+            pr: { number: pr.number, headSha: pr.head.sha },
+            repo: `${ctx.project.owner}/${ctx.project.name}`,
+            reviewMarkdown: reviewContent,
+            verdict: event,
+            reviewer: ctx.previousAgentName,
+            publicBaseUrl: ctx.publicBaseUrl,
+          });
+        } catch (err) {
+          console.warn(
+            `[review-map] attach failed: ${String((err as Error).message ?? err)}`,
+          );
+        }
+      }
       // The self-review downgrade that used to live here is now the GitHub
       // provider's concern (scm/github/provider.ts) — it is a quirk of
       // GitHub's review API, not flow-engine logic. `downgradedFrom` comes
@@ -1851,13 +1889,25 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       const res = await provider.postReview(
         { number: pr.number, headSha: pr.head.sha },
         event,
-        reviewBody,
+        map ? `${reviewBody}\n\n${map.markdown}` : reviewBody,
       );
+      // Backfill the posted-review URL into the stored graph; warn-only, the
+      // map page just omits its "View review" link without it.
+      if (map) {
+        try {
+          await setReviewMapReviewUrl(ctx.db, map.id, res.htmlUrl);
+        } catch (err) {
+          console.warn(
+            `[review-map] review-url backfill failed for ${map.id}: ${String((err as Error).message ?? err)}`,
+          );
+        }
+      }
       return {
         output: {
           reviewId: res.reviewId,
           htmlUrl: res.htmlUrl,
           ...(res.downgradedFrom ? { downgradedFrom: res.downgradedFrom } : {}),
+          ...(map ? { reviewMapUrl: map.pageUrl } : {}),
         },
       };
     }
