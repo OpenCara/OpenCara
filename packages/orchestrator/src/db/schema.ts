@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { ReviewMapGraph } from "@opencara/shared";
 import {
   pgTable,
   text,
@@ -1070,5 +1071,32 @@ export const agentRunLogs = pgTable(
   },
   (t) => ({
     runSeqUq: uniqueIndex("agent_run_logs_run_seq_uq").on(t.agentRunId, t.seq),
+  }),
+);
+
+// Review maps persist the dependency-graph snapshot posted alongside a PR
+// review. Links live in the GitHub review body forever, so flow_run_id is
+// deliberately NOT a foreign key — flow_runs rows are pruned after 7 days
+// (DATA_RETENTION_DAYS) and a cascade would orphan the public page.
+export const reviewMaps = pgTable(
+  "review_maps",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    flowRunId: text("flow_run_id"),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    graph: jsonb("graph").$type<ReviewMapGraph>().notNull(),
+    reviewUrl: text("review_url"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectPrIdx: index("review_maps_project_pr_idx").on(
+      t.projectId,
+      t.prNumber,
+      t.createdAt.desc(),
+    ),
   }),
 );

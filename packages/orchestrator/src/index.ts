@@ -30,6 +30,7 @@ import { flowTemplateRoutes } from "./routes/api/flowTemplates.js";
 import { kanbanRoutes } from "./routes/api/kanban.js";
 import { pmRoutes } from "./routes/api/pm.js";
 import { deviceWsHandler } from "./routes/api/devices/ws.js";
+import { reviewMapRoutes } from "./routes/reviewMaps.js";
 import { mountStatic } from "./static.js";
 import { FlowEngine } from "./flows/engine.js";
 import { seedBuiltinFlowsForAllProjects } from "./flows/builtin.js";
@@ -134,6 +135,10 @@ app.use("*", async (c, next) => {
 });
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+// Review maps are public (id is a capability token in the review body), so
+// they mount unconditionally — NOT inside the auth-gated /api block below.
+app.route("/api/review-maps", reviewMapRoutes({ db }));
 
 const githubApp = config.github
   ? createGithubAppClient(config.github, config.GITHUB_WEBHOOK_SECRET)

@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AzureDevopsAuthError, type AzureDevopsClient } from "../../azure/client.js";
+import {
+  AzureDevopsApiError,
+  AzureDevopsAuthError,
+  type AzureDevopsClient,
+} from "../../azure/client.js";
 import { createAzureProvider, voteForReviewEvent, AZDO_VOTE } from "../azure/provider.js";
 
 interface Recorded {
@@ -302,5 +306,179 @@ describe("azure provider getPullRequestState", () => {
       call.url.endsWith("/labels") ? { value: [] } : { status: "abandoned" },
     );
     assert.deepEqual(await abandoned.provider.getPullRequestState(1), { state: "closed", merged: false, labels: [] });
+  });
+});
+
+describe("azure provider listPullRequestFiles", () => {
+  /**
+   * Iterations deliberately arrive out of order: the current iteration is the
+   * MAX id, not whatever the API happens to return last.
+   */
+  const changesResponder = (call: Recorded) => {
+    if (call.url.endsWith("/iterations")) {
+      return { value: [{ id: 3 }, { id: 7 }, { id: 5 }] };
+    }
+    if (call.url.includes("/iterations/7/changes")) {
+      return {
+        changeEntries: [
+          { changeId: 1, changeType: "add", item: { objectId: "o1", path: "/src/new.ts" } },
+          { changeId: 2, changeType: "edit", item: { objectId: "o2", path: "/src/edited.ts" } },
+          { changeId: 3, changeType: "delete", item: { objectId: "o3", path: "/src/gone.ts" } },
+          {
+            changeId: 4,
+            // The API may combine flags: a renamed file that was also edited.
+            changeType: "rename,edit",
+            sourceServerItem: "/src/oldname.ts",
+            item: { objectId: "o4", path: "/src/newname.ts" },
+          },
+          // Directory entries appear in the change list and must be skipped.
+          { changeId: 5, changeType: "add", item: { path: "/src/dir", isFolder: true } },
+        ],
+      };
+    }
+    throw new Error(`unexpected call ${call.url}`);
+  };
+
+  it("maps change types, strips the leading slash, and skips folders", async () => {
+    const { provider } = providerWith(changesResponder);
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 100 });
+
+    assert.deepEqual(
+      listing.files.map((f) => [f.path, f.status]),
+      [
+        ["src/new.ts", "added"],
+        ["src/edited.ts", "modified"],
+        ["src/gone.ts", "removed"],
+        ["src/newname.ts", "renamed"],
+      ],
+    );
+    // Rename carries the OLD path from sourceServerItem, slash stripped.
+    assert.equal(listing.files[3]!.previousPath, "src/oldname.ts");
+    // Azure reports no per-file line counts.
+    assert.ok(listing.files.every((f) => f.additions === 0 && f.deletions === 0));
+    assert.equal(listing.truncated, false);
+  });
+
+  it("queries the last (highest) iteration and overfetches $top by one", async () => {
+    const { provider, calls } = providerWith(changesResponder);
+    await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+
+    const changes = calls.find((c) => c.url.includes("/changes"));
+    assert.ok(changes, "expected a changes call");
+    assert.ok(changes.url.includes("/iterations/7/changes"));
+    assert.ok(changes.url.includes("$top=3"));
+  });
+
+  it("marks the listing truncated and trims when more files exist than maxFiles", async () => {
+    const { provider } = providerWith(changesResponder);
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+
+    assert.equal(listing.truncated, true);
+    assert.equal(listing.files.length, 2);
+  });
+
+  it("also reports truncated when the response carries hasMore", async () => {
+    const { provider } = providerWith((call) => {
+      if (call.url.endsWith("/iterations")) return { value: [{ id: 1 }] };
+      return {
+        changeEntries: [
+          { changeType: "edit", item: { path: "/a.ts" } },
+          { changeType: "edit", item: { path: "/b.ts" } },
+        ],
+        hasMore: true,
+      };
+    });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 2 });
+    assert.equal(listing.truncated, true);
+    assert.equal(listing.files.length, 2);
+  });
+
+  it("builds a browsable prUrl from the repo NAME, not the guid", async () => {
+    const { provider } = providerWith(changesResponder);
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 100 });
+    assert.equal(
+      listing.prUrl,
+      "https://dev.azure.com/contoso/Team/_git/widgets/pullrequest/42",
+    );
+  });
+
+  it("uses originalPath as the rename fallback when sourceServerItem is absent", async () => {
+    const { provider } = providerWith((call) => {
+      if (call.url.endsWith("/iterations")) return { value: [{ id: 1 }] };
+      return {
+        changeEntries: [
+          { changeType: "rename", originalPath: "/lib/before.ts", item: { path: "/lib/after.ts" } },
+        ],
+      };
+    });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 100 });
+    assert.deepEqual(listing.files[0], {
+      path: "lib/after.ts",
+      previousPath: "lib/before.ts",
+      status: "renamed",
+      additions: 0,
+      deletions: 0,
+    });
+  });
+
+  // "undelete" contains "delete" as a substring — the mapping must split on
+  // commas and match tokens, or a restore would read as a removal.
+  it("does not mistake an undelete change for a removal", async () => {
+    const { provider } = providerWith((call) => {
+      if (call.url.endsWith("/iterations")) return { value: [{ id: 1 }] };
+      return {
+        changeEntries: [{ changeType: "undelete", item: { path: "/src/restored.ts" } }],
+      };
+    });
+    const listing = await provider.listPullRequestFiles!(PR, { maxFiles: 100 });
+    assert.equal(listing.files[0]!.status, "modified");
+  });
+
+  it("fails when the pull request has no iterations", async () => {
+    const { provider } = providerWith(() => ({ value: [] }));
+    await assert.rejects(provider.listPullRequestFiles!(PR, { maxFiles: 10 }), /no iterations/);
+  });
+
+  it("propagates the API error when the PR is missing", async () => {
+    const { provider } = providerWith(() => {
+      throw new AzureDevopsApiError("PR not found", 404, "https://dev.azure.com/x");
+    });
+    await assert.rejects(provider.listPullRequestFiles!(PR, { maxFiles: 10 }), /PR not found/);
+  });
+});
+
+describe("azure provider readFileAtRef", () => {
+  it("returns the file content at the given commit", async () => {
+    const { provider, calls } = providerWith(() => ({ content: "export const x = 1;" }));
+    const out = await provider.readFileAtRef!("src/a.ts", "sha9");
+
+    assert.equal(out, "export const x = 1;");
+    const url = calls[0]!.url;
+    assert.ok(url.includes("/_apis/git/repositories/repo-guid/items"));
+    // The path arrives without a leading slash; the API wants "/src/a.ts"
+    // encoded in the query string.
+    assert.ok(url.includes(`path=${encodeURIComponent("/src/a.ts")}`));
+    assert.ok(url.includes("versionDescriptor.version=sha9"));
+    assert.ok(url.includes("versionDescriptor.versionType=commit"));
+    assert.ok(url.includes("includeContent=true"));
+  });
+
+  it("returns null on a 404 instead of throwing", async () => {
+    const { provider } = providerWith(() => {
+      throw new AzureDevopsApiError("not found", 404, "https://dev.azure.com/x");
+    });
+    assert.equal(await provider.readFileAtRef!("gone.ts", "sha"), null);
+  });
+
+  it("returns null when the response carries no content (folder, binary)", async () => {
+    const { provider } = providerWith(() => ({ objectId: "abc" }));
+    assert.equal(await provider.readFileAtRef!("src", "sha"), null);
+  });
+
+  it("propagates non-404 errors", async () => {
+    const { provider } = providerWith(() => {
+      throw new AzureDevopsApiError("boom", 500, "https://dev.azure.com/x");
+    });
+    await assert.rejects(provider.readFileAtRef!("x.ts", "sha"), /boom/);
   });
 });

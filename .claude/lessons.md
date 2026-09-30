@@ -210,6 +210,10 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Multi-platform UI
 
+### [hits: 1] Web theme CSS vars are bare HSL components — wrap in `hsl(...)` for inline styles
+- `apps/web/src/styles.css` defines `--primary: 222.2 47.4% 11.2%` (old shadcn format). Tailwind classes like `bg-primary` work, but an inline `stroke: "var(--primary)"` is an invalid color that fails silently (review-map React Flow edges rendered with no stroke, only the arrowheads showed). Use `hsl(var(--primary))`.
+- Related React Flow gotcha: nodes sized only via `style.width/height` show up empty in `<MiniMap>`. Set `width`/`height` on the node object itself. Layering uses the node-level `zIndex` prop, not `style.zIndex`.
+
 ### [hits: 1] `api.get<T>()` in the web app is a type ASSERTION — a client type that disagrees with the server fails at runtime, never at build
 - `apps/web/src/lib/api.ts` casts the parsed JSON to `T`. Nothing validates it. So if the server starts returning `installation: null` and `queries.ts` still declares `installation: InstallationSummary`, `tsc` is perfectly happy and the page throws `Cannot read properties of null` in front of the user.
 - Hit on 2026-08-12 making Azure DevOps projects visible: the backend legitimately returned `installation: null` for them, `ProjectDetailPage` dereferenced `inst.suspendedAt` and `inst.accountLogin`, and the build was clean. The bug was only reachable *because* the same change made the page reachable.
@@ -292,7 +296,7 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 
 ## Architecture quirks
 
-### [hits: 2] nodeRunners.ts contains intentional NUL bytes — grep/rg treat it as binary
+### [hits: 3] nodeRunners.ts contains intentional NUL bytes — grep/rg treat it as binary
 - `packages/orchestrator/src/flows/nodeRunners.ts` uses literal `\x00` sentinel bytes in string literals (`"\x00ANYPATH\x00"` etc.) for glob-to-regex normalization. They are NOT corruption; the file compiles fine.
 - Consequence: plain `grep`/`rg` silently return nothing (or "binary file matches") on this file. Searches that "find no matches" there are lying.
 - Use `rg -na` / `grep -a` when searching it, and don't "clean up" the bytes.

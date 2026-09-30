@@ -167,3 +167,88 @@ describe("actionRunner scm.post_review stub guard", () => {
     assert.equal(requests[0]!.params.body, body);
   });
 });
+
+describe("actionRunner scm.post_review review map", () => {
+  const map = {
+    id: "map-id-1",
+    pageUrl: "https://opencara.example/review-maps/map-id-1",
+    imageUrl: "https://opencara.example/api/review-maps/map-id-1/map.svg",
+    markdown: "---\n\n[![map](img)](page)",
+  };
+
+  it("appends the map markdown and reports reviewMapUrl when attach succeeds", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nShip it — clean diff.",
+      "codex",
+    );
+    let sawOpts: unknown;
+    ctx.reviewMaps = {
+      attach: async (opts) => {
+        sawOpts = opts;
+        return map;
+      },
+    };
+    const result = await actionRunner(ctx, postReviewNode);
+
+    assert.equal(requests.length, 1);
+    assert.equal(
+      requests[0]!.params.body,
+      `_Reviewed by **codex**_\n\nShip it — clean diff.\n\n${map.markdown}`,
+    );
+    assert.equal(
+      (result.output as { reviewMapUrl?: string }).reviewMapUrl,
+      map.pageUrl,
+    );
+    // The attach call is fed the review content (verdict stripped), not the
+    // author-stamped body.
+    const opts = sawOpts as { reviewMarkdown: string; verdict: string };
+    assert.equal(opts.reviewMarkdown, "Ship it — clean diff.");
+    assert.equal(opts.verdict, "APPROVE");
+  });
+
+  it("posts the body unchanged when attach returns null", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nShip it — clean diff.",
+    );
+    ctx.reviewMaps = { attach: async () => null };
+    const result = await actionRunner(ctx, postReviewNode);
+    assert.equal(requests[0]!.params.body, "Ship it — clean diff.");
+    assert.equal(
+      (result.output as { reviewMapUrl?: string }).reviewMapUrl,
+      undefined,
+    );
+  });
+
+  it("still posts when attach throws", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nShip it — clean diff.",
+    );
+    ctx.reviewMaps = {
+      attach: async () => {
+        throw new Error("db on fire");
+      },
+    };
+    await actionRunner(ctx, postReviewNode);
+    assert.equal(requests[0]!.params.body, "Ship it — clean diff.");
+  });
+
+  it("skips attach entirely when reviewMap is false", async () => {
+    const { ctx, requests } = ctxForPostReview(
+      "verdict: approve\n\nShip it — clean diff.",
+    );
+    let called = false;
+    ctx.reviewMaps = {
+      attach: async () => {
+        called = true;
+        return map;
+      },
+    };
+    const node = {
+      ...postReviewNode,
+      config: { event: "COMMENT" as const, reviewMap: false },
+    };
+    await actionRunner(ctx, node as ActionNode);
+    assert.equal(called, false);
+    assert.equal(requests[0]!.params.body, "Ship it — clean diff.");
+  });
+});

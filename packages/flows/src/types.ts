@@ -332,6 +332,10 @@ export const ActionNodeSchema = z.discriminatedUnion("kind", [
       // has no review-event concept: the provider maps APPROVE →
       // reviewer vote 10, REQUEST_CHANGES → -10, COMMENT → thread only.
       event: z.enum(["COMMENT", "APPROVE", "REQUEST_CHANGES"]).default("COMMENT"),
+      // `false` opts out of the annotated review-map link appended to the
+      // posted body. Optional (not .default) so existing typed flow literals
+      // keep compiling.
+      reviewMap: z.boolean().optional(),
     }),
   }),
   z.object({

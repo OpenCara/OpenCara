@@ -85,12 +85,16 @@ export function NodeEditor({
       {selectedNode && selectedNode.kind === "schedule.cron" && (
         <ScheduleCronTriggerPanel scope={scope} node={selectedNode} onClose={onClose} />
       )}
+      {selectedNode && selectedNode.kind === "scm.post_review" && (
+        <PostReviewPanel scope={scope} node={selectedNode} onClose={onClose} />
+      )}
       {selectedNode &&
         selectedNode.kind !== "agent" &&
         selectedNode.kind !== "scm.pull_request" &&
         selectedNode.kind !== "scm.pull_request_review" &&
         selectedNode.kind !== "scm.board_item" &&
-        selectedNode.kind !== "schedule.cron" && (
+        selectedNode.kind !== "schedule.cron" &&
+        selectedNode.kind !== "scm.post_review" && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{selectedNode.kind}</CardTitle>
@@ -1894,3 +1898,79 @@ function parseList(text: string): string[] {
     .filter(Boolean);
 }
 
+
+/* ─── Post-review action panel ──────────────────────────────────── */
+
+interface PostReviewPanelProps {
+  scope: EditorScope;
+  node: NodeEditorNode;
+  onClose: () => void;
+}
+
+function PostReviewPanel({ scope, node, onClose }: PostReviewPanelProps) {
+  // `reviewMap` is optional in the schema: absent means enabled, so the
+  // checkbox writes `false` to disable and DELETES the key to re-enable —
+  // the saved JSON stays minimal instead of accumulating `reviewMap: true`.
+  const cfg = (node.config ?? {}) as { reviewMap?: boolean };
+  const [enabled, setEnabled] = useState(cfg.reviewMap !== false);
+  const set = useSetNodeConfig(scope);
+
+  useEffect(() => {
+    setEnabled(cfg.reviewMap !== false);
+  }, [node.id, cfg.reviewMap]);
+
+  const toggle = (checked: boolean) => {
+    setEnabled(checked);
+    // Other config keys (event) are preserved: the PATCH replaces
+    // node.config wholesale.
+    const next: Record<string, unknown> = { ...(node.config ?? {}) };
+    if (checked) {
+      delete next.reviewMap;
+    } else {
+      next.reviewMap = false;
+    }
+    set.mutate({ nodeId: node.id, config: next });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Post review</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Publishes the upstream agent's output as a PR review. The{" "}
+              <code className="font-mono">verdict:</code> line sets the review
+              event and is stripped from the body.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={set.isPending}
+            onChange={(e) => toggle(e.target.checked)}
+            className="size-4 rounded border-input"
+          />
+          <span className="font-medium">Attach a review map</span>
+          <span className="text-xs text-muted-foreground">
+            Appends a map of the changed files — grouped by directory, with
+            dependency edges and per-file findings — as an image linking to an
+            interactive page.
+          </span>
+        </label>
+        {set.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(set.error as Error).message ?? "Save failed"}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
