@@ -17,6 +17,12 @@ build
 .git
 .github
 
+# agent tooling dirs — skills/lessons and local linked worktrees
+# (.claude/worktrees holds full nested checkouts, hundreds of MB)
+.claude
+.devin
+.agents
+
 # env + secrets (injected at runtime on the server, never baked in)
 .env
 .env.*
