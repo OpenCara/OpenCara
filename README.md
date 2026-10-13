@@ -245,7 +245,7 @@ Models and credentials come from pi: the device builds pi's model runtime from `
 
 | Provider | Install on the device | Models | Credentials |
 |---|---|---|---|
-| Command Code (official) | `pi install npm:@commandcode/pi-commandcode-provider` | `command-code/<id>` | `COMMAND_CODE_API_KEY` in the agent's env, or `/login command-code` |
+| Command Code | `pi install npm:pi-commandcode-provider` | `commandcode/<id>` (e.g. `xiaomi/mimo-v2.5-pro`) | `COMMAND_CODE_API_KEY` in the agent's env, `/login` → Command Code, or the `commandcode` entry in `auth.json` |
 | Devin | `pi install npm:pi-devin-local` | `devin/<family>`; the thinking level picks the variant | the device's Devin CLI login, registered with `/login devin` |
 | Cursor | `pi install npm:pi-cursor-reins` | `cursor/<id>` (e.g. `grok-4.7-max`, `claude-opus-5-5-max`) | `/login cursor` |
 | Antigravity | `pi install npm:pi-provider-antigravity` | `antigravity/<id>` (e.g. `gemini-3.8-flash`) | `/login antigravity` |
