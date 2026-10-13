@@ -96,6 +96,12 @@ Project-specific gotchas and conventions discovered empirically. Cross-project l
 - Issue triggers inject `OPENCARA_ISSUE_NUMBER`. The two sets don't overlap.
 - A flow cloned from an issue-implement template into a PR context will fail at template-var expansion (`{{OPENCARA_ISSUE_NUMBER}} not in run env`). Update `branchName` / `--from-branch` template vars to a PR-trigger one (e.g. `opencara/pr-{{OPENCARA_PR_NUMBER}}`).
 
+### [hits: 1] PR-triggered fix runs get NO commit/push contract — agent exits 0, work is deleted with the worktree
+- 2026-09-30: ShiningPie PR 115 review-fix run `01M3RPMK1KHZ5JE7S6PPTKVMH0` (devin swe-2, 45min) fixed everything, validated, wrote a summary — and never ran `git commit`/`git push`. Remote `feat/weapon-animations` stayed at the pre-run SHA; worktree teardown deleted the uncommitted work. Unrecoverable.
+- Why: `buildIssueImplementContractSkill` (`flows/skills/issueImplementContract.ts`, injected in `nodeRunners.ts:1184`) is gated on `ctx.issueContext?.stdin.issue?.number` — PR-review triggers carry prContext, not issueContext, so `implementSkill` is null. Meanwhile the "Fix PR Review Issues" prompt (DB `prompts` table, id `01M2DXHV08FTK1S7T9DAAXDVE7`) says "Do not commit, push ... unless the surrounding workflow explicitly requests it" — and nothing does.
+- Diagnose: grep the run's `agent_run_logs` for `command:` entries containing `git push`/`git commit` — absence = silent no-ship; the run status still says `succeeded`. Confirm via `git ls-remote` / fetch the PR head and compare to `spec.env.OPENCARA_PR_HEAD_SHA`.
+- Fix options: (a) code — a `prReviewFixContract` skill gated on `prContext + worktree` (commit+push only, no `pr create`); (b) no-code — edit the DB prompt to require `git push -u origin "$OPENCARA_WORKTREE_BRANCH"`.
+
 ## Deploy / restart
 
 ### [hits: 1] Prod provider keys must live in packages/orchestrator/.env, NOT only the launching shell
