@@ -318,7 +318,7 @@ export class DevicePool {
       if (dev) dev.inflight.delete(msg.runId);
       this.pending.delete(msg.runId);
       // Surface device-side failures (spawn errors, unhandled throws
-      // inside runAcpJob, etc.) as a synthetic stderr line so they
+      // inside the device runner, etc.) as a synthetic stderr line so they
       // land in agent_run_logs alongside real agent output. Without
       // this, a `done` carrying `errorMessage` resolves the run with
       // exit_code=1 and zero log rows — operators only see the generic
@@ -334,16 +334,15 @@ export class DevicePool {
         exitCode,
         stdoutCaptured: p.stdoutCaptured.join(""),
         agentHostId: p.agentHostId,
-        acpSessionId: msg.acpSessionId ?? null,
+        conversationId: msg.conversationId ?? null,
       });
       return;
     }
     if (msg.type === "agent-call-request") {
-      // Request/response path used by the ACP/MCP cutover. Same scope
-      // checks and apply helpers as the legacy `agent-call`, but we send
-      // an `agent-call-result` back over the WS so the CLI device can
-      // forward it (via IPC) to opencara-mcp, which returns it as the
-      // tool result to the agent.
+      // The device's opencara tools call back here. Same scope checks and
+      // apply helpers as the legacy `agent-call`, but we send an
+      // `agent-call-result` back over the WS so the device can return it
+      // as the tool result to the agent.
       const p = this.pending.get(msg.runId);
       if (!p) {
         // No pending dispatch — likely a late frame after the run ended.

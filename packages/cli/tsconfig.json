@@ -3,7 +3,8 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"]
+    "types": ["node"],
+    "lib": ["ES2023", "ES2024.Promise"]
   },
   "include": ["src/**/*"],
   "references": [{ "path": "../shared" }]

@@ -1,17 +1,18 @@
 // Per-page chat skills. The chat panel sends a `pageContext.page` discriminator
 // on every turn; the registry below maps it to a builder that returns:
 //   - the markdown the agent sees (a "skill" envelope describing what's
-//     actionable on this page and which opencara MCP tools it can call), and
+//     actionable on this page and which opencara tools it can call), and
 //   - hydrated server-side data injected into the agent's stdin alongside
 //     the user message (so the agent doesn't have to fetch or guess).
 //
-// Auth model: the agent never holds a token. It calls an opencara MCP tool
-// (registered by opencara-mcp / packages/cli/src/mcp/tools.ts); the call
-// crosses an IPC socket to the CLI device, which proxies it to the
-// orchestrator over its already-authed WebSocket connection. New mutating
+// Auth model: the agent never holds a token. It calls an opencara tool the
+// device runner registers on every agent turn; the device proxies the call
+// to the orchestrator over its already-authed WebSocket connection
+// (`agent-call-request`). New mutating
 // kinds need an entry in:
 //   - shared/host-protocol.ts (AgentCallSchema discriminated-union variant)
-//   - cli/src/mcp/tools.ts (TOOLS entry mapping tool name → kind + schema)
+//   - packages/cli/src/runner/opencaraTools.ts (the device's tool definitions:
+//     tool name → kind + schema)
 //   - orchestrator/src/agent-calls/<kind>.ts (server-side handler)
 //   - orchestrator/src/dispatch/devices.ts applyAgentCall switch
 // — and an entry in the per-page builder's skill markdown so the agent knows

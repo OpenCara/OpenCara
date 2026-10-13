@@ -490,7 +490,7 @@ function parseReused(
 
 interface AgentPromptInput {
   agentName?: string;
-  agentKind?: string;
+  agentModel?: string;
   systemPromptMd?: string;
   injectedSkills?: Array<{ name: string; instructions: string }>;
 }
@@ -502,7 +502,7 @@ interface AgentPromptInput {
 // prompt field is one edit, not two.
 const PROMPT_FIELD_KEYS = [
   "agentName",
-  "agentKind",
+  "agentModel",
   "systemPromptMd",
   "injectedSkills",
 ] as const;
@@ -512,7 +512,7 @@ function parseAgentPrompt(inputJson: unknown): AgentPromptInput | null {
   const o = inputJson as Record<string, unknown>;
   const out: AgentPromptInput = {};
   if (typeof o.agentName === "string") out.agentName = o.agentName;
-  if (typeof o.agentKind === "string") out.agentKind = o.agentKind;
+  if (typeof o.agentModel === "string") out.agentModel = o.agentModel;
   if (typeof o.systemPromptMd === "string") out.systemPromptMd = o.systemPromptMd;
   if (Array.isArray(o.injectedSkills)) {
     out.injectedSkills = o.injectedSkills
@@ -543,7 +543,7 @@ function AgentPromptPanel({ inputJson }: { inputJson: unknown }) {
   const skills = prompt.injectedSkills ?? [];
   return (
     <div className="space-y-3">
-      {(prompt.agentName || prompt.agentKind) && (
+      {(prompt.agentName || prompt.agentModel) && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="uppercase tracking-wide text-muted-foreground">
             Agent
@@ -551,9 +551,9 @@ function AgentPromptPanel({ inputJson }: { inputJson: unknown }) {
           {prompt.agentName && (
             <span className="font-medium text-foreground">{prompt.agentName}</span>
           )}
-          {prompt.agentKind && (
+          {prompt.agentModel && (
             <Badge variant="outline" className="font-mono">
-              {prompt.agentKind}
+              {prompt.agentModel}
             </Badge>
           )}
         </div>

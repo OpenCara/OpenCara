@@ -11,145 +11,104 @@ export const AgentRunStatusSchema = z.enum([
 export type AgentRunStatus = z.infer<typeof AgentRunStatusSchema>;
 
 /**
- * One prior turn in a chat conversation. Replayed into the ACP prompt
- * when the agent doesn't support session resumption (or we haven't wired
- * persistence yet — see #29).
+ * One prior turn of a chat conversation. The device replays these into the
+ * opening message only when it has to start a NEW conversation for a chat
+ * that already had turns (its durable conversation lives on another device,
+ * or was pruned); a resumed conversation already holds them.
  */
-export const AcpHistoryTurnSchema = z.object({
+export const HistoryTurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
   text: z.string(),
 });
-export type AcpHistoryTurn = z.infer<typeof AcpHistoryTurnSchema>;
+export type HistoryTurn = z.infer<typeof HistoryTurnSchema>;
 
 /**
  * One image attached to the current chat turn. The chat panel captures
  * these from clipboard paste / drag-and-drop, encodes the raw bytes as
  * base64 (NO `data:` URI prefix — just the payload), and tags the MIME
- * type so the ACP shim can rebuild a provider-native image block.
- *
- * Images ride the live `session/prompt` content on every turn (they are
- * NOT folded into the text-only `history` replay), so a resumed session
- * still receives them as first-class image blocks rather than alt-text.
+ * type. The device hands them to the model as image content of this
+ * turn's message (never folded into the text-only `history` replay).
  */
-export const AcpImageInputSchema = z.object({
+export const ImageInputSchema = z.object({
   /** Base64-encoded image bytes, without the `data:<mime>;base64,` prefix. */
   data: z.string(),
   /** IANA image MIME type, e.g. `image/png`, `image/jpeg`, `image/webp`. */
   mimeType: z.string(),
 });
-export type AcpImageInput = z.infer<typeof AcpImageInputSchema>;
+export type ImageInput = z.infer<typeof ImageInputSchema>;
 
 /**
- * Permission modes accepted by the claude CLI (`--permission-mode`).
- * `plan` is the most useful from the chat panel — the agent drafts an
- * approach but refuses to mutate the workspace. `acceptEdits` /
- * `bypassPermissions` are progressively more permissive. `default`
- * mirrors omitting the flag entirely.
- *
- * Other ACP adapters (codex, opencode) ignore this field today. The
- * device runner logs a debug line on ignore rather than failing the
- * job so per-turn knobs in the panel never break with the wrong
- * adapter selected.
+ * Reasoning levels an agent can run at — pi-ai's `ModelThinkingLevel`. The
+ * device clamps the chosen level to what the selected model supports, so a
+ * level a model lacks degrades instead of failing the run.
  */
-export const AcpPermissionModeSchema = z.enum([
-  "default",
-  "acceptEdits",
-  "plan",
-  "bypassPermissions",
-]);
-export type AcpPermissionMode = z.infer<typeof AcpPermissionModeSchema>;
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly string[]).includes(value);
+}
 
 /**
- * Optional ACP-mode portion of an AgentSpec. When present, the device
- * routes the job through the ACP+MCP path (`packages/cli/src/runner/
- * acpRunner.ts`) instead of the legacy stdin-JSON path. The orchestrator
- * builds this when the chat route's feature flag is on and the agent
- * kind is in the cutover allowlist (codex in #29; rest in #30).
- *
- * Why these fields and not a single `prompt`:
- * - `systemPromptMd` becomes the agent's system prompt — the page skill
- *   markdown that today is buried in the stdin envelope.
- * - `userPromptMd` becomes the `session/prompt` content — just the
- *   user's message for this turn.
- * - `history` (optional) lets the device replay prior turns when the
- *   agent doesn't support `session/load` — fallback path for shims
- *   without resume. The orchestrator sends history if non-empty.
- * - `pageContextJson` mirrors what the legacy path put on stdin — the
- *   agent uses it to ground its responses without re-fetching.
- * - `priorSessionId` (optional) tells the device to call `session/load`
- *   instead of `session/new`, passing this id to the ACP shim. The shim
- *   remaps it onto the underlying CLI's resume mechanism (e.g.
- *   claude-acp passes it as `--session-id <uuid>`). Unset → fresh
- *   session. Used by per-(repo, branch) flow loops to keep the agent's
- *   conversation across iterations.
- * - `permissionMode` (optional) is the per-turn `--permission-mode`
- *   value forwarded to claude-acp. The chat panel exposes this as a
- *   toolbar select + "Plan mode" toggle (which is just a shortcut for
- *   `permissionMode: "plan"`). Unset = the agent's baked-in default,
- *   preserving prior behaviour for flows that haven't opted in.
- * - `instructionsFile` (optional) is a repo-relative path to a
- *   project-level agent instructions file. The orchestrator validated
- *   the setting; the device-side adapter (e.g. claude-acp) resolves it
- *   against the session cwd, stat-checks the file, and either injects
- *   it as the project system prompt or skips silently if it's absent.
- *   When honoured, the adapter ALSO strips its per-kind auto-discovery
- *   (e.g. claude-acp drops `~/.claude/CLAUDE.md`) so one canonical file
- *   becomes the source of truth across agent kinds. Unset = adapter
- *   keeps native discovery (chat / test runs without a worktree, or
- *   projects opting out by clearing the setting). See #130.
- * - `images` (optional) are attachments for THIS turn — clipboard pastes
- *   or dropped files from the chat panel. The device runner appends them
- *   to the `session/prompt` content as image blocks; shims that advertise
- *   `promptCapabilities.image` (e.g. claude-acp) forward them to the
- *   underlying model, others ignore them. See #142.
- * - `model` (optional) is the model the agent should run, e.g.
- *   `volcengine-ark/glm-5.2`. Some adapters (pi-acp) ignore `--model` on
- *   argv and instead advertise the model as an ACP session config option;
- *   the device runner selects it via `session/set_config_option` after
- *   `session/new`. Derived from the agent's `--model`/`-m` arg. Unset =
- *   the adapter's default model. See the pi glm-5.2 case.
- * - `captureThinking` (optional) mirrors the agent row's per-agent switch.
- *   `false` tells the device to DROP `agent_thought_chunk` updates instead
- *   of fencing them into the log, so a reasoning-heavy adapter (omp, pi,
- *   cursor) stops flooding agent_run_logs. Absent = capture, which keeps
- *   older orchestrators (and every non-reasoning adapter) on today's
- *   behaviour. Suppression is at the source: nothing is stored, so it
- *   can't be recovered for a run after the fact.
- * - `thoughtLevel` (optional) is the agent row's reasoning-effort setting
- *   (`thought_level` column), e.g. `low` / `high` / `max`. The device
- *   selects it over ACP `session/set_config_option` when the adapter
- *   advertises a `thought_level`-category option (claude-acp maps it to
- *   `claude --effort`; codex-acp / pi / omp expose their own reasoning
- *   levels). Adapters that advertise no such option ignore it with a log
- *   line, never failing the run. Unset = the adapter's default.
+ * Split an agent's model reference, `<provider>/<modelId>`, at the FIRST
+ * slash: `anthropic/claude-sonnet-5-5` → anthropic + claude-sonnet-5-5,
+ * `openrouter/anthropic/claude-sonnet-5-5` → openrouter + anthropic/…
+ * Provider ids are pi's: the built-in pi-ai providers plus whatever the
+ * device's `~/.pi/agent/models.json` defines. Null when either side is
+ * empty or the reference contains whitespace.
  */
-export const AcpSpecSchema = z.object({
+export function parseModelRef(ref: string): { provider: string; modelId: string } | null {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1 || /\s/.test(ref)) return null;
+  return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) };
+}
+
+/**
+ * The agent turn a job runs on the device (in-process pi-durable runner,
+ * `packages/cli/src/runner/durableRunner.ts`).
+ *
+ * - `model` / `thoughtLevel` / `captureThinking` come from the agent row.
+ *   `captureThinking: false` drops reasoning at the source (no `[think]`
+ *   block reaches the log); absent = capture.
+ * - `systemPromptMd` becomes the conversation's instructions for this turn
+ *   (page skill, flow node prompt, injected contracts).
+ * - `userPromptMd` is this turn's message; `pageContextJson` is prepended to
+ *   it as a fenced JSON block, and `images` ride along as image content.
+ * - `priorConversationId` resumes that durable conversation. Conversations
+ *   are stored on the device that ran them, so callers pin the job there.
+ *   Absent, or unknown to the device → a new conversation seeded with
+ *   `history`.
+ * - `instructionsFile` is a repo-relative project instructions file the
+ *   orchestrator validated; the device reads it from the job's cwd and
+ *   appends it to the instructions, skipping it when absent.
+ */
+export const TurnSpecSchema = z.object({
+  model: z.string(),
+  thoughtLevel: z.enum(THINKING_LEVELS).optional(),
+  captureThinking: z.boolean().optional(),
   systemPromptMd: z.string(),
   userPromptMd: z.string(),
-  history: z.array(AcpHistoryTurnSchema).default([]),
+  history: z.array(HistoryTurnSchema).default([]),
   pageContextJson: z.string().optional(),
-  priorSessionId: z.string().optional(),
-  permissionMode: AcpPermissionModeSchema.optional(),
+  priorConversationId: z.string().optional(),
   instructionsFile: z.string().optional(),
-  images: z.array(AcpImageInputSchema).default([]),
-  model: z.string().optional(),
-  captureThinking: z.boolean().optional(),
-  thoughtLevel: z.string().optional(),
+  images: z.array(ImageInputSchema).default([]),
 });
-export type AcpSpec = z.infer<typeof AcpSpecSchema>;
+export type TurnSpec = z.infer<typeof TurnSpecSchema>;
 
 export const AgentSpecSchema = z.object({
+  /** Run label: the agent's name for agent turns, `internal:<op>` for
+   *  device plumbing jobs (worktree allocate/remove). */
   kind: z.string(),
-  command: z.string(),
+  /** Plumbing jobs only: the program and argv (`opencara internal …`). */
+  command: z.string().optional(),
   args: z.array(z.string()).default([]),
+  /** Agent turns: provider credentials and run context, also exported to
+   *  the agent's shell commands. Plumbing jobs: the process env overlay. */
   env: z.record(z.string()).default({}),
   cwd: z.string().optional(),
-  /**
-   * Present iff this run goes through the ACP+MCP path. Mutually exclusive
-   * with the legacy stdin-JSON envelope — when set, `JobAssignment.stdinJson`
-   * is ignored by the device runner.
-   */
-  acp: AcpSpecSchema.optional(),
+  /** Present iff this job is an agent turn. */
+  turn: TurnSpecSchema.optional(),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 

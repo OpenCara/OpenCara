@@ -35,7 +35,7 @@ export type PairingConfirmRequest = z.infer<typeof PairingConfirmRequestSchema>;
 
 /**
  * Host wire-protocol version (orchestrator ⟷ opencara CLI). Distinct from
- * both the CLI app version (hello.version) and the ACP protocolVersion.
+ * the CLI app version (hello.version).
  *
  * Bump when a change would break an OLDER peer: a new device→server frame
  * the server must understand, a removed/renamed field, a semantic change.
@@ -48,17 +48,19 @@ export type PairingConfirmRequest = z.infer<typeof PairingConfirmRequestSchema>;
  *       protocolVersion in hello).
  *   1 — hello/hello-ack carry protocolVersion; clients tolerate unknown
  *       server frame types and unknown cancel reasons.
+ *   2 — agent turns run in-process on pi-durable: `AgentSpec.acp` became
+ *       `AgentSpec.turn`, `RunDone.acpSessionId` became `conversationId`.
  */
-export const HOST_PROTOCOL_VERSION = 1;
+export const HOST_PROTOCOL_VERSION = 2;
 
 /**
  * Oldest device protocol the orchestrator still accepts. A hello below
  * this floor is rejected with WS close code WS_CLOSE_PROTOCOL_TOO_OLD and
- * an "upgrade opencara" reason. Keep at 0 until a change genuinely breaks
- * pre-versioning CLIs — raising it kicks every npm-installed CLI older
- * than the floor off the fleet.
+ * an "upgrade opencara" reason. Raising it kicks every npm-installed CLI
+ * older than the floor off the fleet — done for 2, because a v1 CLI only
+ * understands ACP `acp` specs and would fail every `turn` job it took.
  */
-export const MIN_HOST_PROTOCOL_VERSION = 0;
+export const MIN_HOST_PROTOCOL_VERSION = 2;
 
 /**
  * WS close code the server sends when a device's protocol is below the
@@ -140,11 +142,11 @@ export const RunDoneSchema = z.object({
   status: z.enum(["succeeded", "failed", "cancelled"]),
   exitCode: z.number().int().nullable().optional(),
   errorMessage: z.string().optional(),
-  /** ACP session id the agent ran under (fresh from session/new, or
-   *  echoed from session/load). The orchestrator persists this per
-   *  (repo, branch) so the next iteration can resume via session/load.
-   *  Null/absent for non-ACP runs (worktree-allocate, write-session). */
-  acpSessionId: z.string().nullable().optional(),
+  /** Durable conversation the agent turn ran in (new, or the resumed
+   *  `turn.priorConversationId`). Stored on this device; the orchestrator
+   *  persists it so a later turn can resume it here. Null/absent for
+   *  plumbing jobs and turns that failed before a conversation existed. */
+  conversationId: z.string().nullable().optional(),
 });
 export type RunDone = z.infer<typeof RunDoneSchema>;
 
@@ -163,11 +165,9 @@ export const HelloAckSchema = z.object({
 export type HelloAck = z.infer<typeof HelloAckSchema>;
 
 /**
- * Server → device: cancel an in-flight job. The device looks up its
- * AcpRunController for `runId` and calls `controller.cancel()`, which
- * forwards an ACP `session/cancel` notification to the agent and force-
- * closes the spawned child after a short grace if the agent doesn't
- * honour the cancel.
+ * Server → device: cancel an in-flight job. The device aborts the turn's
+ * durable conversation (withdrawing queued input and aborting the running
+ * generation and tool calls) and reports `done` with status `cancelled`.
  *
  * `reason` lets the device (and any future inspection of the protocol
  * trace) tell apart user-triggered Stops from PM-wave / flow cancels;
@@ -191,13 +191,11 @@ export const PingSchema = z.object({ type: z.literal("ping") });
 export const PongSchema = z.object({ type: z.literal("pong") });
 
 /**
- * Per-mutation payload schemas. Pre-#30 these were also the wire shapes
- * for the fire-and-forget `agent-call` WS variant (the fenced-stdout-
- * block protocol the CLI parsed via `agentCallParser.ts`); that
- * variant was removed in #30 along with the parser. The schemas stay
- * because they're the input to `applyIssue/Flow/TemplateBodySet` in
- * `agent-calls/index.ts`, and they're parameterized as
- * `AgentCallRequest` below for the ACP request/response path.
+ * Per-mutation payload schemas for the opencara tools agents call
+ * (issue body, flow / template node config, kanban wave dispatch). The
+ * device sends them as `agent-call-request` frames and the orchestrator
+ * applies them via `agent-calls/index.ts`, answering with
+ * `agent-call-result`.
  */
 const AgentCallEnvelope = {
   type: z.literal("agent-call"),
@@ -251,11 +249,9 @@ export const AgentCallSchema = z.discriminatedUnion("kind", [
 export type AgentCall = z.infer<typeof AgentCallSchema>;
 
 /**
- * Device → server: ACP-mode tool-call request. Same payload as
- * `AgentCall` above but with `agent-call-request` discriminator —
- * the device awaits an `agent-call-result` keyed by the same
- * `callId`. Introduced in #28 alongside the MCP tool surface; the
- * legacy fire-and-forget `agent-call` variant was removed in #30.
+ * Device → server: an agent called one of the opencara tools. Same payload
+ * as `AgentCall` above but with the `agent-call-request` discriminator —
+ * the device awaits an `agent-call-result` keyed by the same `callId`.
  */
 const AgentCallRequestEnvelope = {
   type: z.literal("agent-call-request"),
@@ -305,8 +301,7 @@ export type AgentCallRequest = z.infer<typeof AgentCallRequestSchema>;
  * Server → device: response to a prior `agent-call-request`, correlated by
  * `callId`. Either the mutation applied (`ok: true`) or it was rejected
  * (scope check, validation, missing resource — `ok: false`). The device
- * forwards this to the MCP server, which in turn returns it as the tool
- * result to the agent.
+ * returns it to the agent as the tool's result.
  */
 export const AgentCallResultSchema = z.object({
   type: z.literal("agent-call-result"),
@@ -333,10 +328,9 @@ export type ServerToDeviceMessage = z.infer<typeof ServerToDeviceMessageSchema>;
 // literal discriminator). z.union still discriminates correctly at runtime;
 // the only loss is slightly less precise error messages on a malformed
 // agent-call envelope.
-// `AgentCallSchema` (the legacy fire-and-forget `agent-call` variant)
-// was removed from the wire protocol in the #30 cutover — only the
-// ACP request/response pair survives. The schema itself is still
-// exported above because it's the input shape for `applyAgentCall`
+// `AgentCallSchema` (the legacy fire-and-forget `agent-call` variant) is
+// not a wire frame — only the request/response pair is. The schema is
+// still exported above because it's the input shape for `applyAgentCall`
 // in the orchestrator's `agent-calls/`.
 export const DeviceToServerMessageSchema = z.union([
   HelloMessageSchema,

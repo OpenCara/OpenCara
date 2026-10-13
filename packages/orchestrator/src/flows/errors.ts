@@ -21,8 +21,8 @@ export class SkipFlowError extends Error {
 }
 
 /**
- * This candidate agent cannot run at all (kind not ACP-eligible, row
- * deleted, …). Retrying it is pointless — the pool moves straight to the
+ * This candidate agent cannot run at all (model not a valid
+ * `<provider>/<modelId>` reference, row deleted, …). Retrying it is pointless — the pool moves straight to the
  * next candidate regardless of `retrySame`.
  */
 export class AgentUnusableError extends Error {

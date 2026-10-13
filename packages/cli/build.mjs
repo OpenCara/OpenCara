@@ -1,16 +1,10 @@
-// Bundle the CLI binaries into self-contained files so the published
-// `opencara` package doesn't depend on the unpublished `@opencara/shared`
-// workspace package. esbuild inlines the workspace import; runtime deps
-// (`ws`, `zod`, `@modelcontextprotocol/sdk`) stay external — declared in
-// package.json `dependencies` so users install them once via
-// `npm i -g opencara`.
-//
-// Two entrypoints:
-//   - src/bin.ts         → dist/bin.js        (the `opencara` CLI itself)
-//   - src/bin/opencara-mcp.ts → dist/opencara-mcp.js (the stdio MCP
-//     server that the agent's ACP `mcpServers` config spawns; without
-//     this in the published bundle, ACP-mode chat runs would fail at
-//     runtime trying to find a non-existent dev path).
+// Bundle the CLI into one self-contained file so the published `opencara`
+// package doesn't depend on the unpublished `@opencara/shared` workspace
+// package: esbuild inlines the workspace import. Runtime dependencies stay
+// external, declared in package.json `dependencies` so `npm i -g opencara`
+// installs them: `ws`, `zod`, and the pi packages agent turns run on —
+// pi-durable and friends ship WebAssembly and native-module loaders that
+// resolve files relative to their own install, so they can't be inlined.
 import { build } from "esbuild";
 import { mkdir, rm, chmod } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -24,59 +18,32 @@ await mkdir("dist", { recursive: true });
 // old `__dirname/../../package.json` was correct for multi-file tsc out,
 // wrong for the bundle, and silently fell back to "0.0.0" for every
 // connected device on the dashboard).
-const pkgVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
-
-// Shared esbuild config. Each entrypoint adds its own outfile.
-const common = {
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  bundle: true,
-  // Keep these as external requires rather than inline. They're either
-  // large (mcp sdk) or already shared peer-style (ws, zod). package.json
-  // `dependencies` ensures install pulls them. ACP adapters are NOT
-  // dependencies: every one of them is fetched at spawn time by
-  // `npx --yes` against the workspace checkout (see ACP_ADAPTERS in
-  // orchestrator/src/agents/acp-gate.ts), so bundling one only pinned a
-  // version the runtime never used.
-  external: [
-    "ws",
-    "zod",
-    "@modelcontextprotocol/sdk",
-    "@modelcontextprotocol/sdk/*",
-  ],
-  define: {
-    "process.env.OPENCARA_VERSION": JSON.stringify(pkgVersion),
-  },
-  legalComments: "none",
-  minify: false,
-  sourcemap: false,
-};
+const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 
 // src/bin.ts already starts with `#!/usr/bin/env node`; esbuild preserves
 // the source shebang in bundled output, so don't add a banner (would
 // duplicate the shebang and break `node` parsing on some shells).
+//
+// Splitting keeps the agent runner (lazily imported by the daemon) in its
+// own chunk, so its external pi imports load only when the daemon starts,
+// not for every short-lived `opencara internal …` / `status` process.
 await build({
-  ...common,
-  entryPoints: ["src/bin.ts"],
-  outfile: "dist/bin.js",
+  entryPoints: { bin: "src/bin.ts" },
+  outdir: "dist",
+  splitting: true,
+  chunkNames: "chunks/[name]-[hash]",
+  platform: "node",
+  target: "node22",
+  format: "esm",
+  bundle: true,
+  external: Object.keys(pkg.dependencies).flatMap((name) => [name, `${name}/*`]),
+  define: {
+    "process.env.OPENCARA_VERSION": JSON.stringify(pkg.version),
+  },
+  legalComments: "none",
+  minify: false,
+  sourcemap: false,
 });
 
-await build({
-  ...common,
-  entryPoints: ["src/bin/opencara-mcp.ts"],
-  outfile: "dist/opencara-mcp.js",
-});
-
-await build({
-  ...common,
-  entryPoints: ["src/bin/claude-acp.ts"],
-  outfile: "dist/claude-acp.js",
-});
-
-// Make the binaries executable so `opencara …`, `opencara-mcp`, and
-// `claude-acp` run straight from npm install without needing
-// `node ./node_modules/.bin/<binary>`.
+// Executable so `opencara` runs straight from an npm install.
 await chmod("dist/bin.js", 0o755);
-await chmod("dist/opencara-mcp.js", 0o755);
-await chmod("dist/claude-acp.js", 0o755);

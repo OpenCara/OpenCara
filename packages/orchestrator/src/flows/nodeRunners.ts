@@ -7,7 +7,7 @@ import type {
   FlowNode,
   TriggerNode,
 } from "@opencara/flows";
-import type { AgentSpec } from "@opencara/shared";
+import { parseModelRef, type AgentSpec, type TurnSpec } from "@opencara/shared";
 import { and, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -42,7 +42,7 @@ import type { PullRequestState } from "../scm/types.js";
 import { attachReviewMap } from "../reviewMaps/publish.js";
 import type { AttachReviewMapOpts, AttachedReviewMap } from "../reviewMaps/publish.js";
 import { setReviewMapReviewUrl } from "../reviewMaps/store.js";
-import { buildAcpSpec, checkAcpEligibility } from "../agents/acp-gate.js";
+import { buildAgentSpec, type BuildAgentSpecOpts } from "../agents/agentSpec.js";
 import { validateInstructionsFileSetting } from "../agents/instructionsFile.js";
 import { extractAgentResultText } from "../agents/output.js";
 import { worktreePins } from "../db/schema.js";
@@ -118,7 +118,7 @@ export interface NodeRunCtx {
     defaultBranch: string | null;
     /** Repo-relative path of the project's agent instructions file.
      *  Default '' (per migration 0030); empty disables injection.
-     *  Forwarded into AcpSpec.instructionsFile after validation. */
+     *  Forwarded into the turn's instructionsFile after validation. */
     instructionsFile: string;
   };
   event: { id: string; type: string; payload: unknown };
@@ -785,9 +785,9 @@ export async function resolveAgentPool(
   ctx: AgentPoolCtx,
   node: AgentNode,
 ): Promise<ResolvedAgentPool> {
-  // Agent flow nodes carry no in-graph subprocess spec; the dispatched
-  // AgentSpec (command, args, env, cwd) is built from the linked agent's
-  // `kind` via `buildAcpSpec` in runAgentAttempt.
+  // Agent flow nodes carry no in-graph run spec; the dispatched AgentSpec
+  // is built from the linked agent row via `buildAgentSpec` in
+  // runAgentAttempt.
   // Effective = project override row, else the account-scope template row
   // (flows/nodeSettings.ts).
   const setting =
@@ -1159,7 +1159,7 @@ export async function runAgentAttempt(
   // Everything from here runs against the checkout; tear it down when the
   // attempt is over, however it ends (success, failure, cancel). The
   // checkout serves exactly this attempt — the next iteration clones afresh
-  // and steering chat resumes by session id, not cwd — so keeping it only
+  // and steering chat resumes by conversation id, not cwd — so keeping it only
   // costs disk. Best-effort: a failure is logged and the stale sweep
   // (worktrees/cleanup.ts) picks the dir up later.
   try {
@@ -1211,31 +1211,20 @@ export async function runAgentAttempt(
         }
       : undefined;
 
-    // ACP cutover (#30): all flow-driven agent dispatch goes through the
-    // device's `runAcpJob` path. The per-kind adapter machinery in the
-    // legacy `kindsAdapter` (claude --resume, codex exec resume, etc.)
-    // is gone; per-kind specifics now live inside the per-kind ACP
-    // adapter binaries (claude-acp, codex-acp, opencode acp, pi-acp).
-    //
-    // Flow runs never resume a prior ACP session. Every attempt starts a
-    // cold `session/new`: the previous iteration's context reaches the agent
-    // through the PR/issue conversation and `previousOutput`, not through the
-    // adapter's transcript. Resuming by (repo, branch, agent kind) made a
-    // re-reviewer inherit the synthesizer's session and a synthesizer inherit
-    // the reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
+    // Flow runs never resume a prior conversation. Every attempt starts a
+    // fresh one: the previous iteration's context reaches the agent through
+    // the PR/issue conversation and `previousOutput`, not through a
+    // transcript. Resuming by (repo, branch, agent) made a re-reviewer
+    // inherit the synthesizer's conversation and a synthesizer inherit the
+    // reviewer's (ParadiseEngine#214 / #215); step-scoped steering chat
     // still resumes via the id recorded on the agent_runs row after the run.
     //
-    // What we keep:
-    //   - Worktree allocation (the per-attempt checkout on a paired
-    //     device — the `dispatchAgentRun` for `worktree-allocate`
-    //     above is unchanged; that's an internal CLI subcommand, not
-    //     an ACP agent).
-    //   - Linked-prompt + skill envelope; both fold into systemPromptMd.
-    //   - Upstream `previousOutput` chaining; goes into userPromptMd.
-    //   - PR / issue context-injection; surfaced via pageContextJson.
-    const eligibility = checkAcpEligibility(agent.kind);
-    if (eligibility.refuseReason) {
-      throw new AgentUnusableError(eligibility.refuseReason);
+    // An agent whose model isn't a `<provider>/<modelId>` reference can't
+    // run on any device; fail over to the next pool candidate.
+    if (parseModelRef(agent.model) === null) {
+      throw new AgentUnusableError(
+        `agent "${agent.name}" has invalid model "${agent.model}" (expected <provider>/<modelId>)`,
+      );
     }
 
     const systemPromptParts: string[] = [];
@@ -1290,7 +1279,7 @@ export async function runAgentAttempt(
           inputJson: {
             ...existingInput,
             agentName: agent.name,
-            agentKind: agent.kind,
+            agentModel: agent.model,
             systemPromptMd,
             injectedSkills,
           },
@@ -1304,8 +1293,7 @@ export async function runAgentAttempt(
     // userPromptMd is the upstream node's stdoutCaptured (already cleaned
     // of agent-envelope/JSONL noise by `extractAgentResultText` in
     // engine.ts:outputs.set). Triggers / first-step agents have no
-    // upstream output; surface a sentinel so ACP doesn't reject the
-    // empty prompt.
+    // upstream output; surface a sentinel instead of an empty prompt.
     const upstream = ctx.previousOutput?.trim() ?? "";
     // Review agents fed by other agents (the synthesizer position) get an
     // explicit task directive above the pasted upstream sections. Without
@@ -1331,8 +1319,8 @@ export async function runAgentAttempt(
 
     // Validate the project-level instructions file setting and forward the
     // relative path into the spec when it's safe + the agent will run in a
-    // worktree. The device-side adapter (claude-acp) does the actual disk
-    // stat-check; this side only gates on the setting being a sane
+    // worktree. The device reads the file from the job cwd (skipping it
+    // when absent); this side only gates on the setting being a sane
     // repo-relative path. No worktree → skip (chat/test runs).
     let projectInstructionsFile: string | undefined;
     if (worktree?.workdir) {
@@ -1349,7 +1337,7 @@ export async function runAgentAttempt(
       }
     }
 
-    const acpSpec = buildAcpSpec({
+    const spec = buildAgentSpec({
       agent: flowAgentSpecInput(agent, worktree?.workdir ?? null),
       env,
       systemPromptMd,
@@ -1361,12 +1349,10 @@ export async function runAgentAttempt(
     throwIfCancelled();
     const result = await dispatchAgentRun(ctx, {
       agentRunId,
-      kind: agent.name,
-      command: acpSpec.command,
-      args: [...acpSpec.args],
+      kind: spec.kind,
       env,
-      cwd: acpSpec.cwd,
-      acp: acpSpec.acp,
+      cwd: spec.cwd,
+      turn: spec.turn,
       hostId: worktree?.hostId ?? agent.hostId ?? null,
       triggerEventId: ctx.event.id,
       cancellationSignal,
@@ -1787,13 +1773,9 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
     pull_request?: { number: number; head: { sha: string } };
     issue?: { number: number };
   };
-  // `previousOutput` is the upstream node's captured stdout. For agent nodes
-  // run with `claude --output-format json` (see agents/kinds.ts), that
-  // stdout is the Claude Code result envelope — a JSON document whose
-  // human-readable markdown lives in `.result`. Posting the envelope as a
-  // GitHub review body produces the bot-review-format-bug surfaced on
-  // PR #33. `extractAgentResultText` parses the envelope; falls through
-  // verbatim for plain-text outputs.
+  // `previousOutput` is the upstream node's captured stdout, which carries
+  // the `[think]` / `[tool]` log markers around the agent's reply.
+  // `extractAgentResultText` strips them so only the reply is posted.
   const body = extractAgentResultText(ctx.previousOutput ?? "").trim();
 
   // Most actions act on the existing PR/issue from the trigger event; only
@@ -1831,12 +1813,7 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
       // absent or malformed, fall back to `node.config.event` and
       // post the body verbatim — operator-visible signal that the
       // agent didn't honor the contract.
-      const publicationBody = reviewBodyForPublication(body, ctx.previousAgentName);
-      if (publicationBody === null) {
-        throw new Error(
-          "post_review refused: agy output has no final verdict-bearing review body",
-        );
-      }
+      const publicationBody = reviewBodyForPublication(body);
       const parsed = parseReviewVerdict(publicationBody);
       // Stub guard: every agent upstream of post_review has the verdict
       // skill injected, so a body with no verdict line AND no substance
@@ -1931,8 +1908,9 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
 interface DispatchAgentRunOpts {
   agentRunId: string;
   kind: string;
-  command: string;
-  args: string[];
+  /** Plumbing jobs only (`opencara internal …`); agent turns carry `turn`. */
+  command?: string;
+  args?: string[];
   /** Mutable env reference. The helper stamps redacted markers + ephemeral
    *  creds in place. The persisted `agent_runs.spec.env` snapshot freezes
    *  the redacted markers; the live env is later overwritten with the
@@ -1940,12 +1918,9 @@ interface DispatchAgentRunOpts {
   env: Record<string, string>;
   cwd?: string;
   stdinJson?: unknown;
-  /** When set, the dispatched spec carries an `acp` payload so the
-   *  device's `runAcpJob` runner picks up the prompt/skill plumbing
-   *  instead of the legacy stdin-JSON envelope. Required for agent
-   *  nodes after the #30 cutover; left unset for internal CLI
-   *  subcommands like worktree-allocate that aren't ACP agents. */
-  acp?: import("@opencara/shared").AcpSpec;
+  /** The agent turn the device runs in-process. Unset for internal CLI
+   *  subcommands like worktree-allocate. */
+  turn?: TurnSpec;
   hostId?: string | null;
   /** triggerEventId on the agent_runs row. Pass null for synthetic flow-
    *  cleanup runs that aren't tied to the originating event. */
@@ -1986,11 +1961,11 @@ export async function dispatchAgentRun(
 
   const spec: AgentSpec = {
     kind: opts.kind,
-    command: opts.command,
-    args: opts.args,
+    ...(opts.command ? { command: opts.command } : {}),
+    args: opts.args ?? [],
     env: opts.env,
     cwd: opts.cwd,
-    ...(opts.acp ? { acp: opts.acp } : {}),
+    ...(opts.turn ? { turn: opts.turn } : {}),
   };
 
   const stepId = opts.flowRunStepId === undefined ? ctx.flowRunStepId : opts.flowRunStepId;
@@ -2145,15 +2120,14 @@ export async function dispatchAgentRun(
       await markPoolCancelled();
       throw new PoolAttemptCancelledError();
     }
-    // Record the resulting acpSessionId on the row so post-run consumers
-    // (steering chat scoped to this step, audit views) can resume the
-    // agent's conversation without spelunking the on-device JSONL.
-    // We rewrite `spec.acp.priorSessionId` IN PLACE via jsonb_set,
+    // Record the conversation the turn ran in on the row so post-run
+    // consumers (steering chat scoped to this step) can resume it.
+    // We rewrite `spec.turn.priorConversationId` IN PLACE via jsonb_set,
     // leaving every other key on `spec` untouched. The original insert
     // already saved `spec.env` with `<ephemeral>` placeholders; we
     // mustn't re-serialize the in-memory `spec` here because opts.env
     // was mutated to hold the live mintedToken and would leak any
-    // non-GH secret (ANTHROPIC_API_KEY, MCP_*_TOKEN, ...) into the row.
+    // non-GH secret (ANTHROPIC_API_KEY, ...) into the row.
     // Guarded terminal write (mirrors the chat stop endpoint): a cancel
     // path may have already flipped this row to "cancelled" — the finished
     // agent must not overwrite that with succeeded/failed.
@@ -2164,9 +2138,9 @@ export async function dispatchAgentRun(
         hostId: result.agentHostId,
         exitCode: result.exitCode,
         finishedAt: new Date(),
-        ...(result.acpSessionId && opts.acp
+        ...(result.conversationId && opts.turn
           ? {
-              spec: sql`jsonb_set(${agentRuns.spec}, '{acp,priorSessionId}', to_jsonb(${result.acpSessionId}::text), true)`,
+              spec: sql`jsonb_set(${agentRuns.spec}, '{turn,priorConversationId}', to_jsonb(${result.conversationId}::text), true)`,
             }
           : {}),
       })
@@ -2228,46 +2202,6 @@ function collectTemplateVars(ctx: NodeRunCtx): Record<string, string> {
   return vars;
 }
 
-// Same shell-style tokenizer as routes/api/agents.ts (whitespace
-// separates, single/double quotes group). Inlined here to avoid a
-// cross-cutting import; if a third caller appears, lift to shared.
-function tokenizeShellLike(input: string): string[] {
-  const tokens: string[] = [];
-  let buf = "";
-  let quote: '"' | "'" | null = null;
-  let inToken = false;
-  const flush = () => {
-    if (inToken) {
-      tokens.push(buf);
-      buf = "";
-      inToken = false;
-    }
-  };
-  for (const ch of input) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else {
-        buf += ch;
-        inToken = true;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      inToken = true;
-      continue;
-    }
-    if (ch === " " || ch === "\t" || ch === "\n") {
-      flush();
-      continue;
-    }
-    buf += ch;
-    inToken = true;
-  }
-  flush();
-  return tokens;
-}
-
 function renderTemplate(tmpl: string, vars: Record<string, string>, where: string): string {
   return tmpl.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
     if (!(name in vars)) {
@@ -2285,7 +2219,7 @@ function renderTemplate(tmpl: string, vars: Record<string, string>, where: strin
 }
 
 /**
- * The agent-row fields a flow run hands to `buildAcpSpec`. Kept as one
+ * The agent-row fields a flow run hands to `buildAgentSpec`. Kept as one
  * exported helper (rather than an inline literal at the call site) so a
  * per-agent setting added to the row — captureThinking, thoughtLevel, … —
  * has exactly one place to be forwarded from, and a unit test can pin that
@@ -2294,22 +2228,18 @@ function renderTemplate(tmpl: string, vars: Record<string, string>, where: strin
  */
 export function flowAgentSpecInput(
   agent: {
-    kind: string;
     name: string;
+    model: string;
     cwd: string | null;
-    args: string[];
-    acpArgs?: string[] | null;
     captureThinking?: boolean;
     thoughtLevel?: string | null;
   },
   workdir: string | null,
-): Parameters<typeof buildAcpSpec>[0]["agent"] {
+): BuildAgentSpecOpts["agent"] {
   return {
-    kind: agent.kind,
     name: agent.name,
+    model: agent.model,
     cwd: workdir ?? agent.cwd ?? null,
-    args: agent.args,
-    acpArgs: agent.acpArgs,
     captureThinking: agent.captureThinking,
     thoughtLevel: agent.thoughtLevel,
   };

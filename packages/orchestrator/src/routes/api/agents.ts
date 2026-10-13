@@ -7,14 +7,8 @@ import { agentHosts, agentRuns, agents } from "../../db/schema.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import type { AgentDispatcher } from "../../dispatch/dispatcher.js";
 import { AgentLogSink } from "../../agents/logSink.js";
-import { AGENT_KINDS, isAgentKind, type AgentKind } from "../../agents/kinds.js";
-import {
-  acpCommandFor,
-  buildAcpSpec,
-  checkAcpEligibility,
-  defaultAcpArgsFor,
-} from "../../agents/acp-gate.js";
-import type { AgentSpec } from "@opencara/shared";
+import { buildAgentSpec } from "../../agents/agentSpec.js";
+import { isThinkingLevel, parseModelRef, THINKING_LEVELS } from "@opencara/shared";
 
 interface AgentRoutesDeps {
   db: Db;
@@ -33,7 +27,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       .from(agents)
       .where(eq(agents.userId, user.id))
       .orderBy(desc(agents.updatedAt));
-    return c.json({ agents: rows.map(serializeAgent) });
+    return c.json({ agents: rows });
   });
 
   r.post("/agents", auth, async (c) => {
@@ -41,33 +35,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const body = await c.req.json().catch(() => ({}));
     const name = String(body.name ?? "").trim();
 
-    // `kind` must be one of the supported ACP kinds. Pre-#30 the
-    // dashboard accepted `custom` as an opaque-subprocess escape
-    // hatch; the cutover removed that path. Reject unknown / missing
-    // kind explicitly with a clear conversion hint.
-    if (!isAgentKind(body.kind)) {
-      return c.json(
-        {
-          // Derived from AGENT_KINDS so the message can't drift behind the
-          // validator when a kind is added.
-          error:
-            `kind required and must be one of ${AGENT_KINDS.map((k) => `"${k}"`).join(", ")}. ` +
-            'The "custom" kind was removed in the v0.30 cutover.',
-        },
-        400,
-      );
-    }
-    const kind: AgentKind = body.kind;
-
     if (!name) return c.json({ error: "name required" }, 400);
-    // The agent row's `command` and `args` are now retained for legacy
-    // diagnostics only — the ACP adapter is selected by kind in
-    // `acp-gate.ts`. Operators don't need to fill these in; we accept
-    // whatever the dashboard sends and persist it untouched.
-    const command = typeof body.command === "string" ? body.command.trim() : kind;
-    const args = parseExtraArgs(body);
-    // undefined (field absent) defaults to null on create.
-    const acpArgs = parseAcpArgs(body) ?? null;
+    const model = parseModel(body.model);
+    if (model === null) return c.json({ error: MODEL_ERROR }, 400);
+    const thoughtLevel = parseThoughtLevel(body.thoughtLevel);
+    if (thoughtLevel === undefined) return c.json({ error: THOUGHT_LEVEL_ERROR }, 400);
 
     const env =
       body.env && typeof body.env === "object" && !Array.isArray(body.env)
@@ -78,7 +50,6 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : null;
     // Absent → the column default (capture). Only an explicit `false` opts out.
     const captureThinking = body.captureThinking !== false;
-    const thoughtLevel = parseThoughtLevel(body.thoughtLevel) ?? null;
 
     const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
     if (!hostIdRes.ok) return c.json({ error: hostIdRes.error }, hostIdRes.status);
@@ -89,10 +60,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
         id,
         userId: user.id,
         name,
-        kind,
-        command,
-        args,
-        acpArgs,
+        model,
         env,
         cwd,
         captureThinking,
@@ -108,22 +76,19 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     }
     return c.json(
       {
-        agent: serializeAgent({
+        agent: {
           id,
           userId: user.id,
           name,
-          kind,
-          command,
-          args,
-          acpArgs,
+          model,
+          thoughtLevel,
+          captureThinking,
           env,
           cwd,
-          captureThinking,
-          thoughtLevel,
           hostId: hostIdRes.hostId,
           createdAt: new Date(),
           updatedAt: new Date(),
-        }),
+        },
       },
       201,
     );
@@ -136,7 +101,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       where: and(eq(agents.id, id), eq(agents.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json({ agent: serializeAgent(row) });
+    return c.json({ agent: row });
   });
 
   r.patch("/agents/:id", auth, async (c) => {
@@ -146,28 +111,10 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
     if (typeof body.name === "string") updates.name = body.name.trim();
 
-    // Kind must be a registered ACP kind. If the body changes it,
-    // validate; pre-#30 `custom` rows survive in the DB (the Postgres
-    // enum still has the value) but can't be saved/created/dispatched
-    // anymore. Operators should pick a registered kind.
-    if (body.kind !== undefined) {
-      if (!isAgentKind(body.kind)) return c.json({ error: "invalid kind" }, 400);
-      updates.kind = body.kind;
-    }
-    // command + args are retained on the row for legacy diagnostics
-    // only — dispatch ignores them in favour of the per-kind ACP
-    // adapter. We persist whatever the dashboard sends.
-    if (typeof body.command === "string") {
-      const trimmed = body.command.trim();
-      updates.command = trimmed.length > 0 ? trimmed : (updates.kind ?? "");
-    }
-    if (body.extraArgs !== undefined) {
-      updates.args = parseExtraArgs(body);
-    }
-    // acpArgs: absent → unchanged; null/empty → reset to kind default; else override.
-    const acpArgs = parseAcpArgs(body);
-    if (acpArgs !== undefined) {
-      updates.acpArgs = acpArgs;
+    if (body.model !== undefined) {
+      const model = parseModel(body.model);
+      if (model === null) return c.json({ error: MODEL_ERROR }, 400);
+      updates.model = model;
     }
     if (body.env && typeof body.env === "object" && !Array.isArray(body.env)) {
       updates.env = Object.fromEntries(
@@ -184,9 +131,11 @@ export function agentRoutes(deps: AgentRoutesDeps) {
     if (typeof body.captureThinking === "boolean") {
       updates.captureThinking = body.captureThinking;
     }
-    // Absent → unchanged; "" / null → clear (adapter default); else set.
+    // Absent → unchanged; "" / null → clear (the device's pi default); else set.
     if (body.thoughtLevel !== undefined) {
-      updates.thoughtLevel = parseThoughtLevel(body.thoughtLevel) ?? null;
+      const thoughtLevel = parseThoughtLevel(body.thoughtLevel);
+      if (thoughtLevel === undefined) return c.json({ error: THOUGHT_LEVEL_ERROR }, 400);
+      updates.thoughtLevel = thoughtLevel;
     }
     if (body.hostId !== undefined) {
       const hostIdRes = await resolveHostId(deps.db, user.id, body.hostId);
@@ -210,7 +159,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       where: and(eq(agents.id, id), eq(agents.userId, user.id)),
     });
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json({ agent: serializeAgent(row) });
+    return c.json({ agent: row });
   });
 
   // Smoke-test an agent with a prompt; returns agentRunId for SSE tail.
@@ -242,13 +191,7 @@ export function agentRoutes(deps: AgentRoutesDeps) {
       OPENCARA_TEST: "1",
     };
 
-    // ACP eligibility — same gate as chat.ts. Unsupported kinds get
-    // a 400 with a conversion hint; everything else dispatches via ACP.
-    const eligibility = checkAcpEligibility(agent.kind);
-    if (eligibility.refuseReason) {
-      return c.json({ error: eligibility.refuseReason }, 400);
-    }
-    const spec: AgentSpec = buildAcpSpec({
+    const spec = buildAgentSpec({
       agent,
       env,
       systemPromptMd:
@@ -369,137 +312,24 @@ async function resolveHostId(
   return { ok: true, hostId: raw };
 }
 
-/**
- * Split a shell-style command string into [command, ...args]. Honours single
- * and double quotes so users can include arguments with spaces, e.g.
- *   `node script.mjs --msg "hello world"`
- *   →  command="node", args=["script.mjs", "--msg", "hello world"]
- *
- * Backslash escapes are NOT supported — keep the surface area small. If a
- * user needs literal quotes, wrap the opposite quote style around them.
- */
-/**
- * Pull "extra args" out of a request body, accepting either:
- * - `extraArgs` as a free-form string (tokenized like a Command field)
- * - `extraArgs` as a string array (already tokenized by the UI)
- * - Falls back to `body.command` (older clients send extras there).
- *
- * For named-kind agents this populates `agents.args`, which the per-
- * kind adapter appends to its base args at dispatch time.
- */
-function parseExtraArgs(body: Record<string, unknown>): string[] {
-  if (Array.isArray(body.extraArgs)) {
-    return body.extraArgs.map((s) => String(s));
-  }
-  if (typeof body.extraArgs === "string") {
-    const trimmed = body.extraArgs.trim();
-    if (!trimmed) return [];
-    // Reuse tokenizeCommand by prefixing a dummy "command" so its
-    // args[] result becomes our extra-args list.
-    return tokenizeCommand(`_ ${trimmed}`).args;
-  }
-  if (typeof body.command === "string") {
-    const trimmed = body.command.trim();
-    if (!trimmed) return [];
-    return tokenizeCommand(`_ ${trimmed}`).args;
-  }
-  return [];
+const MODEL_ERROR = "model must be <provider>/<modelId>";
+const THOUGHT_LEVEL_ERROR = `thoughtLevel must be one of ${THINKING_LEVELS.join(", ")}, or null`;
+
+/** A trimmed `<provider>/<modelId>` reference, or null when invalid. */
+function parseModel(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const model = raw.trim();
+  return parseModelRef(model) ? model : null;
 }
 
 /**
- * Parse the `acpArgs` override from a request body. Returns:
- * - `undefined` when the field is absent (PATCH leaves the column unchanged),
- * - `null` to reset to the kind default (explicit null, or an empty value),
- * - `string[]` for an override (array as-is, or a shell string tokenized).
+ * A thinking level, null for the device's pi default (absent / null / ""), or
+ * undefined when the value isn't one of `THINKING_LEVELS`.
  */
-/**
- * Normalise the reasoning-effort input: a trimmed non-empty string, or
- * undefined for "not set" (null / "" / non-string). Values are free text —
- * each adapter has its own vocabulary and the device validates against what
- * the adapter actually advertises, so nothing is rejected here.
- */
-export function parseThoughtLevel(raw: unknown): string | undefined {
+function parseThoughtLevel(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null) return null;
   if (typeof raw !== "string") return undefined;
-  const t = raw.trim();
-  return t.length > 0 ? t : undefined;
+  const level = raw.trim();
+  if (!level) return null;
+  return isThinkingLevel(level) ? level : undefined;
 }
-
-function parseAcpArgs(body: Record<string, unknown>): string[] | null | undefined {
-  if (!("acpArgs" in body)) return undefined;
-  const raw = body.acpArgs;
-  if (raw === null) return null;
-  let arr: string[];
-  if (Array.isArray(raw)) {
-    arr = raw.map((s) => String(s));
-  } else if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    arr = trimmed ? tokenizeCommand(`_ ${trimmed}`).args : [];
-  } else {
-    return null;
-  }
-  // An empty override is meaningless (the command alone won't run) — treat it
-  // as "reset to default" so the UI's clear/reset path lands as NULL.
-  return arr.length > 0 ? arr : null;
-}
-
-/**
- * Shape an agent row for the API, adding the computed `acpCommand` (the fixed,
- * kind-derived adapter executable) and `defaultAcpArgs` (what runs by default
- * for this kind + the agent's `args`). The UI shows the command read-only and
- * pre-fills the editable args field with `acpArgs ?? defaultAcpArgs`.
- */
-function serializeAgent(row: typeof agents.$inferSelect) {
-  return {
-    ...row,
-    acpCommand: acpCommandFor(row.kind) ?? row.command,
-    defaultAcpArgs: defaultAcpArgsFor(row.kind, row.args) ?? row.args,
-  };
-}
-
-export function tokenizeCommand(input: string): {
-  command: string;
-  args: string[];
-} {
-  const tokens: string[] = [];
-  let buf = "";
-  let quote: '"' | "'" | null = null;
-  let inToken = false;
-
-  const flush = () => {
-    if (inToken) {
-      tokens.push(buf);
-      buf = "";
-      inToken = false;
-    }
-  };
-
-  for (const ch of input) {
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        buf += ch;
-        inToken = true;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      inToken = true;
-      continue;
-    }
-    if (ch === " " || ch === "\t" || ch === "\n") {
-      flush();
-      continue;
-    }
-    buf += ch;
-    inToken = true;
-  }
-  flush();
-
-  return {
-    command: tokens[0] ?? "",
-    args: tokens.slice(1),
-  };
-}
-

@@ -523,23 +523,17 @@ function AgentNodePanel({
               before this flow can run.
             </p>
           )}
-          {linkedAgent &&
-            (() => {
-              // Show the primary's effective ACP invocation: the kind-fixed
-              // command plus the agent's adapter-args override or the kind
-              // default.
-              const effArgs = linkedAgent.acpArgs ?? linkedAgent.defaultAcpArgs;
-              return (
-                <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
-                  $ {linkedAgent.acpCommand}
-                  {effArgs.length ? " " : ""}
-                  {effArgs.join(" ")}
-                  <span className="ml-2 text-muted-foreground">
-                    [device: {linkedAgent.hostId ? linkedAgent.hostId.slice(-8) : "any"}]
-                  </span>
-                </pre>
-              );
-            })()}
+          {linkedAgent && (
+            <pre className="mt-2 rounded-md border bg-muted/30 p-3 font-mono text-xs">
+              {linkedAgent.model}
+              <span className="ml-2 text-muted-foreground">
+                [thinking: {linkedAgent.thoughtLevel ?? "pi default"}]
+              </span>
+              <span className="ml-2 text-muted-foreground">
+                [device: {linkedAgent.hostId ? linkedAgent.hostId.slice(-8) : "any"}]
+              </span>
+            </pre>
+          )}
 
           <div className="mt-3 space-y-2">
             <div className="flex max-w-md flex-wrap items-center gap-3">

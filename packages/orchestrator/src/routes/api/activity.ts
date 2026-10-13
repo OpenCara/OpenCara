@@ -77,7 +77,8 @@ export interface ActivityItemOut {
   flowRunId: string | null;
   /** Runs: graph node id the run executed. */
   nodeId: string | null;
-  /** Runs: `spec.kind` — the agent adapter (claude, codex, …). */
+  /** Runs: `spec.kind` — the run label: the agent's name, or
+   *  `internal:<op>` for device plumbing jobs. */
   agentKind: string | null;
   /** PR / issue / work item / push the entry is about, when known. */
   subject: ActivitySubject | null;

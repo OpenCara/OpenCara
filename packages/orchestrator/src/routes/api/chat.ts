@@ -1,16 +1,10 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Sql } from "postgres";
-import type {
-  AcpHistoryTurn,
-  AcpImageInput,
-  AcpPermissionMode,
-  AgentSpec,
-} from "@opencara/shared";
+import type { HistoryTurn, ImageInput } from "@opencara/shared";
 import type { Db } from "../../db/client.js";
 import {
-  agentRunLogs,
   agentRuns,
   agents,
   chatSessions,
@@ -22,10 +16,7 @@ import { AgentLogSink } from "../../agents/logSink.js";
 import { requireUser, type AuthEnv } from "../../auth/middleware.js";
 import { loadOwnedProject } from "../../auth/ownership.js";
 import { resolvePageSkill, type PageContextLike } from "../../flows/skills.js";
-import {
-  buildAcpSpec,
-  checkAcpEligibility,
-} from "../../agents/acp-gate.js";
+import { buildAgentSpec } from "../../agents/agentSpec.js";
 import { mintEphemeralTokenWithRetry } from "../../github/app.js";
 import type { EphemeralToken, GithubAppClient } from "../../github/app.js";
 
@@ -45,94 +36,9 @@ interface ChatRoutesDeps {
 type PageContext = PageContextLike;
 
 /**
- * Phrases the assistant emits when it has decided an opencara MCP tool is
- * unusable. If a prior-turn stdout matches any of these, we force the next
- * turn through `session/new` — otherwise `claude --resume` replays the
- * poisoned transcript and the model keeps refusing to try the tool even
- * after the wire has been fixed under it.
- *
- * Keep patterns specific enough to avoid resetting on benign mentions of
- * "MCP" or "tool" in chitchat. Each one is anchored on "opencara" or
- * "MCP <noun> isn't connected/available/running" together — both halves
- * have to land for a match.
- */
-export const MCP_POISON_PATTERNS: readonly RegExp[] = [
-  // "the `opencara_xyz` MCP tool isn't available" / "is not available"
-  /\bopencara_\w+\b[^\n]{0,80}\b(isn['']?t|wasn['']?t|is not|was not)\s+available\b/i,
-  // "opencara MCP server doesn't appear to be connected" / "MCP tools aren't
-  // connected" — anchored on opencara + MCP + a negation contraction
-  // (n't / don't / doesn't / isn't / aren't) within 80 chars of the
-  // "connected|running|available|configured" verb.
-  /\bopencara\s+MCP\b[^\n]{0,80}n['']?t\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
-  // "opencara MCP server is not connected" (un-contracted form)
-  /\bopencara\s+MCP\b[^\n]{0,80}\b(is not|are not|do(?:es)? not)\b[^\n]{0,50}\b(connected|running|available|configured)\b/i,
-  // Generic "MCP server / tool isn't connected" (no "opencara" prefix —
-  // catches phrasings where the assistant elides the qualifier)
-  /\bMCP\s+(server|tools?)\b[^\n]{0,40}\b(isn['']?t|aren['']?t|is not|are not)\s+connected\b/i,
-  // "MCP tools don't appear to be connected"
-  /\bMCP\s+tools?\b[^\n]{0,40}\b(don['']?t|doesn['']?t|do not|does not)\s+appear\s+to\s+be\s+connected\b/i,
-];
-
-/**
- * Upper bound on stdout chunks read when scanning a prior run for an
- * MCP-unavailable admission. Large enough to cover the early assistant
- * output where such admissions appear, small enough to keep the read cheap.
- */
-const POISON_SCAN_CHUNK_LIMIT = 2000;
-
-/**
- * Look at the most recent agent_run for this chat thread (matched by the
- * `OPENCARA_CHAT_SESSION_ID` env baked into spec) and return whether its
- * stdout contains a "this MCP tool isn't available" admission. Callers use
- * this to decide whether to discard `priorSessionId` on the upcoming turn.
- *
- * Returns false on any DB error or if no prior run is found — fall back to
- * normal resume rather than spuriously trashing context.
- */
-async function priorTurnDeclaredMcpUnavailable(
-  db: Db,
-  sessionId: string,
-): Promise<boolean> {
-  try {
-    const lastRun = await db.query.agentRuns.findFirst({
-      where: sql`${agentRuns.spec}->'env'->>'OPENCARA_CHAT_SESSION_ID' = ${sessionId}`,
-      orderBy: [desc(agentRuns.createdAt)],
-    });
-    if (!lastRun) return false;
-    // Bound the read: a long run can persist tens of thousands of stdout
-    // chunks, and pulling them all just to regex-scan was an unbounded
-    // memory hit (issue #150 #7). The "this tool isn't available" admission,
-    // when present, lands in the agent's early output as it inspects/attempts
-    // the tool, so scan the head by seq. A miss falls through to a normal
-    // resume — the safe default this function already documents.
-    const logs = await db
-      .select({ chunk: agentRunLogs.chunk })
-      .from(agentRunLogs)
-      .where(
-        and(
-          eq(agentRunLogs.agentRunId, lastRun.id),
-          eq(agentRunLogs.stream, "stdout"),
-        ),
-      )
-      .orderBy(asc(agentRunLogs.seq))
-      .limit(POISON_SCAN_CHUNK_LIMIT);
-    if (logs.length === 0) return false;
-    const stdout = logs.map((l) => l.chunk).join("");
-    return MCP_POISON_PATTERNS.some((p) => p.test(stdout));
-  } catch (err) {
-    console.warn("[chat] priorTurnDeclaredMcpUnavailable check failed", {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  }
-}
-
-/**
- * Chat with a user-defined agent. Each turn spawns the agent's subprocess via
- * the existing dispatcher; stdin carries `{ message, pageContext, history? }`,
- * env carries OPENCARA_CHAT_* so the agent can use its own --resume / --continue
- * flag once turnIndex > 1.
+ * Chat with a user-defined agent. Each turn dispatches one agent turn to a
+ * device, resuming the thread's durable conversation when the chat row holds
+ * one; env carries OPENCARA_CHAT_* for the agent's shell commands.
  *
  * Returns immediately with the agentRunId; the panel SSE-tails
  * /api/runs/:agentRunId/logs/stream for the streamed reply.
@@ -158,12 +64,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     // unbounded base64 blob into the agent prompt. Malformed entries are
     // dropped rather than 400'ing the whole turn.
     const images = normalizeImages(body.images);
-    // Per-turn knobs from the chat panel's toolbar. Plan mode is just
-    // a shortcut for permissionMode='plan' — the panel renders both
-    // controls but only the resolved mode crosses the wire. Unknown
-    // values fall back to undefined (preserves agent default) rather
-    // than 400'ing so a stale client doesn't break sending.
-    const permissionMode = parsePermissionMode(body.permissionMode);
 
     // A turn needs *some* content — text or at least one image. An
     // image-only turn (e.g. "what's wrong with this screenshot?" with no
@@ -189,59 +89,31 @@ export function chatRoutes(deps: ChatRoutesDeps) {
     if (!agent) return c.json({ error: "agent not found" }, 404);
 
     // Resume continuity: a prior turn on this thread (same user, same
-    // threadKey) wrote `acpSessionId` + `acpSessionHostId` after a
+    // threadKey) wrote `conversationId` + `conversationHostId` after a
     // successful dispatch. If the user hasn't switched agent since, we
-    // pass that id as `priorSessionId` so the shim runs `session/load`
-    // (claude `--resume <uuid>`) and the model sees its prior turns
-    // straight from the on-disk JSONL — no history bake-in needed.
+    // pass that id as `priorConversationId` so the device resumes the
+    // durable conversation instead of replaying `history`.
     //
     // Mismatched agentId means the user picked a different agent
-    // (chatSessions.ts POST clears acpSessionId when that happens, but
+    // (chatSessions.ts POST clears conversationId when that happens, but
     // races between the agent-pick PATCH and an in-flight message are
-    // possible). Drop priorSessionId rather than feed a foreign UUID
-    // into the new shim.
+    // possible). Drop the id rather than resume another agent's
+    // conversation.
     const chatRow = await deps.db.query.chatSessions.findFirst({
       where: and(
         eq(chatSessions.userId, user.id),
         eq(chatSessions.threadKey, sessionId),
       ),
     });
-    let priorSessionId: string | undefined;
-    if (
-      chatRow?.acpSessionId &&
-      chatRow.agentId === agentId &&
-      chatRow.acpSessionId.length > 0
-    ) {
-      // Defensive de-poisoning: if the prior turn's stdout flagged an MCP
-      // tool as unavailable, resuming that session would just re-feed the
-      // model the same conclusion. Clear the persisted acpSessionId so
-      // this turn goes through session/new — fresh tool list, fresh
-      // transcript, no inherited "this tool doesn't work" memory.
-      const poisoned = await priorTurnDeclaredMcpUnavailable(
-        deps.db,
-        sessionId,
-      );
-      if (poisoned) {
-        console.warn(
-          "[chat] previous turn marked an MCP tool unavailable; forcing session/new",
-          {
-            chatSessionId: chatRow.id,
-            discardedAcpSessionId: chatRow.acpSessionId,
-          },
-        );
-        await deps.db
-          .update(chatSessions)
-          .set({ acpSessionId: null, acpSessionHostId: null })
-          .where(eq(chatSessions.id, chatRow.id));
-      } else {
-        priorSessionId = chatRow.acpSessionId;
-      }
-    }
-    // Pin to the device that holds this session's JSONL. Falls back to
-    // the agent's own hostId (and then to any idle host) when this is
-    // turn 1 or the prior host record was cleared.
+    const priorConversationId =
+      chatRow?.conversationId && chatRow.agentId === agentId
+        ? chatRow.conversationId
+        : undefined;
+    // Pin to the device that holds the conversation. Falls back to the
+    // agent's own hostId (and then to any idle host) when this is turn 1
+    // or the prior host record was cleared.
     const dispatchHostId =
-      (priorSessionId ? chatRow?.acpSessionHostId : null) ?? agent.hostId;
+      (priorConversationId ? chatRow?.conversationHostId : null) ?? agent.hostId;
 
     const agentRunId = ulid();
 
@@ -285,8 +157,8 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       : null;
 
     // Mint a per-turn installation token when the chat is project-scoped, so
-    // the agent's `gh` commands (issue create/close/comment/labels — moved
-    // off MCP) auth as the App against this project's repo. Scope is the
+    // the agent's `gh` commands (issue create/close/comment/labels — no
+    // opencara tool) auth as the App against this project's repo. Scope is the
     // single repo + `issues: write` / `pull_requests: read`; lifetime is 1h
     // (way more than a single turn). On non-project pages, GH_TOKEN is
     // simply absent — `gh` will fail with a clean auth error rather than
@@ -346,15 +218,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       ...(mintedToken ? { GH_TOKEN: tokenPlaceholder } : {}),
     };
 
-    // ACP eligibility — every supported kind dispatches via ACP. An
-    // unsupported kind (e.g. legacy `custom` rows from before #30) gets
-    // a 400 with a clear conversion hint, rather than the stale legacy
-    // path's silent fallthrough.
-    const eligibility = checkAcpEligibility(agent.kind);
-    if (eligibility.refuseReason) {
-      return c.json({ error: eligibility.refuseReason }, 400);
-    }
-
     // Merge the skill builder's hydrated server-side data (e.g. the full
     // issue.bodyMd for the issue canvas) into the pageContext the agent
     // sees. Without this the agent only gets what the frontend sent —
@@ -366,7 +229,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       ...(skillResult?.hydrated ?? {}),
     };
 
-    const spec: AgentSpec = buildAcpSpec({
+    const spec = buildAgentSpec({
       agent,
       env,
       systemPromptMd: withChatResponseInstructions(
@@ -376,9 +239,8 @@ export function chatRoutes(deps: ChatRoutesDeps) {
       userPromptMd: message,
       history: normalizeHistory(history),
       pageContext: agentPageContext,
-      priorSessionId,
-      ...(permissionMode ? { permissionMode } : {}),
-      ...(images.length > 0 ? { images } : {}),
+      priorConversationId,
+      images,
     });
     await deps.db.insert(agentRuns).values({
       id: agentRunId,
@@ -456,27 +318,26 @@ export function chatRoutes(deps: ChatRoutesDeps) {
               inArray(agentRuns.status, ["running", "queued", "assigned"]),
             ),
           );
-        // Persist the session id the shim ran under, so the next turn
-        // can resume via `priorSessionId`. Gated on (a) the run actually
-        // succeeded — a failed run may have left the JSONL in a state
-        // that --resume can't recover from cleanly, and (b) the chat
-        // row still points at the SAME agent that ran this turn. If
-        // the user switched agent mid-flight (chatSessions.ts cleared
-        // acpSessionId on the POST), respect their choice instead of
-        // silently re-pinning the row to the now-superseded agent.
+        // Persist the conversation this turn ran in, so the next turn
+        // can resume it via `priorConversationId`. Gated on (a) the run
+        // actually succeeded, and (b) the chat row still points at the
+        // SAME agent that ran this turn. If the user switched agent
+        // mid-flight (chatSessions.ts cleared conversationId on the
+        // POST), respect their choice instead of silently re-pinning the
+        // row to the now-superseded agent.
         //
         // Inner try/catch isolates this best-effort side-effect from
         // the outer dispatcher catch. Without it, a transient DB error
         // here would fall through and flip the already-persisted
         // "succeeded" agentRuns row to "failed" — the user would see
         // the full streamed reply but the run log would lie about it.
-        if (result.exitCode === 0 && result.acpSessionId) {
+        if (result.exitCode === 0 && result.conversationId) {
           try {
             await deps.db
               .update(chatSessions)
               .set({
-                acpSessionId: result.acpSessionId,
-                acpSessionHostId: result.agentHostId,
+                conversationId: result.conversationId,
+                conversationHostId: result.agentHostId,
                 updatedAt: new Date(),
               })
               .where(
@@ -487,13 +348,13 @@ export function chatRoutes(deps: ChatRoutesDeps) {
                   // agentId OR is still NULL (auto-pick POST hasn't
                   // landed yet). Rejects a *different* agent (mid-flight
                   // switch) so we don't re-pin a superseded agent's
-                  // session onto the new pick.
+                  // conversation onto the new pick.
                   sql`(${chatSessions.agentId} IS NULL OR ${chatSessions.agentId} = ${agentId})`,
                 ),
               );
           } catch (persistErr) {
             // Log and move on. Worst case: next turn starts a fresh
-            // session (no resume) — same behaviour as turn 1, not a
+            // conversation (no resume) — same behaviour as turn 1, not a
             // regression. The successful run stays successful.
             console.error("[chat] resume-persist failed", persistErr);
           }
@@ -533,8 +394,7 @@ export function chatRoutes(deps: ChatRoutesDeps) {
    *
    * Flow: flip the agent_runs row to "cancelled" (with cancel_reason for
    * traceability), then ask the dispatcher to forward a `cancel` frame to
-   * the device. The device's AcpRunController calls ACP `session/cancel`
-   * and force-closes the child after a short grace.
+   * the device, which aborts the in-flight agent turn.
    *
    * The DB-side write is the load-bearing step — the SSE poll picks up
    * "cancelled" within 2s and the panel exits the streaming state. The
@@ -652,12 +512,6 @@ export function chatRoutes(deps: ChatRoutesDeps) {
 }
 
 /**
- * Coerce the chat panel's free-form history payload into the strict
- * `AcpHistoryTurn[]` shape. The panel sends `{role, text}` tuples but
- * may include other fields we don't care about; we just keep the two
- * we need and drop anything that doesn't have a recognized role.
- */
-/**
  * Per-turn image attachment limits. Generous enough for a handful of
  * screenshots, tight enough that a runaway client can't blow up the
  * agent prompt or the persisted spec. Base64 inflates bytes ~4/3, so
@@ -667,22 +521,22 @@ export function chatRoutes(deps: ChatRoutesDeps) {
 const MAX_IMAGES_PER_TURN = 8;
 const MAX_IMAGE_BASE64_LEN = 10_000_000;
 // Aggregate cap across all attachments on one turn. The whole payload is
-// persisted into the run's AcpSpec (jsonb), so bound the worst case
+// persisted into the run's spec (jsonb), so bound the worst case
 // (8 × per-image cap ≈ 80 MB) to something a single row + a single agent
 // prompt can carry. ~24 MB base64 ≈ 18 MB of raw image total per turn.
 const MAX_IMAGES_TOTAL_BASE64_LEN = 24_000_000;
 const ALLOWED_IMAGE_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
 
 /**
- * Coerce the chat panel's image payload into validated `AcpImageInput[]`.
+ * Coerce the chat panel's image payload into validated `ImageInput[]`.
  * Each entry must be `{ data: <base64, no data: prefix>, mimeType: image/* }`.
  * Oversized / wrong-type / malformed entries are dropped (not fatal); the
  * list is capped at `MAX_IMAGES_PER_TURN` and the combined base64 length
  * at `MAX_IMAGES_TOTAL_BASE64_LEN`.
  */
-export function normalizeImages(raw: unknown): AcpImageInput[] {
+export function normalizeImages(raw: unknown): ImageInput[] {
   if (!Array.isArray(raw)) return [];
-  const out: AcpImageInput[] = [];
+  const out: ImageInput[] = [];
   let totalLen = 0;
   for (const item of raw) {
     if (out.length >= MAX_IMAGES_PER_TURN) break;
@@ -700,8 +554,14 @@ export function normalizeImages(raw: unknown): AcpImageInput[] {
   return out;
 }
 
-function normalizeHistory(history: unknown[]): AcpHistoryTurn[] {
-  const out: AcpHistoryTurn[] = [];
+/**
+ * Coerce the chat panel's free-form history payload into the strict
+ * `HistoryTurn[]` shape. The panel sends `{role, text}` tuples but
+ * may include other fields we don't care about; we just keep the two
+ * we need and drop anything that doesn't have a recognized role.
+ */
+function normalizeHistory(history: unknown[]): HistoryTurn[] {
+  const out: HistoryTurn[] = [];
   for (const raw of history) {
     if (!raw || typeof raw !== "object") continue;
     const r = raw as { role?: unknown; text?: unknown };
@@ -731,18 +591,4 @@ When the user should choose from predefined replies, include an options payload 
 \`\`\`
 
 The chat panel renders each option as a button. Clicking a button sends that option's \`value\` as the user's next message.`;
-}
-
-const PERMISSION_MODES = new Set<AcpPermissionMode>([
-  "default",
-  "acceptEdits",
-  "plan",
-  "bypassPermissions",
-]);
-
-function parsePermissionMode(raw: unknown): AcpPermissionMode | undefined {
-  if (typeof raw !== "string") return undefined;
-  return PERMISSION_MODES.has(raw as AcpPermissionMode)
-    ? (raw as AcpPermissionMode)
-    : undefined;
 }

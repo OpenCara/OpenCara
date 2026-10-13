@@ -625,8 +625,8 @@ export function flowRoutes(deps: FlowRoutesDeps) {
       // The on-NOTIFY handler above ships snapshot updates; this poll is
       // only a fallback to detect terminal status and close the stream
       // if a NOTIFY is missed, so we must NOT refetch the snapshot here —
-      // doing so re-ships every agent_run.spec (incl. multi-hundred-kB ACP
-      // payloads) every 2s for the life of the stream.
+      // doing so re-ships every agent_run.spec (incl. multi-hundred-kB agent
+      // turn payloads) every 2s for the life of the stream.
       const terminalCheck = setInterval(async () => {
         // Guard the whole body: a rejection from an async setInterval is
         // unhandled and Node promotes it to a fatal uncaughtException, which
@@ -672,7 +672,7 @@ async function loadFlowRunSnapshot(db: Db, id: string) {
   });
   const stepIds = steps.map((s) => s.id);
   // Project only the fields the snapshot consumer needs. Excluding `spec`
-  // is load-bearing: the ACP payload it carries can be hundreds of kB per
+  // is load-bearing: the agent turn it carries can be hundreds of kB per
   // row, and this function is called on every snapshot refetch.
   const agentRunsList = stepIds.length
     ? await db.query.agentRuns.findMany({

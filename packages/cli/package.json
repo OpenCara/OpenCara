@@ -10,30 +10,31 @@
   },
   "homepage": "https://opencara.com",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "bin": {
-    "opencara": "./dist/bin.js",
-    "opencara-mcp": "./dist/opencara-mcp.js",
-    "claude-acp": "./dist/claude-acp.js"
+    "opencara": "./dist/bin.js"
   },
   "main": "./dist/bin.js",
   "files": [
     "dist/bin.js",
-    "dist/opencara-mcp.js",
-    "dist/claude-acp.js"
+    "dist/chunks"
   ],
   "scripts": {
     "build": "tsc -b && node build.mjs",
     "dev": "tsx watch src/bin.ts",
     "start": "node dist/bin.js",
     "typecheck": "tsc -b",
-    "test": "node --import tsx --test --test-reporter=spec src/acp/__tests__/*.test.ts src/mcp/__tests__/*.test.ts src/runner/__tests__/*.test.ts src/bin/__tests__/*.test.ts src/commands/__tests__/*.test.ts src/transport/__tests__/*.test.ts",
-    "acp:spike": "tsx src/acp/spike.ts",
-    "mcp:smoke": "tsx src/mcp/smoke.ts",
+    "test": "node --import tsx --test --test-reporter=spec src/runner/__tests__/*.test.ts src/commands/__tests__/*.test.ts src/transport/__tests__/*.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "ws": "^8.18.0",
+    "@earendil-works/chord": "1.2.0",
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@earendil-works/pi-durable": "1.2.0",
+    "ws": "^8.22.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {

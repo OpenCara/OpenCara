@@ -11,7 +11,7 @@ import { useLocation, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { stripAcpMarkers } from "@opencara/shared";
+import { stripAgentMarkers } from "@opencara/shared";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { AgentOutputBlocks, TypingDots } from "./AgentOutput";
 import {
@@ -231,17 +231,6 @@ function scopeForPage(
 
 const NO_SCOPE: ChatSessionScope = { scopeKind: "user", scopeId: "" };
 
-// Per-turn permission knob forwarded to the agent runner. "default" =
-// omit the field (agent's baked-in behaviour wins). "plan" is the most
-// frequently used non-default value, hence the dedicated toggle button.
-type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
-const PERMISSION_MODE_OPTIONS: { value: PermissionMode; label: string }[] = [
-  { value: "default", label: "Default" },
-  { value: "acceptEdits", label: "Accept edits" },
-  { value: "plan", label: "Plan" },
-  { value: "bypassPermissions", label: "Bypass" },
-];
-
 export function ChatPanel({ open, onClose, selection, onClearSelection }: Props) {
   const location = useLocation();
   const params = useParams();
@@ -256,7 +245,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
     Set<string>
   >(() => new Set());
   const [skillOpen, setSkillOpen] = useState(false);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [showThinking, setShowThinking] = useShowThinking();
   // Collapsible session sidebar (issue #143) — replaces the old History
   // dialog. Open by default so the session list is visible alongside the
@@ -385,7 +373,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       const first = agentsQ.data.agents[0]!.id;
       setAgentId(first);
       // Persist the auto-pick so the chat_sessions row has a non-null
-      // agentId. chat.ts post-dispatch writes `acp_session_id` under
+      // agentId. chat.ts post-dispatch writes `conversation_id` under
       // `where agentId = $requestAgentId`, which silently matches zero
       // rows when the persisted agent is still NULL — i.e. the
       // most-common golden path (first-ever chat on a scope, server
@@ -404,20 +392,19 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
 
   const onAgentPick = (v: string) => {
     if (v === agentId) return;
-    // Switching agent invalidates the resumable ACP session for this
-    // thread (the new shim has no JSONL under the prior UUID). Warn
-    // before throwing away an in-progress conversation — the server
-    // will clear acpSessionId on the next agent POST anyway, so the
-    // next turn starts fresh either way; the dialog just protects the
-    // user from doing it accidentally.
+    // Switching agent invalidates the resumable conversation for this
+    // thread — a conversation belongs to one agent. Warn before throwing
+    // away an in-progress thread — the server will clear conversationId
+    // on the next agent POST anyway, so the next turn starts fresh either
+    // way; the dialog just protects the user from doing it accidentally.
     if (messages.length > 0) {
       const prior = agentsQ.data?.agents.find((a) => a.id === agentId)?.name;
       const next = agentsQ.data?.agents.find((a) => a.id === v)?.name ?? v;
       const proceed = window.confirm(
         `Switch to "${next}"?\n\n` +
           `This starts a new conversation — ${prior ?? "the current agent"}'s ` +
-          `session can't be resumed by a different agent, so the prior turns ` +
-          `won't be in context anymore.`,
+          `conversation belongs to one agent, so the prior turns won't be in ` +
+          `context anymore.`,
       );
       if (!proceed) return;
       setMessages([]);
@@ -588,9 +575,9 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           }
         : { ...pageContext, selection: selObj };
 
-    // Build history from completed turns so the backend can inject them
-    // as a fallback when session resume isn't available (e.g. MCP poison
-    // cleared the prior session, or the session JSONL is on another
+    // Build history from completed turns so the device can seed a new
+    // conversation with them when the thread's durable conversation isn't
+    // available (first turn after an agent switch, or it lives on another
     // device). `messages` in this closure is the state BEFORE the new
     // user message was appended, so it contains only prior turns.
     // Capped to the last 20 turns to avoid unbounded POST bodies and
@@ -599,7 +586,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
       .filter((m) => !m.pending && m.text.trim().length > 0)
       .map((m) => ({
         role: m.role,
-        text: m.role === "assistant" ? stripAcpMarkers(m.text) : m.text,
+        text: m.role === "assistant" ? stripAgentMarkers(m.text) : m.text,
       }));
     const history = allHistory.slice(-20);
 
@@ -614,7 +601,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
           pageContext: ctxForRequest,
           history,
           // Bare base64 + mime per attachment — the orchestrator rebuilds
-          // these into ACP image content blocks for the agent prompt.
+          // these into image inputs for the agent's turn.
           ...(imagesToSend.length > 0
             ? {
                 images: imagesToSend.map((img) => ({
@@ -623,11 +610,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
                 })),
               }
             : {}),
-          // Only send when explicitly non-default — the orchestrator
-          // already treats omitted/default identically, but keeping
-          // the request body minimal makes the dev console easier to
-          // skim during troubleshooting.
-          ...(permissionMode !== "default" ? { permissionMode } : {}),
         },
       );
       setMessages((prev) =>
@@ -715,7 +697,7 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
             setAnsweredOptionMessageIds(new Set());
             // Hydrate the agent dropdown to whatever that session was last
             // run with — so the panel doesn't dispatch the user's current
-            // agent into someone else's prior ACP thread.
+            // agent into someone else's prior conversation.
             if (s.agentId) setAgentId(s.agentId);
           }}
           onRename={(id, title) => renameSessionMut.mutate({ id, title })}
@@ -894,21 +876,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
 
       <div className="border-t p-3">
         <div className="mb-2 flex items-center gap-2 text-xs">
-          <Select
-            value={permissionMode}
-            onValueChange={(v) => setPermissionMode(v as PermissionMode)}
-          >
-            <SelectTrigger className="h-7 w-32 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {PERMISSION_MODE_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value} className="text-xs">
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Button
             size="sm"
             variant="ghost"
@@ -931,11 +898,6 @@ export function ChatPanel({ open, onClose, selection, onClearSelection }: Props)
               e.target.value = "";
             }}
           />
-          {permissionMode !== "default" && (
-            <span className="text-muted-foreground">
-              applies to the next turn
-            </span>
-          )}
         </div>
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">

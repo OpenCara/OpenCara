@@ -9,7 +9,7 @@ import type { PageSkillBuilder } from "../skills.js";
  * `template_drafts` row — never on the published code template. The
  * builder hydrates the user's current draft (or the code template if no
  * draft exists yet) and exposes the `opencara_template_node_config_set`
- * MCP tool for edits.
+ * opencara tool for edits.
  */
 export const flowTemplateDetailBuilder: PageSkillBuilder = async (ctx) => {
   const slug = ctx.pageContext.flowSlug;
@@ -45,13 +45,13 @@ full graph is provided to you on stdin under \`template.graphJson\`.
 
 ## How to call it
 
-Call the \`opencara_template_node_config_set\` MCP tool with these args:
+Call the \`opencara_template_node_config_set\` opencara tool with these args:
 
 - \`templateSlug\` (string, required) — pass \`"${def.slug}"\`
 - \`nodeId\` (string, required) — one of \`template.graphJson.nodes[*].id\`
 - \`config\` (object, required) — the full new config object for that node
 
-Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+Mutations happen through opencara tool calls — **not** fenced \`opencara-call\`
 blocks (that legacy text channel was removed; emitting a fenced block
 here does nothing).
 

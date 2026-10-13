@@ -19,7 +19,7 @@ Each flow has exactly one trigger, and the engine pre-filters every incoming web
 [opencara.com](https://opencara.com) is the hosted orchestrator. It turns the lifecycle above on for your own repos without running any server yourself — you bring the machines the agents run on:
 
 - **Your hardware, your keys.** Agents execute on devices you pair (a laptop, a homelab box, a VPS), using your own provider subscriptions and API keys. Nothing about your code or credentials passes through a third-party runner; opencara.com only sees webhook events, orchestration state, and the logs the device streams back.
-- **No CI minutes, real dev environments.** Agents run where your toolchain already works — with your installed CLIs, caches, and checkouts. Worktrees persist per PR branch, so a fix iteration resumes the same conversation in the same checkout instead of starting cold.
+- **No CI minutes, real dev environments.** Agents run where your toolchain already works — with your installed CLIs, caches, and repo clones on the device.
 - **The full loop, not one bot.** Issue → implementation PR → multi-agent review → review-driven fixes → optional auto-merge, visible end-to-end as flow runs you can inspect, edit, and re-run per project.
 
 ### How
@@ -34,7 +34,7 @@ Each flow has exactly one trigger, and the engine pre-filters every incoming web
    ```
 
    First start prints a pairing code and opens `/devices/pair` in your browser; confirm there, and the daemon stays connected waiting for jobs. Keep it running (tmux, systemd, …). Pair as many devices as you like.
-5. **Create an agent** (`/agents`): pick a kind (`claude`, `codex`, `opencode`, `pi`, `omp`, `cursor`, `agy`, or `devin` — see [Agent kinds](#agent-kinds-acp)) and set the provider API key in the agent's env. The device must have the underlying tool available (e.g. the `claude` CLI for kind `claude`; the `npx`-based adapters fetch themselves).
+5. **Create an agent** (`/agents`): pick a model as `provider/modelId` (e.g. `anthropic/claude-sonnet-5-5`), optionally a thinking level, and set the provider API key in the agent's env — see [Agents](#agents). The device runs the agent itself; nothing else needs installing beyond the `opencara` CLI.
 6. **Bind agents to the flow**: open the project's flow and click a node — pick a prompt (optional) and add your agents in priority order. The first agent is the node's primary; the rest are fallbacks. On the reviewer node, set "Run in parallel" to the number of reviews you want per PR, "Preferred successes" to how many should come back, and "Minimum successes" to how few you can still ship on — 3 / 3 / 2 runs three reviewers and still delivers when one of them fails.
 7. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
 
@@ -47,7 +47,7 @@ Self-hosting the orchestrator instead is just this repo + Postgres + your own Gi
 | `packages/shared` | Shared TS types and wire-protocol contracts. Published to npm as `@opencara/shared`. |
 | `packages/flows` | Built-in flow definitions + Zod schemas for the orchestrator's DAG types. |
 | `packages/orchestrator` | Hono server: webhook ingestion, event-driven agent dispatch, persistent state (Postgres + Drizzle). |
-| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agents as [ACP](https://agentclientprotocol.com) subprocesses. Published as [`opencara`](https://www.npmjs.com/package/opencara) (`npm i -g opencara` → `opencara`, `opencara-mcp`, and `claude-acp` binaries; runs the pair flow on first start, then accepts jobs). Think: GitHub Actions self-hosted runners. |
+| `packages/cli` | Agent-host CLI. Daemon that registers a machine with the orchestrator and runs dispatched agents in-process on [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable), storing each conversation durably on the device. Published as [`opencara`](https://www.npmjs.com/package/opencara) (`npm i -g opencara` → `opencara` binary; runs the pair flow on first start, then accepts jobs). Think: GitHub Actions self-hosted runners. |
 | `apps/web` | React + React Flow UI for visualizing and editing orchestration flows. |
 
 ## Stack
@@ -57,7 +57,7 @@ Self-hosting the orchestrator instead is just this repo + Postgres + your own Gi
 - Hono (orchestrator API)
 - PostgreSQL + Drizzle ORM
 - Vite + React + React Flow (web UI)
-- Node.js ≥ 22
+- Node.js ≥ 22.19 (the device CLI uses `node:sqlite`)
 
 ## Development
 
@@ -229,35 +229,31 @@ Agents that need a checkout configure a worktree directly on the agent flow node
 
 **Cleanup.** The checkout is removed as soon as its attempt finishes (success, failure or cancel) via `opencara internal worktree remove --key <slug>` on the device that holds it, and its `worktree_pins` row is deleted. Leftovers are handled by two sweeps: `pull_request.closed` removes every pin still on that head ref, and a periodic job (5 min after boot, then every 6h) prunes pins older than 1 day and asks every connected device to `opencara internal worktree gc --max-age-hours 24 --keep <live keys…>`, which deletes any checkout or session dir on disk older than a day that the orchestrator has no live pin for — including legacy per-branch checkouts and half-built dirs from a crashed allocation.
 
-CLI side: `opencara internal worktree {create,remove,write-session,gc}`. **Keep paired devices on a current CLI build** — device and orchestrator exchange a host-protocol version in the `hello`/`hello-ack` handshake (`packages/shared/src/host-protocol.ts`), and CLIs predating the ACP cutover can't run dispatched agents at all. `npm exec opencara@latest` on each paired host after upgrading the orchestrator.
+CLI side: `opencara internal worktree {create,remove,write-session,gc}`. **Keep paired devices on a current CLI build** — device and orchestrator exchange a host-protocol version in the `hello`/`hello-ack` handshake (`packages/shared/src/host-protocol.ts`); the orchestrator refuses CLIs older than host protocol 2 (the pi-durable cutover) at connect. `npm exec opencara@latest` on each paired host after upgrading the orchestrator.
 
-## Agent kinds (ACP)
+## Agents
 
-Every agent runs as an [Agent Client Protocol](https://agentclientprotocol.com) subprocess on the paired device — the legacy stdin-JSON runner is gone. `agents.kind` selects which ACP adapter the device spawns (`packages/orchestrator/src/agents/acp-gate.ts`):
+Every agent runs in-process inside the device CLI on [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable) — there are no external adapters to install. An agent (`/agents`) is:
 
-| Kind | Adapter command |
-|---|---|
-| `claude` | `claude-acp` — in-package shim around the local `claude` CLI; ships inside the `opencara` npm package and resolves to the bundled `dist/claude-acp.js`, no separate install. |
-| `codex` | `npx --yes @agentclientprotocol/codex-acp` |
-| `opencode` | `npx --yes opencode-ai@latest acp` |
-| `pi` | `npx --yes pi-acp@latest` |
-| `omp` | `npx --yes @oh-my-pi/pi-coding-agent@latest acp` — Oh My Pi's native ACP server. The npm *package* name is not the `omp` bin name; the device also needs `bun` on PATH. Credentials come from the device's `~/.omp/agent/models.yml` (per-provider `apiKey`) or an account added with `/login`, so the agent's env can usually stay empty. |
-| `cursor` | `cursor-agent acp` — the Cursor CLI's native ACP server. Install it on the device (`cursor-agent login` once); it is not fetchable via npx. |
-| `agy` | `agy-acp` — adapter around the Antigravity CLI. See [the installation and limitations](docs/agy-acp.md). |
-| `devin` | `devin acp` — the Devin CLI's native ACP server. Install the official CLI and authenticate it on the paired device; see [Devin ACP setup](docs/devin-acp.md). |
-| `commandcode` | `npx --yes cmd-acp@latest` — bridges Command Code's headless mode (`cmd -p`) to ACP. The device needs `cmd` installed (`npm i -g command-code`, Node >= 22) and authenticated (`cmd login` or `COMMAND_CODE_API_KEY`). |
+- **Model** — `provider/modelId` (provider = text before the first `/`), e.g. `anthropic/claude-sonnet-5-5` or `openai/gpt-5.5`. Run `pi --list-models` on the device to see what is usable there.
+- **Thinking level** — `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or empty for the device's pi default (`defaultThinkingLevel` in `~/.pi/agent/settings.json`, else `medium`). The device clamps it to what the model supports.
+- **Capture thinking** — when on, model reasoning is streamed into the run log as a `[think]` block.
+- **Env** — provider API keys (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) override the device's credentials per request; other variables reach the agent's `bash` tool.
+- **Device** — optional pin to one paired device.
 
-(`custom` survives in the Postgres enum for pre-cutover rows but is no longer dispatchable — re-save those agents with a registered kind.)
+Models and credentials come from pi: the device builds pi's model runtime from `~/.pi/agent/models.json` and `~/.pi/agent/auth.json`, so custom providers, base-URL overrides and subscription logins made with the `pi` CLI's `/login` all work. Agents get the `read`, `write`, `edit` and `bash` tools plus the opencara tools chat skills use (`opencara_issue_body_set`, `opencara_flow_node_config_set`, `opencara_template_node_config_set`, `opencara_kanban_wave_dispatch`). The project instructions file (default `AGENTS.md`) is read from the run's worktree and appended to the agent's instructions.
 
-Pick the kind in the agents view (`/agents`) and set the relevant provider key on the agent's env (e.g. `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY` for codex, `KIMI_API_KEY` / `MINIMAX_CN_API_KEY` etc. for pi). Model selection: put `--model <id>` in the agent's args and the orchestrator translates it per adapter (codex takes a `-c model="…"` config override; adapters that advertise a model option — claude-acp, opencode, omp, cursor, devin — get it over ACP `session/set_config_option`). Three kinds have quirky model ids: `omp` wants the provider-qualified form (`volcengine-ark/kimi-k3`, from `omp models`), `cursor` takes parameterized ids (`grok-4.7[context=500k,reasoning_effort=high,fast=false]`) — its argv `--model` names are a different namespace, so the orchestrator drops `--model` from cursor's argv and selects the model over ACP alone. The runner negotiates cursor's parameterized picker (`_meta.parameterizedModelPicker`), so any combination the model's parameters allow works — each `k=v` becomes its own `set_config_option`; unadvertised parameters or values are skipped with a warning rather than failing the run — and `devin` requires the tier-qualified ids it advertises over ACP (`swe-2-max`, `adaptive`, ...); a bare family name like `swe-2` is rejected and the run falls back to Devin's default. The "ACP args" field replaces the adapter's args verbatim when set (for `cursor` a `--model` there is still routed over ACP rather than onto argv, for the namespace reason above); the adapter *command* is always fixed by kind.
+Conversations are stored in SQLite under `~/.opencara/conversations/` on the device, one file per conversation; the daemon deletes files idle for 30 days (at start, then daily).
 
-**Resume:** the session id an agent ends a run with is persisted (`agent_runs.spec.acp.priorSessionId`, plus `agent-session.json` next to the worktree on the device). The next run on the same (repo, branch) is pinned to the same device and resumes that conversation where the adapter supports it — so a fix iteration wakes up with the implementer's prior context intact.
+Migration 0061 converted existing agents: the model comes from the old `--model` arg (`claude` → `anthropic/<id>`, `codex` → `openai/<id>`, provider-qualified ids such as commandcode's `xiaomi/mimo-v2.5` kept as they are, so they now need that provider's key). Agents whose old type has no pi provider (`cursor`, `devin`, `agy`, `custom`) keep that name as the provider (e.g. `devin/swe-2-high`) and fail on the device until edited. Chat sessions lost their old resume ids and start fresh.
+
+**Resume:** the conversation a turn ran in is recorded on its run (`agent_runs.spec.turn.priorConversationId`). Flow attempts always start a fresh conversation — the previous iteration's context reaches the agent through the PR/issue thread and the upstream node's output. A step's steering chat and chat sessions resume the recorded conversation, pinned to the device that holds its SQLite file.
 
 ## PR review → fix loop
 
-The `pr-review-fix` flow triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It re-dispatches the implement agent pinned to the **same device** that produced the branch, in the same persistent worktree, **resuming the same conversation** via the ACP adapter. The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+The `pr-review-fix` flow triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It dispatches the implement agent to a fresh checkout of the PR branch, preferring the device that produced the branch, in a fresh conversation (the review carries the feedback). The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
 
-How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host. If the pinned host is offline at trigger time, the engine falls back to `pickIdle()` and the agent starts a fresh conversation (no session id is reachable on a different device).
+How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host; if the pinned host is offline at trigger time, the engine falls back to `pickIdle()`.
 
 **No iteration cap:** GitHub's review/push cycle is the bound. If the operator needs to stop a runaway loop, disable the flow.
 

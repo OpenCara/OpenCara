@@ -405,11 +405,11 @@ const STEP_TONE: Record<string, string> = {
 };
 
 /**
- * Steering controls are not yet wired into the running agent's ACP
- * session. We surface the affordance as a visible, disabled section so
+ * Steering controls are not yet wired into the running agent's
+ * conversation. We surface the affordance as a visible, disabled section so
  * users see where it'll live; full plumbing (live message inject,
  * pause/resume) is tracked separately because it touches the dispatcher
- * and ACP adapters, not just the issue page.
+ * and the device runner, not just the issue page.
  */
 function SteeringNotice() {
   return (

@@ -100,8 +100,8 @@ export function runRoutes(deps: RunRoutesDeps) {
 
       await flush();
 
-      // Status-only projection: `spec` can carry a hundreds-of-kB ACP
-      // payload and we only need the status to decide whether to close.
+      // Status-only projection: `spec` can carry a hundreds-of-kB agent
+      // turn payload and we only need the status to decide whether to close.
       const run = await deps.db.query.agentRuns.findFirst({
         where: eq(agentRuns.id, runId),
         columns: { id: true, status: true },

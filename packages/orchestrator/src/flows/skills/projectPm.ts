@@ -21,7 +21,7 @@ import type { PageSkillBuilder } from "../skills.js";
  * Mutation surface:
  *   - issue create / sub-issue create → `gh` shell commands using GH_TOKEN
  *     injected by routes/api/chat.ts (per-turn installation token)
- *   - opencara_kanban_wave_dispatch    — MCP tool (genuine opencara, dispatches
+ *   - opencara_kanban_wave_dispatch    — opencara tool (genuine opencara, dispatches
  *     a wave into the flow engine)
  */
 export const projectPmBuilder: PageSkillBuilder = async (ctx) => {
@@ -129,7 +129,7 @@ in your environment, scoped to \`${project.owner}/${project.name}\` with
 \`issues: write\` — no auth setup needed. Always pass
 \`-R ${project.owner}/${project.name}\` so the command is unambiguous.
 
-Wave dispatch is the one operation that stays as an MCP tool — it triggers
+Wave dispatch is the one operation that stays as an opencara tool — it triggers
 opencara's flow engine, not a GitHub call.
 
 Before running anything below, **restate what you'll do and wait for the
@@ -168,9 +168,9 @@ gh api graphql -f query='
   }' -f parent="$PARENT_ID" -f child="$CHILD_ID"
 \`\`\`
 
-### 3. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow (MCP tool)
+### 3. \`opencara_kanban_wave_dispatch\` — dispatch issues to a flow (opencara tool)
 
-This stays as an MCP tool because it triggers opencara's flow engine,
+This stays as an opencara tool because it triggers opencara's flow engine,
 not a GitHub mutation. Call it through your tool-calling interface.
 
 Args:
@@ -188,7 +188,7 @@ user explicitly confirms.
 - **Before creating issues or sub-issues**, restate the title, body, and labels you'll create and wait for confirmation.
 - Only dispatch to enabled flows. The enabled flows are: ${flowSlugs || "(none — all flows are disabled)"}.
 - Maximum 10 issues per wave call.
-- The MCP tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
+- The tool returns \`"ok"\` on success or \`"rejected: <reason>"\` on failure — surface failures back to the user verbatim instead of claiming the dispatch succeeded.
 - For \`gh\` commands: on non-zero exit, surface gh's stderr verbatim — don't paraphrase or claim success.
 - If the user asks about something outside the board (e.g. "what's in the PR queue"), explain you only have kanban context and suggest navigating to the relevant page.
 `;

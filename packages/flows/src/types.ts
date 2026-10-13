@@ -240,10 +240,9 @@ export function isTriggerKind(kind: string): boolean {
   return (TRIGGER_KINDS as readonly string[]).includes(normalizeNodeKind(kind));
 }
 
-// Agent flow nodes carry no in-graph subprocess `spec` — the dispatched
-// AgentSpec (command/args/env/cwd) is built at dispatch time from the
-// linked agent's `kind` via `buildAcpSpec` (orchestrator's
-// `agents/acp-gate.ts`). Per-node knobs that DO affect dispatch live on
+// Agent flow nodes carry no in-graph run `spec` — the dispatched AgentSpec
+// is built at dispatch time from the linked agent row via `buildAgentSpec`
+// (orchestrator's `agents/agentSpec.ts`). Per-node knobs that DO affect dispatch live on
 // `config` directly: `contextInjection` (which env keys + stdin payload
 // reach the agent), `draftPr` (agent opens a draft PR that the engine
 // marks ready after success), and optional `worktree` (per-attempt

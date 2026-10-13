@@ -5,7 +5,7 @@ import type { PageSkillBuilder, SkillEnvelope } from "../skills.js";
 /**
  * Issue canvas page (apps/web/src/pages/IssueDetailPage.tsx). The chat
  * runs against the user's currently-visible issue body. The agent calls
- * the `opencara_issue_body_set` MCP tool to update the draft — published
+ * the `opencara_issue_body_set` opencara tool to update the draft — published
  * GitHub state is unchanged until the user clicks Save.
  *
  * Auth: the canvas object's projectId comes from the client; the builder
@@ -89,12 +89,12 @@ the canvas page; whatever you write here shows up immediately as a draft
 
 ## How to call it
 
-Call the \`opencara_issue_body_set\` MCP tool with these args:
+Call the \`opencara_issue_body_set\` opencara tool with these args:
 
 - \`issueNumber\` (number, required) — pass \`${opts.issueNumber}\`
 - \`bodyMd\` (string, required) — the full new markdown body
 
-Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+Mutations happen through opencara tool calls — **not** fenced \`opencara-call\`
 blocks (that legacy text channel was removed; emitting a fenced block
 here does nothing). There is no HTTP request for you to make and no
 token for you to manage.
