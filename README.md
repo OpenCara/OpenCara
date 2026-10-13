@@ -241,7 +241,16 @@ Every agent runs in-process inside the device CLI on [`@earendil-works/pi-durabl
 - **Env** — provider API keys (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) override the device's credentials per request; other variables reach the agent's `bash` tool.
 - **Device** — optional pin to one paired device.
 
-Models and credentials come from pi: the device builds pi's model runtime from `~/.pi/agent/models.json`, `~/.pi/agent/auth.json` and the provider extensions of the pi packages installed there, so custom providers, base-URL overrides, subscription logins made with the `pi` CLI's `/login` and provider packages all work. A provider pi doesn't ship is a package away — e.g. `pi install npm:@commandcode/pi-commandcode-provider` (Command Code's official provider, `command-code/<id>`, key from `COMMAND_CODE_API_KEY` in the agent's env or `/login command-code`) or `pi install npm:pi-devin-local` (Devin through the device's Devin CLI login, `devin/<family>` with the thinking level picking the variant; run `/login devin` in `pi` once). Only global packages load — a repo under review can't add its own. Agents get the `read`, `write`, `edit` and `bash` tools plus the opencara tools chat skills use (`opencara_issue_body_set`, `opencara_flow_node_config_set`, `opencara_template_node_config_set`, `opencara_kanban_wave_dispatch`). The project instructions file (default `AGENTS.md`) is read from the run's worktree and appended to the agent's instructions.
+Models and credentials come from pi: the device builds pi's model runtime from `~/.pi/agent/models.json`, `~/.pi/agent/auth.json` and the provider extensions of the pi packages installed there, so custom providers, base-URL overrides, subscription logins made with the `pi` CLI's `/login` and provider packages all work. A provider pi doesn't ship is a package away:
+
+| Provider | Install on the device | Models | Credentials |
+|---|---|---|---|
+| Command Code (official) | `pi install npm:@commandcode/pi-commandcode-provider` | `command-code/<id>` | `COMMAND_CODE_API_KEY` in the agent's env, or `/login command-code` |
+| Devin | `pi install npm:pi-devin-local` | `devin/<family>`; the thinking level picks the variant | the device's Devin CLI login, registered with `/login devin` |
+| Cursor | `pi install npm:pi-cursor-reins` | `cursor/<id>` (e.g. `grok-4.7-max`, `claude-opus-5-5-max`) | `/login cursor` |
+| Antigravity | `pi install npm:pi-provider-antigravity` | `antigravity/<id>` (e.g. `gemini-3.8-flash`) | `/login antigravity` |
+
+Logins are made once in an interactive `pi` on the device and land in `auth.json`. Each turn refreshes the model catalog of the provider it uses when that provider comes from a package. Only global packages load — a repo under review can't add its own. Agents get the `read`, `write`, `edit` and `bash` tools plus the opencara tools chat skills use (`opencara_issue_body_set`, `opencara_flow_node_config_set`, `opencara_template_node_config_set`, `opencara_kanban_wave_dispatch`). The project instructions file (default `AGENTS.md`) is read from the run's worktree and appended to the agent's instructions.
 
 Conversations are stored in SQLite under `~/.opencara/conversations/` on the device, one file per conversation; the daemon deletes files idle for 30 days (at start, then daily).
 
