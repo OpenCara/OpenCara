@@ -35,6 +35,9 @@ const REQUEST_METHODS: Record<string, true> = {
   cancelDeferred: true,
 };
 
+/** Request methods that return an event stream (with `result()`). */
+const STREAM_METHODS: Record<string, true> = { stream: true, streamSimple: true };
+
 export async function loadPiRuntime(
   env: Record<string, string>,
   provider: string,
@@ -64,7 +67,20 @@ export async function loadPiRuntime(
     noContextFiles: true,
   });
   await loader.reload();
-  const warnings = registerExtensionProviders(runtime, loader.getExtensions());
+  const warnings: string[] = [];
+  const extensionProviders = registerExtensionProviders(runtime, loader.getExtensions(), warnings);
+  if (extensionProviders.has(provider)) {
+    // Extension providers own their catalogs: dynamic ones start empty or
+    // from a cached snapshot, others list a fallback until they've fetched.
+    // Refresh the turn's provider so its current models are there.
+    const { errors } = await runtime.refresh({
+      allowNetwork: true,
+      force: true,
+      providers: [provider],
+      signal: AbortSignal.timeout(30_000),
+    });
+    for (const [id, err] of errors) warnings.push(`provider ${id}: model catalog refresh failed: ${err.message}`);
+  }
   return {
     models: withAgentAuth(runtime, env, provider, await agentEnvAuth(runtime, provider, env)),
     defaultThinkingLevel: settings.getDefaultThinkingLevel() ?? "medium",
@@ -74,14 +90,22 @@ export async function loadPiRuntime(
 
 /**
  * Apply the providers and virtual models the extensions registered while
- * loading, as pi's own sessions do. Everything else an extension registers
- * (tools, commands, UI) is for interactive pi and is ignored here.
+ * loading, and route later registrations (a catalog fetched in the
+ * background, after a token refresh) straight to `runtime` — what pi's own
+ * extension runner does once bound. Everything else an extension registers
+ * (tools, commands, UI) is for interactive pi and is ignored here. Returns
+ * the ids of the providers the extensions registered.
  */
-function registerExtensionProviders(runtime: ModelRuntime, loaded: LoadExtensionsResult): string[] {
-  const warnings = [
+function registerExtensionProviders(
+  runtime: ModelRuntime,
+  loaded: LoadExtensionsResult,
+  warnings: string[],
+): Set<string> {
+  warnings.push(
     ...loaded.errors.map((e) => `pi extension ${e.path} failed to load: ${e.error}`),
     ...(loaded.warnings ?? []).map((w) => `pi extension ${w.path}: ${w.warning}`),
-  ];
+  );
+  const providers = new Set<string>();
   const apply = (extensionPath: string, register: () => void) => {
     try {
       register();
@@ -92,14 +116,24 @@ function registerExtensionProviders(runtime: ModelRuntime, loaded: LoadExtension
   const state = loaded.runtime;
   for (const { name, config, extensionPath } of state.pendingProviderRegistrations) {
     apply(extensionPath, () => runtime.registerProvider(name, config));
+    providers.add(name);
   }
   for (const { provider, extensionPath } of state.pendingNativeProviderRegistrations) {
     apply(extensionPath, () => runtime.registerNativeProvider(provider));
+    providers.add(provider.id);
   }
   for (const { definition, extensionPath } of state.pendingVirtualModelRegistrations) {
     apply(extensionPath, () => runtime.registerVirtualModel(definition));
   }
-  return warnings;
+  state.pendingProviderRegistrations = [];
+  state.pendingNativeProviderRegistrations = [];
+  state.pendingVirtualModelRegistrations = [];
+  state.registerProvider = (name, config) => runtime.registerProvider(name, config);
+  state.registerNativeProvider = (provider) => runtime.registerNativeProvider(provider);
+  state.unregisterProvider = (name) => runtime.unregisterProvider(name);
+  state.registerVirtualModel = (definition) => runtime.registerVirtualModel(definition);
+  state.unregisterVirtualModel = (provider, id) => runtime.unregisterVirtualModel(provider, id);
+  return providers;
 }
 
 /** `provider`'s auth as the agent's env alone configures it, if it does. */
@@ -123,6 +157,13 @@ async function agentEnvAuth(
  * explicit options, the only way past a credential the device stores —
  * pi-ai consults env only when nothing is stored. Concurrent turns stay
  * isolated: each turn builds its own runtime.
+ *
+ * A stream's abort signal is forwarded only while the response is still
+ * coming in. pi-durable aborts a generation's signal as soon as the
+ * generation settles, while providers that keep a server-side run open
+ * across tool calls (Cursor's agent runs) tie that run to the signal of the
+ * request that last continued it — so the settle would tear down the run the
+ * tool results are about to continue.
  */
 export function withAgentAuth(
   models: Models,
@@ -139,18 +180,37 @@ export function withAgentAuth(
       return (
         model: { provider: string; baseUrl: string },
         request: unknown,
-        options?: { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> },
+        options?: {
+          apiKey?: string;
+          headers?: ProviderHeaders;
+          env?: Record<string, string>;
+          signal?: AbortSignal;
+        },
       ) => {
-        if (!auth || model.provider !== provider) {
-          return value.call(target, model, request, { ...options, env: { ...env, ...options?.env } });
+        let call = { ...options, env: { ...env, ...options?.env } };
+        let requestModel = model;
+        if (auth && model.provider === provider) {
+          const { apiKey, headers, baseUrl } = auth.auth;
+          if (baseUrl) requestModel = { ...model, baseUrl };
+          call = {
+            ...call,
+            env: { ...env, ...auth.env, ...options?.env },
+            apiKey: options?.apiKey ?? apiKey,
+            headers: { ...headers, ...options?.headers },
+          };
         }
-        const { apiKey, headers, baseUrl } = auth.auth;
-        return value.call(target, baseUrl ? { ...model, baseUrl } : model, request, {
-          ...options,
-          env: { ...env, ...auth.env, ...options?.env },
-          apiKey: options?.apiKey ?? apiKey,
-          headers: { ...headers, ...options?.headers },
-        });
+        const signal = options?.signal;
+        if (!STREAM_METHODS[prop] || !signal || signal.aborted) {
+          return value.call(target, requestModel, request, call);
+        }
+        const linked = new AbortController();
+        const forward = () => linked.abort(signal.reason);
+        signal.addEventListener("abort", forward, { once: true });
+        const stream = value.call(target, requestModel, request, { ...call, signal: linked.signal }) as {
+          result(): Promise<unknown>;
+        };
+        void stream.result().finally(() => signal.removeEventListener("abort", forward));
+        return stream;
       };
     },
   });
