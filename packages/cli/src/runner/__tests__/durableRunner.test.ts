@@ -192,12 +192,35 @@ describe("runAgentTurn", () => {
     assert.match(result.errorMessage ?? "", /without any reply text/);
   });
 
-  it("fails fast on a model this device doesn't provide", async () => {
+  it("fails fast on a model this device doesn't provide, keeping only a stored conversation", async () => {
+    const { dir, deps } = device([fauxAssistantMessage("first")]);
+    const fresh = await start(spec(dir, { model: "faux/unknown" }), deps).done();
+    assert.equal(fresh.result.status, "failed");
+    assert.equal(fresh.result.conversationId, null);
+    assert.match(fresh.result.errorMessage ?? "", /faux\/unknown is not available on this device/);
+
+    const stored = (await start(spec(dir), deps).done()).result.conversationId!;
+    const resumed = await start(spec(dir, { model: "faux/unknown", priorConversationId: stored }), deps).done();
+    assert.equal(resumed.result.status, "failed");
+    assert.equal(resumed.result.conversationId, stored);
+  });
+
+  it("creates no conversation for a turn cancelled before it starts", async () => {
     const { dir, deps } = device([]);
-    const { result } = await start(spec(dir, { model: "faux/unknown" }), deps).done();
-    assert.equal(result.status, "failed");
+    const { promise: loading, resolve: finishLoading } = Promise.withResolvers<void>();
+    const turn = start(spec(dir), {
+      ...deps,
+      loadRuntime: async (env, provider) => {
+        await loading;
+        return deps.loadRuntime(env, provider);
+      },
+    });
+    turn.handle.controller.cancel();
+    finishLoading();
+    const { result } = await turn.done();
+    assert.equal(result.status, "cancelled");
     assert.equal(result.conversationId, null);
-    assert.match(result.errorMessage ?? "", /faux\/unknown is not available on this device/);
+    assert.equal(existsSync(deps.conversationsDir), false);
   });
 
   it("cancels a running turn, tool call included", async () => {

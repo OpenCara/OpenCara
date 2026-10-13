@@ -5,13 +5,16 @@
 --
 -- `model` is backfilled from the old adapter args (acp_args when set, else
 -- args): the value after --model / -m (also --model=X, -m=X, and codex's
--- `-c model="X"`), qualified by the old kind — claude → anthropic (minus the
--- claude-acp "[1m]" context suffix), codex → openai, pi's --provider when
--- given. Ids that already contain a slash are pi references (omp, opencode,
--- pi) and are kept as they are. Kinds no pi provider covers (cursor, devin,
--- agy, commandcode, custom) keep the kind as the provider so the row still
--- shows what it ran; the device rejects the unknown provider until the agent
--- is edited. No recoverable model id → "<provider>/unset".
+-- `-c model="X"`). An explicit --provider (pi) qualifies it the way pi does —
+-- the id is taken within that provider, minus a repeated `provider/` prefix,
+-- so `--provider openrouter --model anthropic/x` stays on openrouter. Without
+-- one, ids that already contain a slash are pi references (omp, opencode)
+-- and are kept; otherwise the old kind qualifies the id — claude → anthropic
+-- (minus the claude-acp "[1m]" context suffix), codex → openai. Kinds no pi
+-- provider covers (cursor, devin, agy, commandcode, custom) keep the kind as
+-- the provider so the row still shows what it ran; the device rejects the
+-- unknown provider until the agent is edited. No recoverable model id →
+-- "<provider>/unset".
 
 ALTER TABLE "agents" ADD COLUMN "model" text;
 --> statement-breakpoint
@@ -36,11 +39,13 @@ $$;
 --> statement-breakpoint
 UPDATE "agents" AS ag
 SET "model" = CASE
+    WHEN m.provider IS NOT NULL THEN m.provider || '/' || COALESCE(
+        CASE WHEN lower(left(m.id, length(m.provider) + 1)) = lower(m.provider) || '/' THEN substr(m.id, length(m.provider) + 2) ELSE m.id END,
+        'unset'
+      )
     WHEN m.id LIKE '%/%' THEN m.id
-    ELSE COALESCE(
-        m.provider,
-        CASE ag."kind"::text WHEN 'claude' THEN 'anthropic' WHEN 'codex' THEN 'openai' ELSE ag."kind"::text END
-      ) || '/' || COALESCE(
+    ELSE CASE ag."kind"::text WHEN 'claude' THEN 'anthropic' WHEN 'codex' THEN 'openai' ELSE ag."kind"::text END
+      || '/' || COALESCE(
         CASE WHEN ag."kind"::text = 'claude' THEN regexp_replace(m.id, '\[[^]]*\]$', '') ELSE m.id END,
         'unset'
       )

@@ -137,9 +137,11 @@ export function runAgentTurn(opts: {
     let events: AgentEventStream | undefined;
     try {
       const runtime = await deps.loadRuntime(spec.env, ref.provider);
+      // Cancelled while loading: don't create a conversation for nothing.
+      if (cancelRequested) return cancelled(slot.resumed ? slot.id : null);
       if (!runtime.models.getModel(ref.provider, ref.modelId)) {
         return failed(
-          null,
+          slot.resumed ? slot.id : null,
           `model ${turn.model} is not available on this device — \`pi --list-models\` lists ` +
             "the models its pi configuration provides",
         );
@@ -205,7 +207,7 @@ export function runAgentTurn(opts: {
       // Only claim a conversation that exists: one the harness opened, or
       // the resumed one.
       const conversationId = harness || slot.resumed ? slot.id : null;
-      return cancelRequested ? cancelled(slot.id) : failed(conversationId, errorText(err));
+      return cancelRequested ? cancelled(conversationId) : failed(conversationId, errorText(err));
     } finally {
       translator.flush();
       bridge.shutdown("turn ended");
@@ -282,7 +284,7 @@ function failed(conversationId: string | null, errorMessage: string): TurnResult
   return { status: "failed", exitCode: 1, conversationId, errorMessage };
 }
 
-function cancelled(conversationId: string): TurnResult {
+function cancelled(conversationId: string | null): TurnResult {
   return { status: "cancelled", exitCode: 1, conversationId };
 }
 
