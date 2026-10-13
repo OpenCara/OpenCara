@@ -137,6 +137,7 @@ export function runAgentTurn(opts: {
     let events: AgentEventStream | undefined;
     try {
       const runtime = await deps.loadRuntime(spec.env, ref.provider);
+      for (const warning of runtime.warnings ?? []) onLog("stderr", `[opencara] ${warning}\n`);
       // Cancelled while loading: don't create a conversation for nothing.
       if (cancelRequested) return cancelled(slot.resumed ? slot.id : null);
       if (!runtime.models.getModel(ref.provider, ref.modelId)) {

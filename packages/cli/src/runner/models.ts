@@ -1,7 +1,8 @@
 // What an agent turn runs against: pi's own model runtime over the device's
 // pi configuration — `~/.pi/agent/models.json` (custom providers, base-URL
-// overrides) and `auth.json` (keys and subscription logins made with the
-// `pi` CLI's /login) — with the agent's env layered on top: credentials
+// overrides), `auth.json` (keys and subscription logins made with the `pi`
+// CLI's /login) and the provider extensions of its installed pi packages
+// (`pi install npm:…`) — with the agent's env layered on top: credentials
 // there (ANTHROPIC_API_KEY, OPENAI_API_KEY, …) win over whatever the device
 // stores for the turn's provider.
 
@@ -13,11 +14,14 @@ import type {
   Models,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
+import type { LoadExtensionsResult, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export interface PiRuntime {
   models: Models;
   /** Level for agents that set none, as pi itself picks it. */
   defaultThinkingLevel: ModelThinkingLevel;
+  /** Device pi extensions that failed to load or register; the turn runs without them. */
+  warnings?: string[];
 }
 
 /** Methods that send a provider request and accept per-request auth. */
@@ -37,7 +41,7 @@ export async function loadPiRuntime(
 ): Promise<PiRuntime> {
   // Loaded on first use: the coding agent takes seconds to import, and every
   // `opencara internal …` worktree job re-executes this binary.
-  const { getAgentDir, ModelRuntime, SettingsManager } = await import(
+  const { DefaultResourceLoader, getAgentDir, ModelRuntime, SettingsManager } = await import(
     "@earendil-works/pi-coding-agent"
   );
   const dir = getAgentDir();
@@ -48,10 +52,54 @@ export async function loadPiRuntime(
   // Global settings only: a repo under review must not tune the device.
   // "medium" is pi's built-in default when settings.json sets none.
   const settings = SettingsManager.create(dir, dir, { projectTrusted: false });
+  const loader = new DefaultResourceLoader({
+    // Resolved from the agent dir, not the run's worktree: a repo under
+    // review must not bring extensions of its own.
+    cwd: dir,
+    agentDir: dir,
+    settingsManager: settings,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await loader.reload();
+  const warnings = registerExtensionProviders(runtime, loader.getExtensions());
   return {
     models: withAgentAuth(runtime, env, provider, await agentEnvAuth(runtime, provider, env)),
     defaultThinkingLevel: settings.getDefaultThinkingLevel() ?? "medium",
+    warnings,
   };
+}
+
+/**
+ * Apply the providers and virtual models the extensions registered while
+ * loading, as pi's own sessions do. Everything else an extension registers
+ * (tools, commands, UI) is for interactive pi and is ignored here.
+ */
+function registerExtensionProviders(runtime: ModelRuntime, loaded: LoadExtensionsResult): string[] {
+  const warnings = [
+    ...loaded.errors.map((e) => `pi extension ${e.path} failed to load: ${e.error}`),
+    ...(loaded.warnings ?? []).map((w) => `pi extension ${w.path}: ${w.warning}`),
+  ];
+  const apply = (extensionPath: string, register: () => void) => {
+    try {
+      register();
+    } catch (err) {
+      warnings.push(`pi extension ${extensionPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const state = loaded.runtime;
+  for (const { name, config, extensionPath } of state.pendingProviderRegistrations) {
+    apply(extensionPath, () => runtime.registerProvider(name, config));
+  }
+  for (const { provider, extensionPath } of state.pendingNativeProviderRegistrations) {
+    apply(extensionPath, () => runtime.registerNativeProvider(provider));
+  }
+  for (const { definition, extensionPath } of state.pendingVirtualModelRegistrations) {
+    apply(extensionPath, () => runtime.registerVirtualModel(definition));
+  }
+  return warnings;
 }
 
 /** `provider`'s auth as the agent's env alone configures it, if it does. */

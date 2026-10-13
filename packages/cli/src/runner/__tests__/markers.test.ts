@@ -59,6 +59,23 @@ describe("createEventTranslator", () => {
     assert.equal(translate([start(), delta("thinking_delta", "hmm")]).stdout, "\n[think]\nhmm\n[/think]\n");
   });
 
+  it("prints a batch in message order when a new block lands ahead of the reasoning before it", () => {
+    const { stdout } = translate([
+      start(),
+      delta("thinking_delta", 'exactly "pong'),
+      {
+        type: "message_update",
+        changes: [
+          { type: "text_start", contentIndex: 1, block: { type: "text", text: "p" } },
+          { type: "thinking_delta", contentIndex: 0, delta: '".' },
+        ],
+      } as unknown as AgentEvent,
+      delta("text_delta", "ong", 1),
+      end({ type: "thinking", thinking: 'exactly "pong".' }, { type: "text", text: "pong" }),
+    ]);
+    assert.equal(stdout, '\n[think]\nexactly "pong".\n[/think]\npong');
+  });
+
   it("drops reasoning entirely, fences included, when capture is off", () => {
     const { stdout } = translate(
       [start(), delta("thinking_delta", "secret"), end({ type: "thinking", thinking: "secret" }, { type: "text", text: "ok" })],

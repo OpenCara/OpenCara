@@ -15,7 +15,7 @@
 // prints only the rest — never twice, never lost.
 
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import type { AgentEvent, JsonObject } from "@earendil-works/pi-durable";
+import type { AgentEvent, JsonObject, MessageChange } from "@earendil-works/pi-durable";
 
 export type LogSink = (stream: "stdout" | "stderr", chunk: string) => void;
 
@@ -98,7 +98,11 @@ export function createEventTranslator(
           catchUpMessage(event.message);
           return;
         case "message_update":
-          for (const change of event.changes) {
+          // A batch lists changes in commit order, which can put a new block
+          // ahead of the last deltas to the one before it (reasoning streamed
+          // alongside the first words of the answer). Print in message order,
+          // or the reply comes out split around a [think] fence.
+          for (const change of [...event.changes].sort(byContentIndex)) {
             if (change.type === "text_delta") print(change.contentIndex, "text", change.delta);
             else if (change.type === "thinking_delta") {
               print(change.contentIndex, "thinking", change.delta);
@@ -165,6 +169,11 @@ export function createEventTranslator(
       return sawText;
     },
   };
+}
+
+/** Stable order by block; a whole-message change has no index and stands alone in its batch. */
+function byContentIndex(a: MessageChange, b: MessageChange): number {
+  return ("contentIndex" in a ? a.contentIndex : -1) - ("contentIndex" in b ? b.contentIndex : -1);
 }
 
 /** One identifying line per call: the shell command, the file path, or the
