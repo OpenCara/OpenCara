@@ -10,7 +10,7 @@
 //     smuggling is rejected — see PR #133 review feedback that the
 //     prior stub bypassed addedByUserId).
 //   - hydrateFromFlowRunStep pulls agentId from flow_node_settings and
-//     acpSessionId from the most recent agent_run's spec, falling back
+//     conversationId from the most recent agent_run's spec, falling back
 //     cleanly when bits are missing.
 
 import { describe, it } from "node:test";
@@ -306,7 +306,7 @@ describe("loadFlowRunStepProject", () => {
 });
 
 describe("hydrateFromFlowRunStep", () => {
-  it("returns agentId from flow_node_settings + acpSessionId from spec (most-recent wins)", async () => {
+  it("returns agentId from flow_node_settings + conversationId from spec (most-recent wins)", async () => {
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
     seed.runs["run1"] = { id: "run1", flowId: "flow1", projectId: "proj1" };
@@ -317,14 +317,14 @@ describe("hydrateFromFlowRunStep", () => {
         flowRunStepId: "step1",
         hostId: "host-x",
         createdAt: new Date("2026-05-01T10:00:00Z"),
-        spec: { acp: { priorSessionId: "uuid-old" } },
+        spec: { turn: { priorConversationId: "conv-old" } },
       },
       {
         id: "ar2",
         flowRunStepId: "step1",
         hostId: "host-y",
         createdAt: new Date("2026-05-02T10:00:00Z"),
-        spec: { acp: { priorSessionId: "uuid-new" } },
+        spec: { turn: { priorConversationId: "conv-new" } },
       },
     ];
     seed.flowNodeSettings["flow1:agent-1"] = {
@@ -335,8 +335,8 @@ describe("hydrateFromFlowRunStep", () => {
     const got = await hydrateFromFlowRunStep(makeFakeDb(seed), "step1");
     assert.deepEqual(got, {
       agentId: "agent-abc",
-      acpSessionId: "uuid-new",
-      acpSessionHostId: "host-y",
+      conversationId: "conv-new",
+      conversationHostId: "host-y",
     });
   });
 
@@ -344,15 +344,15 @@ describe("hydrateFromFlowRunStep", () => {
     const got = await hydrateFromFlowRunStep(makeFakeDb(emptyFakeRows()), "nope");
     assert.deepEqual(got, {
       agentId: null,
-      acpSessionId: null,
-      acpSessionHostId: null,
+      conversationId: null,
+      conversationHostId: null,
     });
   });
 
   it("returns nulls for fields the spec doesn't carry (pre-resume writeback)", async () => {
     // Reproduces the timing case the PR #133 review flagged: opening
     // the panel before the flow agent's first turn has written
-    // spec.acp.priorSessionId back. Hydration must not fabricate an
+    // spec.turn.priorConversationId back. Hydration must not fabricate an
     // id; chatSessions.ts will re-hydrate on the next GET.
     const seed = emptyFakeRows();
     seed.steps["step1"] = { id: "step1", flowRunId: "run1", nodeId: "agent-1" };
@@ -364,14 +364,14 @@ describe("hydrateFromFlowRunStep", () => {
         flowRunStepId: "step1",
         hostId: null,
         createdAt: new Date("2026-05-01T10:00:00Z"),
-        spec: { kind: "claude", command: "claude-acp", args: [], env: {} },
+        spec: { kind: "sonnet", args: [], env: {} },
       },
     ];
     const got = await hydrateFromFlowRunStep(makeFakeDb(seed), "step1");
     assert.deepEqual(got, {
       agentId: null,
-      acpSessionId: null,
-      acpSessionHostId: null,
+      conversationId: null,
+      conversationHostId: null,
     });
   });
 });

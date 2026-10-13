@@ -914,54 +914,30 @@ export interface TemplateOverrideSummary {
   nodeOverrides: string[];
 }
 
-export type AgentKind =
-  | "claude"
-  | "codex"
-  | "opencode"
-  | "pi"
-  | "omp"
-  | "cursor"
-  | "agy"
-  | "devin"
-  | "commandcode"
-  | "custom";
-
 export interface AgentRow {
   id: string;
   userId: string;
   name: string;
-  /** Selects per-kind adapter at dispatch time. `custom` = legacy
-   *  opaque-subprocess behaviour (no conversation resume across runs). */
-  kind: AgentKind;
-  command: string;
-  args: string[];
-  /** Full ACP adapter args override. null = use the kind default
-   *  (`defaultAcpArgs`). When set, used verbatim as the adapter args. */
-  acpArgs: string[] | null;
-  /** Computed (read-only): the fixed adapter executable for this kind,
-   *  e.g. `npx` / `claude-acp`. The command is not user-editable. */
-  acpCommand: string;
-  /** Computed (read-only): the adapter args that run by default for this
-   *  kind (incl. per-kind model translation of `args`). The editor pre-fills
-   *  the editable args field with `acpArgs ?? defaultAcpArgs`. */
-  defaultAcpArgs: string[];
+  /** pi model ref, "provider/modelId" (e.g. `anthropic/claude-sonnet-5-5`);
+   *  resolved on the device against its pi config plus the agent's env. */
+  model: string;
+  /** One of THINKING_LEVELS from @opencara/shared; null = the device's pi default. */
+  thoughtLevel: string | null;
+  /** false = the device drops reasoning at the source, so there is no
+   *  `[think]` block to show and nothing stored to turn back on later. */
+  captureThinking: boolean;
   env: Record<string, string>;
   cwd: string | null;
-  /** Whether the agent's reasoning stream is captured into the run logs.
-   *  false = the device drops thought chunks at the source, so there is no
-   *  `[think]` block to show and nothing stored to turn back on later.
-   *  Only the reasoning adapters (omp, pi, cursor, agy, devin) emit thoughts. */
-  captureThinking: boolean;
-  /** Reasoning effort / thinking level selected over ACP for every run
-   *  (claude: low…max, codex: minimal…xhigh, pi/omp: off…xhigh). Free text;
-   *  the device matches it against what the adapter advertises. null =
-   *  adapter default. */
-  thoughtLevel: string | null;
   /** Pin to a specific agent_host (device). null = "any idle device". */
   hostId: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+type AgentEditableFields = Pick<
+  AgentRow,
+  "name" | "model" | "thoughtLevel" | "captureThinking" | "env" | "cwd" | "hostId"
+>;
 
 export const agentsQuery = () => ({
   queryKey: ["agents"] as const,
@@ -971,29 +947,10 @@ export const agentsQuery = () => ({
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: {
-      name: string;
-      /** Selects per-kind adapter (claude/codex/opencode/pi) or `custom`
-       *  for the legacy free-form command. Defaults to `custom` server-side. */
-      kind?: AgentKind;
-      /** For kind=custom: full shell-style command incl. args. Server tokenizes. */
-      command?: string;
-      /** For kind!=custom: extra args appended to the adapter's base args
-       *  (e.g. `--provider kimi-coding --model kimi-k2-thinking` for pi).
-       *  Free-form string — server tokenizes the same way as Command. */
-      extraArgs?: string;
-      /** Full ACP adapter args override as a shell string (server tokenizes).
-       *  Omit or null to use the kind default. */
-      acpArgs?: string | null;
-      /** Omit to capture the agent's reasoning (the default). */
-      captureThinking?: boolean;
-      /** Reasoning effort; omit / null for the adapter default. */
-      thoughtLevel?: string | null;
-      env?: Record<string, string>;
-      cwd?: string | null;
-      /** Specific device id; null/undefined = "any idle device". */
-      hostId?: string | null;
-    }) => api.post<{ agent: AgentRow }>("/api/agents", vars),
+    mutationFn: (
+      vars: Pick<AgentEditableFields, "name" | "model"> &
+        Partial<Omit<AgentEditableFields, "name" | "model">>,
+    ) => api.post<{ agent: AgentRow }>("/api/agents", vars),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }
@@ -1001,20 +958,8 @@ export function useCreateAgent() {
 export function useUpdateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: {
-      id: string;
-      patch: Partial<
-        Omit<
-          AgentRow,
-          "id" | "userId" | "createdAt" | "updatedAt" | "acpArgs" | "acpCommand" | "defaultAcpArgs"
-        >
-      > & {
-        /** Per-agent CLI extras. Sent separately so the server can tokenize it. */
-        extraArgs?: string | string[];
-        /** Override as a shell string (server tokenizes); null resets to default. */
-        acpArgs?: string | string[] | null;
-      };
-    }) => api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
+    mutationFn: (vars: { id: string; patch: Partial<AgentEditableFields> }) =>
+      api.patch<{ agent: AgentRow }>(`/api/agents/${vars.id}`, vars.patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }

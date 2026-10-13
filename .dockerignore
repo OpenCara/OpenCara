@@ -29,10 +29,6 @@ build
 .DS_Store
 *.log
 
-# dev-run dumps
-.opencara-acp-spike
-.opencara-mcp-smoke
-
 # the deploy assets themselves aren't needed inside the image
 deploy
 docker-compose.yml

@@ -84,8 +84,9 @@ jobs:
 
       - name: Build (tsc + esbuild bundle)
         # `tsc -b` typechecks via project refs (builds @opencara/shared
-        # then opencara). `node build.mjs` then bundles src/bin.ts → a
-        # single dist/bin.js with @opencara/shared inlined.
+        # then opencara). `node build.mjs` then bundles src/bin.ts →
+        # dist/bin.js (+ dist/chunks/ for the lazily loaded agent runner)
+        # with @opencara/shared inlined.
         run: pnpm --filter opencara build
 
       - name: Test

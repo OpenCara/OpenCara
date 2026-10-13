@@ -1,7 +1,7 @@
-// The ACP device runner fences an agent's internal activity into markers on
-// stdout so the chat panel can render it as collapsible blocks:
+// The device's agent runner fences an agent's internal activity into markers
+// on stdout so the chat panel can render it as collapsible blocks:
 //
-//   \n[think]\n … \n[/think]\n     reasoning stream (agent_thought_chunk)
+//   \n[think]\n … \n[/think]\n     reasoning stream (thinking deltas)
 //   \n[tool] <title>\n             a tool call starting
 //   \n[tool] <title> → <status>\n  that call reaching a terminal status
 //
@@ -29,7 +29,7 @@ const TOOL_LINE_RE = /^\[tool\] [^\n]*\n?/gm;
 const BLANK_RUN_RE = /\n{3,}/g;
 
 /**
- * Remove the ACP runner's `[think]` blocks and `[tool]` lines from agent
+ * Remove the runner's `[think]` blocks and `[tool]` lines from agent
  * output, leaving the prose the agent actually wrote.
  *
  * An unterminated `[think]` (the run was cancelled mid-thought, so no closing
@@ -43,11 +43,11 @@ const BLANK_RUN_RE = /\n{3,}/g;
  * matching the exact emitted grammar — would break the moment the runner's
  * format changes, which is the failure this function exists to survive.
  */
-export function stripAcpMarkers(text: string): string {
+export function stripAgentMarkers(text: string): string {
   // Nothing to strip → hand back the EXACT input. extractAgentResultText's
   // documented fall-through is verbatim, and callers (plus its tests) rely on
   // that down to the trailing newline; trimming output that never contained a
-  // marker would silently rewrite every non-ACP agent's result.
+  // marker would silently rewrite every marker-free agent result.
   // Substring probe, not `.test()`: these are /g regexes, and `.test()`
   // advances their shared `lastIndex`, which turns the guard into a
   // stateful trap for the next caller.
@@ -72,23 +72,22 @@ const STREAM_CONSTRUCT_RE =
   /^\[think\]\n[\s\S]*?^\[\/think\]\n?|^\[tool\] [^\n]*\n?|^\[think\][\s\S]*$/gm;
 
 /**
- * Split captured ACP stdout into the agent's message runs — the prose
+ * Split captured agent stdout into the agent's message runs — the prose
  * emitted between stream constructs.
  *
- * Why this exists: ACP agents (devin, codex-acp, agy) narrate progress on
- * the same `agent_message_chunk` channel that carries the final answer —
- * "Let me check X…" — so a run's stdout interleaves working narration
- * with the reply and `stripAcpMarkers` alone leaves all of it behind
- * (PR #322 review 5256477256 posted eleven paragraphs of narration above
- * the review). Consumers that want just the answer pick from the tail of
- * this list; consumers that want the whole transcript use
- * `stripAcpMarkers`.
+ * Why this exists: agents narrate progress ("Let me check X…") as assistant
+ * text between tool calls, on the same channel that carries the final
+ * answer — so a run's stdout interleaves working narration with the reply
+ * and `stripAgentMarkers` alone leaves all of it behind (PR #322 review
+ * 5256477256 posted eleven paragraphs of narration above the review).
+ * Consumers that want just the answer pick from the tail of this list;
+ * consumers that want the whole transcript use `stripAgentMarkers`.
  *
  * A trailing unterminated `[think]` truncates the list rather than
  * returning its reasoning as a segment: text after the opener is a
  * thought the run never finished, not a message it sent.
  */
-export function acpMessageSegments(raw: string): string[] {
+export function agentMessageSegments(raw: string): string[] {
   const segments: string[] = [];
   let start = 0;
   for (const m of raw.matchAll(STREAM_CONSTRUCT_RE)) {

@@ -1,33 +1,33 @@
 // Pins that every per-agent setting on the agents row survives the flow
-// run's hand-off into buildAcpSpec. The acp-gate tests cover the builder
+// run's hand-off into buildAgentSpec. agentSpec.test.ts covers the builder
 // itself; this covers the call-site projection in nodeRunners, which is
 // where a newly added column is most easily forgotten.
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { flowAgentSpecInput } from "../nodeRunners.js";
-import { buildAcpSpec } from "../../agents/acp-gate.js";
+import { buildAgentSpec } from "../../agents/agentSpec.js";
 
 const row = {
-  kind: "claude",
-  name: "claude reviewer",
+  name: "sonnet reviewer",
+  model: "anthropic/claude-sonnet-5-5",
   cwd: "/home/agent",
-  args: ["--model", "claude-sonnet-5"],
-  acpArgs: null,
   captureThinking: false,
   thoughtLevel: "high",
 };
 
 describe("flowAgentSpecInput", () => {
-  it("forwards thoughtLevel and captureThinking into the acp spec", () => {
-    const spec = buildAcpSpec({
+  it("forwards model, thoughtLevel and captureThinking into the turn", () => {
+    const spec = buildAgentSpec({
       agent: flowAgentSpecInput(row, null),
       env: {},
       systemPromptMd: "s",
       userPromptMd: "u",
     });
-    assert.equal(spec.acp?.thoughtLevel, "high");
-    assert.equal(spec.acp?.captureThinking, false);
+    assert.equal(spec.kind, "sonnet reviewer");
+    assert.equal(spec.turn?.model, "anthropic/claude-sonnet-5-5");
+    assert.equal(spec.turn?.thoughtLevel, "high");
+    assert.equal(spec.turn?.captureThinking, false);
   });
 
   it("prefers the worktree workdir over the agent's cwd", () => {

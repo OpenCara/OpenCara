@@ -31,7 +31,6 @@ import {
   useDeleteAgent,
   useTestAgent,
   useUpdateAgent,
-  type AgentKind,
   type AgentRow,
   type DeviceRow,
 } from "@/lib/queries";
@@ -41,6 +40,7 @@ import {
   type AgentLogLine,
 } from "@/components/chat/AgentOutput";
 import { formatRelative } from "@/lib/format";
+import { parseModelRef, THINKING_LEVELS } from "@opencara/shared";
 import { useRegisterChatAction } from "@/lib/chatActions";
 
 // "__any" sentinel = "any idle device" (mapped to null when sent to the
@@ -49,240 +49,93 @@ import { useRegisterChatAction } from "@/lib/chatActions";
 // collide with a real ULID device id.
 const ANY_DEVICE = "__any" as const;
 
-// Per-kind UI hints. The orchestrator's adapter library
-// (packages/orchestrator/src/agents/kinds.ts) is the source of
-// behavioural truth; these strings duplicate its `authHints` for the
-// form. Kept short — operators read them while authoring the agent.
-const KIND_HINTS: Record<
-  AgentKind,
-  {
-    label: string;
-    /** What the dispatcher runs by default for this kind. Shown as the
-     *  placeholder of the "Command" field so operators can see what
-     *  they're overriding. Custom has no default. */
-    defaultCommand: string | null;
-    envHint: string;
-    argsPlaceholder: string;
-    argsHint: string;
-  }
-> = {
-  claude: {
-    label: "Claude Code",
-    defaultCommand: "claude",
-    envHint:
-      "Set ANTHROPIC_API_KEY here, or run `claude auth login` once on the device.",
-    argsPlaceholder: "(usually empty — claude needs no extras)",
-    argsHint:
-      "Optional extra args. Adapter already passes -p / --output-format json / --resume.",
-  },
-  codex: {
-    label: "Codex (OpenAI)",
-    defaultCommand: "codex",
-    envHint:
-      "Set OPENAI_API_KEY here, or run `codex login --with-api-key` once on the device.",
-    argsPlaceholder: "(usually empty)",
-    argsHint:
-      "Optional extra args. Adapter already passes exec --json --skip-git-repo-check -a never.",
-  },
-  opencode: {
-    label: "opencode",
-    defaultCommand: "opencode",
-    envHint:
-      "Set the provider key (ANTHROPIC_API_KEY / OPENAI_API_KEY / …) for the model your opencode config picks.",
-    argsPlaceholder: "(usually empty)",
-    argsHint:
-      "Optional extra args. Adapter already passes run --format json --dangerously-skip-permissions.",
-  },
-  pi: {
-    label: "pi (pi-coding-agent)",
-    defaultCommand: "pi",
-    envHint:
-      "Set the provider's *_API_KEY (e.g. KIMI_API_KEY, MINIMAX_CN_API_KEY) for the model you select via --provider/--model.",
-    argsPlaceholder: "--provider kimi-coding --model kimi-k2-thinking",
-    argsHint:
-      "Pass --provider X --model Y here. Adapter passes --mode json / --offline / --no-context-files.",
-  },
-  omp: {
-    label: "omp (Oh My Pi)",
-    defaultCommand: "omp",
-    envHint:
-      "Authenticates from ~/.omp on the device (`omp auth`); provider keys set here are the fallback. The device also needs `bun` on PATH.",
-    argsPlaceholder: "--model volcengine-ark/kimi-k3",
-    argsHint:
-      "Model ids are provider-qualified — run `omp models` on the device for the list. Adapter passes the `acp` subcommand.",
-  },
-  cursor: {
-    label: "Cursor CLI",
-    defaultCommand: "cursor-agent",
-    envHint:
-      "Run `cursor-agent login` once on the device, or set CURSOR_API_KEY here. The binary must already be installed on the device.",
-    argsPlaceholder: "--model grok-4.7[context=500k,reasoning_effort=high,fast=false]",
-    argsHint:
-      "Cursor model ids are parameterized (name[k=v,...]); any combination the model's parameters allow works — invalid parameters are skipped with a warning in the run log.",
-  },
-  agy: {
-    label: "Antigravity CLI (agy)",
-    defaultCommand: "agy",
-    envHint:
-      "Install the OpenCara adapter release on the device: `npm install -g " +
-      "https://github.com/quabug/agy-acp/releases/download/opencara-v0.5.2-1/agy-acp-0.5.2-opencara.1.tgz`. " +
-      "Then sign in to agy. Stock agy-acp@0.5.2 ignores the required print-timeout option.",
-    argsPlaceholder: "--model gemini-3.8-flash",
-    argsHint: "Select a base model from `agy models` and set thinking level separately. The adapter auto-approves its local tools and URL fetches; it does not forward OpenCara MCP tools.",
-  },
-  devin: {
-    label: "Devin CLI",
-    defaultCommand: "devin",
-    envHint:
-      "Install Devin CLI on the device and run `devin auth login` once. On a headless device, use `devin auth login --force-manual-token-flow` or set WINDSURF_API_KEY here.",
-    argsPlaceholder: "--model swe-2-max",
-    argsHint:
-      "OpenCara launches Devin's native `devin acp` server. Model ids are tier-qualified (e.g. `swe-2-max`, `adaptive`); a bare family name like `swe-2` is rejected and the run falls back to Devin's default.",
-  },
-  commandcode: {
-    label: "Command Code (cmd)",
-    defaultCommand: "cmd-acp",
-    envHint:
-      "Install `command-code` on the device (`npm i -g command-code`, Node >= 22) and run `cmd login` once — or set COMMAND_CODE_API_KEY here. The adapter spawns `cmd -p` per turn.",
-    argsPlaceholder: "--model xiaomi/mimo-v2.5",
-    argsHint:
-      "Model ids are provider-qualified (`cmd --list-models`), e.g. `xiaomi/mimo-v2.5`. Sessions default to safe permissions — set `permissions.defaultMode=yolo` in cmd config on the device, or pin `[permission_mode=yolo]` in the model arg.",
-  },
-  custom: {
-    label: "Custom (no resume)",
-    defaultCommand: null,
-    envHint: "Set whatever your command needs.",
-    argsPlaceholder: "node /path/to/script.mjs --foo bar",
-    argsHint: "Full shell-style invocation. No conversation resume across runs.",
-  },
-};
+// Select value standing in for thoughtLevel = null (the device's pi
+// default). Radix's <SelectItem> rejects empty-string values.
+const PI_DEFAULT = "__default" as const;
 
-// Adapters that actually stream a reasoning channel (`agent_thought_chunk`).
-// Advisory only — "Capture agent thinking" is stored per agent whatever the
-// kind, so switching a quiet agent to a reasoning kind later needs no
-// migration. claude-acp and codex-acp emit no thoughts, so the switch is a
-// no-op for them.
-const THINKING_KINDS = new Set<AgentKind>(["omp", "pi", "cursor", "agy", "devin"]);
+const ENV_HINT =
+  "Passed to the agent's runs on the device and its shell commands. Provider keys here (ANTHROPIC_API_KEY=… / OPENAI_API_KEY=…) override the device's pi credentials for this agent.";
 
-// Reasoning-effort vocabularies per adapter, for the placeholder / hint of
-// the "Thinking level" field. Advisory: the value is free text and the
-// device validates it against what the adapter actually advertises.
-const THOUGHT_LEVEL_HINTS: Partial<Record<AgentKind, string>> = {
-  claude: "low, medium, high, xhigh, max",
-  codex: "minimal, low, medium, high, xhigh",
-  pi: "off, minimal, low, medium, high, xhigh",
-  omp: "off, minimal, low, medium, high, xhigh",
-  agy: "low, medium, high",
-  commandcode: "low, medium, high",
-};
+function isValidModel(model: string): boolean {
+  return parseModelRef(model.trim()) !== null;
+}
 
-function ThoughtLevelField({
-  id,
-  kind,
-  value,
-  onChange,
-}: {
-  id: string;
-  kind: AgentKind;
-  value: string;
-  onChange: (next: string) => void;
-}) {
-  const levels = THOUGHT_LEVEL_HINTS[kind];
+function ModelField(props: { id: string; value: string; onChange: (next: string) => void }) {
+  const invalid = props.value.trim() !== "" && !isValidModel(props.value);
   return (
     <div>
-      <Label htmlFor={id}>Thinking level</Label>
+      <Label htmlFor={props.id}>Model</Label>
       <Input
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="default"
+        id={props.id}
+        placeholder="anthropic/claude-sonnet-5-5"
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
         className="font-mono text-xs"
-        list={`${id}-levels`}
+        aria-invalid={invalid}
       />
-      {levels && (
-        <datalist id={`${id}-levels`}>
-          {levels.split(", ").map((l) => (
-            <option key={l} value={l} />
-          ))}
-        </datalist>
-      )}
-      <p className="mt-1 text-xs text-muted-foreground">
-        {levels ? (
-          <>
-            Reasoning effort selected over ACP on every run. <code>{kind}</code>{" "}
-            accepts {levels}. Empty = the adapter&apos;s default.
-            {kind === "claude" && (
-              <>
-                {" "}
-                Needs a <code>claude</code> CLI with <code>--effort</code>; an older
-                CLI on the device fails the turn instead of ignoring it.
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            Sent over ACP as the <code>thought_level</code> option when the adapter
-            advertises one; otherwise ignored with a note in the run log.
-          </>
-        )}
+      <p className={`mt-1 text-xs ${invalid ? "text-destructive" : "text-muted-foreground"}`}>
+        {invalid ? "Expected provider/modelId. " : ""}
+        <code>provider/modelId</code> as pi names it. Providers and keys come from
+        the device&apos;s pi config (<code>~/.pi/agent/models.json</code>,{" "}
+        <code>pi</code> <code>/login</code>) or this agent&apos;s env.
       </p>
     </div>
   );
 }
 
-const COMMAND_OVERRIDE_HINT =
-  "Default shown above. Override with e.g. `npx @anthropic-ai/claude-code@latest` to auto-fetch the latest, or a path like `/opt/claude/bin/claude`. Leave empty to use the default.";
-
-// Look up display hints for a kind, tolerating kinds this build doesn't
-// know: an agent row can carry a kind added by a newer release (or a local
-// WIP build — e.g. 'devin' crashed this page, OpenCara#245 follow-up) while
-// an older UI is still deployed. Unknown kinds render under their raw name
-// instead of taking the whole page down.
-function kindHints(kind: string): (typeof KIND_HINTS)[AgentKind] {
+function ThoughtLevelField(props: {
+  id: string;
+  /** "" = the device's pi default. */
+  value: string;
+  onChange: (next: string) => void;
+}) {
   return (
-    KIND_HINTS[kind as AgentKind] ?? {
-      label: kind,
-      defaultCommand: kind,
-      envHint: "",
-      argsPlaceholder: "",
-      argsHint: "This agent kind isn't recognised by this build of the UI.",
-    }
+    <div>
+      <Label htmlFor={props.id}>Thinking level</Label>
+      <Select
+        value={props.value === "" ? PI_DEFAULT : props.value}
+        onValueChange={(v) => props.onChange(v === PI_DEFAULT ? "" : v)}
+      >
+        <SelectTrigger id={props.id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={PI_DEFAULT}>pi default</SelectItem>
+          {THINKING_LEVELS.map((l) => (
+            <SelectItem key={l} value={l}>
+              {l}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
-const KIND_ORDER: AgentKind[] = [
-  "claude",
-  "codex",
-  "opencode",
-  "pi",
-  "omp",
-  "cursor",
-  "agy",
-  "devin",
-  "commandcode",
-  "custom",
-];
-
-interface KindPickerProps {
-  value: AgentKind;
-  onChange: (next: AgentKind) => void;
-  id?: string;
-}
-
-function KindPicker({ value, onChange, id }: KindPickerProps) {
+function CaptureThinkingField(props: {
+  id: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as AgentKind)}>
-      <SelectTrigger id={id}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {KIND_ORDER.map((k) => (
-          <SelectItem key={k} value={k}>
-            {KIND_HINTS[k].label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div>
+      <label htmlFor={props.id} className="flex items-center gap-2 text-sm font-medium">
+        <input
+          id={props.id}
+          type="checkbox"
+          checked={props.checked}
+          onChange={(e) => props.onChange(e.target.checked)}
+          className="size-4 rounded border-input"
+        />
+        <span>Capture agent thinking</span>
+      </label>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Off means the device discards this agent&apos;s reasoning as it streams —
+        nothing is stored, so there is no <code>[think]</code> block in the run
+        logs and no way to get it back for a past run. Useful when the reasoning
+        dwarfs the output.
+      </p>
+    </div>
   );
 }
 
@@ -362,9 +215,10 @@ export function AgentsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
         <p className="text-sm text-muted-foreground">
-          Reusable agent definitions (command + env). Linked to a flow's
-          agent node from the flow detail page; the linked agent's spec is what
-          actually runs.
+          Reusable agent definitions (model + thinking level + env). Each run is
+          a conversation the device executes itself. Linked to a flow's agent
+          node from the flow detail page; the linked agent is what actually
+          runs.
         </p>
       </div>
 
@@ -387,41 +241,21 @@ export function AgentsPage() {
   );
 }
 
+
 function NewAgentCard() {
   const [name, setName] = useState("");
-  // Default kind=claude — most users will want resume support; setting
-  // the default to `custom` would silently disable it without making
-  // the dropdown's value visible. (`custom` stays one click away.)
-  const [kind, setKind] = useState<AgentKind>("claude");
-  // For named kinds: optional binary override (empty = adapter default,
-  // shown as placeholder). For custom: the full invocation (required).
-  const [command, setCommand] = useState("");
-  // Operator extras for named kinds (e.g. `--provider X --model Y` for
-  // pi). Hidden for custom (extras are part of the Command field).
-  const [extraArgs, setExtraArgs] = useState("");
   const [model, setModel] = useState("");
-  const [envText, setEnvText] = useState("");
   const [thoughtLevel, setThoughtLevel] = useState("");
+  const [captureThinking, setCaptureThinking] = useState(true);
+  const [envText, setEnvText] = useState("");
   const [hostId, setHostId] = useState<string>(ANY_DEVICE);
   const devicesQ = useQuery(devicesQuery());
   const create = useCreateAgent();
   const error = create.error instanceof ApiError ? create.error.body : null;
 
-  // Let the chat panel's "Apply as command" button drop suggestions straight
-  // into this draft form (multi-line replies are flattened so the input keeps
-  // working as a single line).
-  useRegisterChatAction("command", (text) =>
-    setCommand(text.trim().split(/\r?\n/).join(" ")),
-  );
   useRegisterChatAction("agent-env", (text) => setEnvText(text.trim()));
 
-  const env = parseEnv(envText);
-  const hint = KIND_HINTS[kind];
-  const isCustom = kind === "custom";
-  // For kind=custom, the Command field holds the full invocation and is
-  // required. For named kinds, both Command (override) and Extra args are
-  // optional — the adapter handles the base invocation.
-  const canSave = name.trim().length > 0 && (!isCustom || command.trim().length > 0);
+  const canSave = name.trim().length > 0 && isValidModel(model);
 
   return (
     <Card>
@@ -451,64 +285,17 @@ function NewAgentCard() {
             />
           </div>
         </div>
-        <div>
-          <Label htmlFor="new-agent-kind">Kind</Label>
-          <KindPicker
-            id="new-agent-kind"
-            value={kind}
-            onChange={(next) => {
-              // Switching kind clears both fields — content shaped for
-              // a different CLI almost never carries over.
-              if (next !== kind) {
-                setCommand("");
-                setExtraArgs("");
-                setModel("");
-              }
-              setKind(next);
-            }}
-          />
-        </div>
-        <div>
-          <Label htmlFor="new-agent-command">Command</Label>
-          <Input
-            id="new-agent-command"
-            placeholder={isCustom ? hint.argsPlaceholder : hint.defaultCommand ?? ""}
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            className="font-mono text-xs"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            {isCustom ? hint.argsHint : COMMAND_OVERRIDE_HINT}
-          </p>
-        </div>
-        {!isCustom && (
-          <div>
-            <Label htmlFor="new-agent-model">Model</Label>
-            <Input
-              id="new-agent-model"
-              placeholder="e.g. gemini-3.8-flash"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="font-mono text-xs"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Saved as <code>--model</code> and selected over ACP when the adapter supports it.
-            </p>
-          </div>
-        )}
-        {!isCustom && (
-          <div>
-            <Label htmlFor="new-agent-extra-args">Extra args</Label>
-            <Input
-              id="new-agent-extra-args"
-              placeholder={hint.argsPlaceholder}
-              value={extraArgs}
-              onChange={(e) => setExtraArgs(e.target.value)}
-              className="font-mono text-xs"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">{hint.argsHint}</p>
-          </div>
-        )}
+        <ModelField id="new-agent-model" value={model} onChange={setModel} />
+        <ThoughtLevelField
+          id="new-agent-thought-level"
+          value={thoughtLevel}
+          onChange={setThoughtLevel}
+        />
+        <CaptureThinkingField
+          id="new-agent-capture-thinking"
+          checked={captureThinking}
+          onChange={setCaptureThinking}
+        />
         <div>
           <Label htmlFor="new-agent-env">Env vars (KEY=value, one per line)</Label>
           <Textarea
@@ -518,16 +305,8 @@ function NewAgentCard() {
             onChange={(e) => setEnvText(e.target.value)}
             className="min-h-20 font-mono text-xs"
           />
-          <p className="mt-1 text-xs text-muted-foreground">{hint.envHint}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{ENV_HINT}</p>
         </div>
-        {!isCustom && (
-          <ThoughtLevelField
-            id="new-agent-thought-level"
-            kind={kind}
-            value={thoughtLevel}
-            onChange={setThoughtLevel}
-          />
-        )}
         {error !== null && error !== undefined && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {extractErr(error)}
@@ -540,29 +319,19 @@ function NewAgentCard() {
               create.mutate(
                 {
                   name: name.trim(),
-                  kind,
-                  // Custom: command is required + holds the full invocation.
-                  // Named: command is the optional binary override; extras
-                  // go into a separate field.
-                  ...(isCustom
-                    ? { command: command.trim() }
-                    : {
-                        command: command.trim(),
-                        extraArgs: withModelArg(model, extraArgs),
-                      }),
-                  env,
-                  thoughtLevel: thoughtLevel.trim() || null,
+                  model: model.trim(),
+                  thoughtLevel: thoughtLevel || null,
+                  captureThinking,
+                  env: parseEnv(envText),
                   hostId: hostId === ANY_DEVICE ? null : hostId,
                 },
                 {
                   onSuccess: () => {
                     setName("");
-                    setKind("claude");
-                    setCommand("");
-                    setExtraArgs("");
                     setModel("");
-                    setEnvText("");
                     setThoughtLevel("");
+                    setCaptureThinking(true);
+                    setEnvText("");
                     setHostId(ANY_DEVICE);
                   },
                 },
@@ -581,27 +350,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const [editing, setEditing] = useState(false);
   const [testOpen, setTestOpen] = useState(false);
   const [name, setName] = useState(agent.name);
-  const [kind, setKind] = useState<AgentKind>(agent.kind);
-  // For kind=custom: full invocation, joinCommand stitches command+args
-  // back into a shell-style string. For named kinds: just the binary
-  // override (agent.command), shown empty when it equals the kind label
-  // so the placeholder reads as the default.
-  const [command, setCommand] = useState(
-    agent.kind === "custom"
-      ? joinCommand(agent)
-      : agent.command === agent.kind
-        ? ""
-        : agent.command,
-  );
-  // Named kinds: the full editable ACP adapter args, pre-filled with the
-  // current override (`acpArgs`) or the kind default (`defaultAcpArgs`, which
-  // already includes the per-kind model translation). The command stays fixed
-  // by kind. custom keeps the Command field instead.
-  const [acpArgsText, setAcpArgsText] = useState(
-    agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
-  );
-  const [model, setModel] = useState(modelArg(agent.args));
-  const [extraArgs, setExtraArgs] = useState(joinArgs(withoutModelArg(agent.args)));
+  const [model, setModel] = useState(agent.model);
   const [envText, setEnvText] = useState(
     Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
@@ -611,27 +360,21 @@ function AgentCard({ agent }: { agent: AgentRow }) {
   const devicesQ = useQuery(devicesQuery());
   const update = useUpdateAgent();
   const remove = useDeleteAgent();
+  const error = update.error instanceof ApiError ? update.error.body : null;
 
   const reset = () => {
     setName(agent.name);
-    setKind(agent.kind);
-    setCommand(
-      agent.kind === "custom"
-        ? joinCommand(agent)
-        : agent.command === agent.kind
-          ? ""
-          : agent.command,
-    );
-    setAcpArgsText(
-      agent.kind === "custom" ? "" : (agent.acpArgs ?? agent.defaultAcpArgs).join(" "),
-    );
-    setModel(modelArg(agent.args));
-    setExtraArgs(joinArgs(withoutModelArg(agent.args)));
+    setModel(agent.model);
     setEnvText(Object.entries(agent.env).map(([k, v]) => `${k}=${v}`).join("\n"));
     setHostId(agent.hostId ?? ANY_DEVICE);
     setCaptureThinking(agent.captureThinking);
     setThoughtLevel(agent.thoughtLevel ?? "");
   };
+
+  const canSave = name.trim().length > 0 && isValidModel(model);
+  const deviceLabel = agent.hostId
+    ? devicesQ.data?.devices.find((d) => d.id === agent.hostId)?.name ?? "deleted device"
+    : "any device";
 
   return (
     <Card id={`agent-${agent.id}`} className="scroll-mt-4 transition-shadow">
@@ -645,12 +388,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
             )}
             <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <span>Updated {formatRelative(agent.updatedAt)}</span>
-              <Badge variant="outline">
-                {agent.hostId
-                  ? devicesQ.data?.devices.find((d) => d.id === agent.hostId)?.name ??
-                    "deleted device"
-                  : "any device"}
-              </Badge>
+              <Badge variant="outline">{deviceLabel}</Badge>
             </div>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -669,40 +407,23 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 </Button>
                 <Button
                   size="sm"
-                  disabled={update.isPending}
-                  onClick={() => {
-                    const isCustom = kind === "custom";
-                    // Named kinds: the command is fixed by kind; the user owns
-                    // the adapter args. Saving the unchanged default (or empty)
-                    // sends null so the kind default + auto model-translation
-                    // keep applying; anything else is a verbatim override.
-                    const trimmedAcp = acpArgsText.trim();
-                    const acpArgs =
-                      trimmedAcp === "" ||
-                      trimmedAcp === agent.defaultAcpArgs.join(" ")
-                        ? null
-                        : trimmedAcp;
+                  disabled={!canSave || update.isPending}
+                  onClick={() =>
                     update.mutate(
                       {
                         id: agent.id,
                         patch: {
                           name: name.trim(),
-                          kind,
-                          // custom: Command field is the full invocation
-                          // (server tokenizes). Named: command is kind-fixed;
-                          // persist the adapter-args override instead.
-                          ...(isCustom
-                            ? { command: command.trim() }
-                            : { acpArgs, extraArgs: withModelArg(model, extraArgs) }),
-                          env: parseEnv(envText),
+                          model: model.trim(),
+                          thoughtLevel: thoughtLevel || null,
                           captureThinking,
-                          thoughtLevel: thoughtLevel.trim() || null,
+                          env: parseEnv(envText),
                           hostId: hostId === ANY_DEVICE ? null : hostId,
                         },
                       },
                       { onSuccess: () => setEditing(false) },
-                    );
-                  }}
+                    )
+                  }
                 >
                   {update.isPending ? "Saving…" : "Save"}
                 </Button>
@@ -750,99 +471,17 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 devices={devicesQ.data?.devices ?? []}
               />
             </div>
-            <div>
-              <Label>Kind</Label>
-              <KindPicker
-                value={kind}
-                onChange={(next) => {
-                  // Switching kind clears the args fields — content shaped
-                  // for a different CLI almost never carries over.
-                  if (next !== kind) {
-                    setCommand("");
-                    setAcpArgsText("");
-                    setModel("");
-                    setExtraArgs("");
-                  }
-                  setKind(next);
-                }}
-              />
-            </div>
-            {kind === "custom" ? (
-                <div>
-                <Label>Command</Label>
-                <Input
-                  value={command}
-                  onChange={(e) => setCommand(e.target.value)}
-                  placeholder={KIND_HINTS.custom.argsPlaceholder}
-                  className="font-mono text-xs"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {KIND_HINTS.custom.argsHint}
-                </p>
-                </div>
-            ) : (
-              <>
-                <div>
-                  <Label htmlFor={`agent-model-${agent.id}`}>Model</Label>
-                  <Input
-                    id={`agent-model-${agent.id}`}
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="e.g. gemini-3.8-flash"
-                    className="font-mono text-xs"
-                  />
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Saved as <code>--model</code> and selected over ACP when the adapter supports it.
-                  </p>
-                </div>
-                <div>
-                  <Label htmlFor={`agent-extra-args-${agent.id}`}>Extra args</Label>
-                  <Input
-                    id={`agent-extra-args-${agent.id}`}
-                    value={extraArgs}
-                    onChange={(e) => setExtraArgs(e.target.value)}
-                    placeholder={kindHints(kind).argsPlaceholder}
-                    className="font-mono text-xs"
-                  />
-                </div>
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor={`agent-acp-args-${agent.id}`}>Adapter args</Label>
-                  {acpArgsText.trim() !== agent.defaultAcpArgs.join(" ") && (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                      onClick={() => setAcpArgsText(agent.defaultAcpArgs.join(" "))}
-                    >
-                      Reset to default
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                    $ {agent.acpCommand}
-                  </span>
-                  <Input
-                    id={`agent-acp-args-${agent.id}`}
-                    value={acpArgsText}
-                    onChange={(e) => setAcpArgsText(e.target.value)}
-                    placeholder={agent.defaultAcpArgs.join(" ")}
-                    className="font-mono text-xs"
-                  />
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  The command is fixed by kind. Edit the adapter args to fix
-                  adapter-specific quirks — e.g. codex needs{" "}
-                  <code>-c model=&quot;…&quot;</code> (not <code>--model</code>),
-                  and opencode&apos;s <code>acp</code> takes no model flag. Matches
-                  the default ⇒ no override (auto-handling stays on). A{" "}
-                  <code>--model</code> here always wins over the one in Extra
-                  args; for cursor it is selected over ACP only and never
-                  reaches <code>cursor-agent</code>&apos;s own flag.
-                </p>
-              </div>
-              </>
-            )}
+            <ModelField id={`agent-model-${agent.id}`} value={model} onChange={setModel} />
+            <ThoughtLevelField
+              id={`agent-thought-level-${agent.id}`}
+              value={thoughtLevel}
+              onChange={setThoughtLevel}
+            />
+            <CaptureThinkingField
+              id={`agent-capture-thinking-${agent.id}`}
+              checked={captureThinking}
+              onChange={setCaptureThinking}
+            />
             <div>
               <Label>Env (KEY=value)</Label>
               <Textarea
@@ -850,66 +489,25 @@ function AgentCard({ agent }: { agent: AgentRow }) {
                 onChange={(e) => setEnvText(e.target.value)}
                 className="min-h-20 font-mono text-xs"
               />
-              <p className="mt-1 text-xs text-muted-foreground">{kindHints(kind).envHint}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{ENV_HINT}</p>
             </div>
-            {kind !== "custom" && (
-              <ThoughtLevelField
-                id={`agent-thought-level-${agent.id}`}
-                kind={kind}
-                value={thoughtLevel}
-                onChange={setThoughtLevel}
-              />
+            {error !== null && error !== undefined && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {extractErr(error)}
+              </div>
             )}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  checked={captureThinking}
-                  onChange={(e) => setCaptureThinking(e.target.checked)}
-                  className="size-4 rounded border-input"
-                />
-                <span>Capture agent thinking</span>
-              </label>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {THINKING_KINDS.has(kind) ? (
-                  <>
-                    Off means the device discards this agent&apos;s reasoning as it
-                    streams — nothing is stored, so there is no{" "}
-                    <code>[think]</code> block in the run logs and no way to get it
-                    back for a past run. Useful when the reasoning dwarfs the
-                    output.
-                  </>
-                ) : (
-                  <>
-                    No effect for <code>{kind}</code> — its adapter emits no
-                    reasoning stream. Applies to{" "}
-                    {[...THINKING_KINDS].join(", ")}.
-                  </>
-                )}
-              </p>
-            </div>
           </>
         ) : (
           <pre className="whitespace-pre-wrap rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed">
             {[
-              `[${kindHints(agent.kind).label}]${
-                agent.acpArgs ? " · custom args" : ""
+              `model: ${agent.model}`,
+              `thinking level: ${agent.thoughtLevel ?? "pi default"}${
+                agent.captureThinking ? "" : " (not captured)"
               }`,
-              // The effective ACP invocation: fixed command + the override or
-              // the kind default (incl. model translation).
-              (() => {
-                const effArgs = agent.acpArgs ?? agent.defaultAcpArgs;
-                return `$ ${agent.acpCommand}${effArgs.length ? " " : ""}${effArgs.join(" ")}`;
-              })(),
-              ...(modelArg(agent.args) ? [`  model: ${modelArg(agent.args)}`] : []),
-              ...(agent.thoughtLevel ? [`  thinking level: ${agent.thoughtLevel}`] : []),
+              `device: ${deviceLabel}`,
             ]
               .concat(
-                Object.entries(agent.env).length > 0
-                  ? Object.entries(agent.env).map(
-                      ([k, v]) => `  ${k}=${v.length > 32 ? v.slice(0, 32) + "…" : v}`,
-                    )
-                  : [],
+                Object.keys(agent.env).map((k) => `  ${k}=••••••`),
               )
               .join("\n")}
           </pre>
@@ -917,59 +515,6 @@ function AgentCard({ agent }: { agent: AgentRow }) {
       </CardContent>
     </Card>
   );
-}
-
-/**
- * Stitch a stored agent's command + args back into a single shell-style
- * string for the editor input. Args containing whitespace are double-quoted
- * so a round-trip through the server's tokenizer recovers them exactly.
- */
-function joinCommand(agent: { command: string; args: string[] }): string {
-  // The server tokenizer honours " and ' but not backslash escapes. Pick the
-  // quote style that doesn't conflict with the arg's contents so a round-trip
-  // through edit → save survives intact for the common cases.
-  const quote = (s: string) => {
-    if (!/\s|"|'/.test(s)) return s;
-    if (!s.includes('"')) return `"${s}"`;
-    if (!s.includes("'")) return `'${s}'`;
-    return `"${s}"`; // mixed quotes — user will need to fix manually
-  };
-  return [agent.command, ...agent.args].map(quote).join(" ");
-}
-
-function joinArgs(args: string[]): string {
-  return joinCommand({ command: "_", args }).replace(/^_\s?/, "");
-}
-
-function modelArg(args: string[]): string {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if ((arg === "--model" || arg === "-m") && args[i + 1]) return args[i + 1]!;
-    if (arg.startsWith("--model=")) return arg.slice("--model=".length);
-    if (arg.startsWith("-m=")) return arg.slice("-m=".length);
-  }
-  return "";
-}
-
-function withoutModelArg(args: string[]): string[] {
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--model" || arg === "-m") {
-      i++;
-    } else if (!arg.startsWith("--model=") && !arg.startsWith("-m=")) {
-      rest.push(arg);
-    }
-  }
-  return rest;
-}
-
-function withModelArg(model: string, extraArgs: string): string {
-  const trimmedModel = model.trim();
-  const trimmedExtras = extraArgs.trim();
-  return [trimmedModel ? `--model ${trimmedModel}` : "", trimmedExtras]
-    .filter(Boolean)
-    .join(" ");
 }
 
 function parseEnv(text: string): Record<string, string> {
@@ -1043,8 +588,7 @@ function TestAgentDialog({ agent, open, onOpenChange }: TestAgentDialogProps) {
         <DialogHeader>
           <DialogTitle>Test agent: {agent.name}</DialogTitle>
           <DialogDescription>
-            Spawns a one-off run with the prompt as stdin (
-            <code className="font-mono text-xs">{`{ "message": "..." }`}</code>) and
+            Runs the prompt as a one-off conversation on the device with
             <code className="ml-1 font-mono text-xs">OPENCARA_TEST=1</code> in
             the env.
           </DialogDescription>

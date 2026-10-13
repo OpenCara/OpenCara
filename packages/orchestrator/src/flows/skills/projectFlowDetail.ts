@@ -6,7 +6,7 @@ import type { PageSkillBuilder } from "../skills.js";
 /**
  * Project flow detail page (apps/web/src/pages/ProjectFlowDetailPage.tsx).
  * The agent can edit a node's config via the `opencara_flow_node_config_set`
- * MCP tool — it MUST read the existing config out of the hydrated
+ * opencara tool — it MUST read the existing config out of the hydrated
  * `flow.graphJson` and merge, because the call replaces the whole config
  * object.
  */
@@ -38,13 +38,13 @@ config) is provided to you on stdin under \`flow.graphJson\`.
 
 ## How to call it
 
-Call the \`opencara_flow_node_config_set\` MCP tool with these args:
+Call the \`opencara_flow_node_config_set\` opencara tool with these args:
 
 - \`flowSlug\` (string, required) — pass \`"${flow.slug}"\`
 - \`nodeId\` (string, required) — one of \`flow.graphJson.nodes[*].id\`
 - \`config\` (object, required) — the full new config object for that node
 
-Mutations happen through MCP tool calls — **not** fenced \`opencara-call\`
+Mutations happen through opencara tool calls — **not** fenced \`opencara-call\`
 blocks (that legacy text channel was removed; emitting a fenced block
 here does nothing).
 

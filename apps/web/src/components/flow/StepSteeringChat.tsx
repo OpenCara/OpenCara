@@ -25,9 +25,9 @@ interface Props {
   /** Human label of the step ("Step 2 · agent" → shown in the header). */
   stepLabel?: string;
   /** True while the flow agent's own dispatch is still in-flight. Surfaces
-   *  a queue-warning hint to the user — `claude --resume` can't open the
-   *  JSONL while the flow process holds it, so the steering message will
-   *  effectively land on the next turn. */
+   *  a queue-warning hint to the user — the step's durable conversation
+   *  can't be resumed while its run is still going, so the steering
+   *  message will effectively land on the next turn. */
   stepIsRunning?: boolean;
 }
 
@@ -44,11 +44,11 @@ interface Message {
  * Embedded chat for a single agent node in a flow run. Reuses the
  * regular /api/chat/messages backend with the new flow_run_step scope;
  * server-side hydration in chatSessions.ts pre-seeds the chat row with
- * the agent's ACP session id so the first user message resumes the
+ * the agent's conversation id so the first user message resumes the
  * conversation the flow agent had.
  *
- * Deliberately simpler than the sidebar ChatPanel — no permission mode
- * toggle, no history popover, no skill inspector. Steering is a focused
+ * Deliberately simpler than the sidebar ChatPanel — no history popover,
+ * no skill inspector. Steering is a focused
  * "send a course correction" interaction; the heavyweight chat surface
  * stays available in the sidebar for project-wide questions.
  */
@@ -81,10 +81,10 @@ export function StepSteeringChat({
   // Sync local agent pick from the persisted session row. Crucially:
   //   - Do NOT auto-POST a default agent — the server treats null →
   //     specific as an agent change and was wiping the seeded
-  //     acpSessionId. We still set local UI state so the dropdown
+  //     conversationId. We still set local UI state so the dropdown
   //     reflects a reasonable default; the first /api/chat/messages
   //     dispatch will atomically associate the agent + persist the
-  //     ACP session id via chat.ts's post-dispatch update.
+  //     conversation id via chat.ts's post-dispatch update.
   //   - Only flip the hydrated ref once we've actually applied an
   //     agent id (or confirmed the agent list is empty). Otherwise a
   //     sessionQ-resolves-first race permanently disables the
@@ -202,9 +202,9 @@ export function StepSteeringChat({
             flowRunId,
             flowRunStepId,
           },
-          // Vestigial fallback for when ACP resume isn't reachable
-          // (e.g. JSONL on a different device). The server primarily
-          // relies on the chat row's acpSessionId for context.
+          // Fallback for when the durable conversation can't be resumed
+          // (e.g. it lives on a different device). The server primarily
+          // relies on the chat row's conversationId for context.
           history: messages
             .filter((m) => !m.pending && m.text.trim().length > 0)
             .map((m) => ({ role: m.role, text: m.text })),
@@ -236,9 +236,9 @@ export function StepSteeringChat({
     if (next === agentId) return;
     setAgentId(next);
     // Switching to a different specific agent invalidates the seeded
-    // ACP session (the new shim's JSONL doesn't exist for the prior
-    // uuid). We DO call updateAgent.mutate here because the server's
-    // POST /chat/sessions only clears acpSessionId on
+    // conversation (a conversation belongs to one agent). We DO call
+    // updateAgent.mutate here because the server's
+    // POST /chat/sessions only clears conversationId on
     // specific → different-specific transitions, not on null → first
     // pick. A user-driven dropdown change is the former.
     updateAgent.mutate({ agentId: next });
@@ -269,7 +269,7 @@ export function StepSteeringChat({
             Steer this agent{stepLabel ? ` · ${stepLabel}` : ""}
           </span>
           <span className="text-[10px] text-muted-foreground">
-            Resumes the agent's session. Mid-run: queued until the next turn.
+            Resumes the agent's conversation. Mid-run: queued until the next turn.
           </span>
         </div>
         {isStreaming && (
@@ -282,8 +282,8 @@ export function StepSteeringChat({
       {stepIsRunning && (
         <div className="border-b bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
           Flow agent is currently running on this step. Your steering message
-          will queue and be picked up on the next turn — claude --resume can't
-          open the in-use session JSONL until the current dispatch finishes.
+          will queue and be picked up on the next turn — the step&apos;s
+          conversation can&apos;t be resumed while its run is still going.
         </div>
       )}
 

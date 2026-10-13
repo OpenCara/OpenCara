@@ -65,13 +65,12 @@ export interface RunResult {
    */
   agentHostId: string;
   /**
-   * ACP session id the run executed under, surfaced from the device's
-   * `done` frame. Used by the flow engine to persist per-(repo, branch)
-   * session continuity via `worktree write-session` so the next
-   * iteration resumes via `session/load`. Null for non-ACP runs
-   * (worktree-allocate, write-session itself, etc.).
+   * Durable conversation the agent turn ran in, from the device's `done`
+   * frame. Chat persists it for the next turn's resume; flow runs write it
+   * onto the run's spec for the steering chat. Null for plumbing jobs
+   * (worktree allocate/remove).
    */
-  acpSessionId: string | null;
+  conversationId: string | null;
 }
 
 export interface AgentDispatcher {

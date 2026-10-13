@@ -1,17 +1,9 @@
 // Project-level agent instructions file: orchestrator-side validation.
 //
-// Why this module exists: every agent CLI (claude, codex, opencode, pi)
-// ships its own auto-discovery convention for a project-level instructions
-// file — `~/.claude/CLAUDE.md` + `<cwd>/CLAUDE.md` for claude,
-// `~/.codex/AGENTS.md` + `<cwd>/AGENTS.md` for codex, etc. The content
-// the agent "knows" thus silently varies by kind on the same flow run,
-// and one operator's interactive convention in `~/.claude/CLAUDE.md`
-// (e.g. "do NOT auto-commit or push") can override a flow contract that
-// explicitly requires commit + push. Real-world failure on
-// flow run 01KSM02PAQZXG7H94P3DNTARKD (issue #130).
-//
-// Fix per #130: strip each adapter's per-kind auto-discovery and inject
-// ONE canonical file (configurable per project) as the system prompt.
+// Why this module exists: a flow contract (e.g. "commit and push") must not
+// be silently overridden by whatever instructions file a device happens to
+// carry. Real-world failure on flow run 01KSM02PAQZXG7H94P3DNTARKD (issue
+// #130). Each project names ONE canonical file instead.
 //
 // Division of labor:
 //
@@ -21,10 +13,9 @@
 //   reason. It does NOT touch the filesystem: the worktree lives on the
 //   device, not on this host.
 //
-// - The claude-acp adapter (runs on the device, where the worktree
-//   actually exists) takes the relative path + cwd from session/new and
-//   resolves + stat-checks before forwarding to `claude`. A missing file
-//   on the device is a quiet skip there, not a flow failure.
+// - The device reads the file from the job's cwd (the worktree) and
+//   appends it to the agent's instructions. A missing file on the device
+//   is a quiet skip there, not a flow failure.
 
 export interface ValidateInstructionsFileSettingOpts {
   /**
@@ -36,7 +27,7 @@ export interface ValidateInstructionsFileSettingOpts {
 }
 
 export interface ValidateInstructionsFileSettingResult {
-  /** Validated repo-relative path to forward into AcpSpec.instructionsFile. */
+  /** Validated repo-relative path to forward into the turn's instructionsFile. */
   relativePath?: string;
   /**
    * Operator-visible reason when no path was forwarded. The engine surfaces
@@ -49,9 +40,8 @@ export interface ValidateInstructionsFileSettingResult {
 /**
  * Validate a project's `instructions_file` setting. The setting names a
  * file relative to the repo root in the agent's worktree; the actual
- * existence check happens on the device side (see claude-acp). Validation
- * rules — kept strict because the value flows straight into an agent CLI
- * as a system-prompt source:
+ * existence check happens on the device. Validation rules — kept strict
+ * because the value flows straight into the agent's instructions:
  *
  * - Setting must be a non-empty string after trimming. Empty / whitespace
  *   disables injection for the project — returns `{ skipReason }`, not an

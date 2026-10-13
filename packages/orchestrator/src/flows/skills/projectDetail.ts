@@ -17,8 +17,8 @@ const RECENT_LIMIT = 25;
  *
  * Issue mutations happen via `gh` shell commands using `GH_TOKEN` injected
  * by `routes/api/chat.ts` (per-turn installation token, scoped to this
- * project's repo). MCP isn't used for github-only ops anymore — the wrapper
- * tax wasn't earning the wire (see PR replacing them with gh).
+ * project's repo). GitHub-only ops have no opencara tool — the wrapper tax
+ * wasn't earning the wire (see PR replacing them with gh).
  */
 export const projectDetailBuilder: PageSkillBuilder = async (ctx) => {
   const projectId = ctx.pageContext.projectId;

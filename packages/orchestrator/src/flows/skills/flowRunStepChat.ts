@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   agentRuns,
   agents,
@@ -13,22 +13,12 @@ import type { PageSkillBuilder } from "../skills.js";
  * panel embedded in FlowRunDetailPage.tsx points here whenever the user
  * picks an agent node — pageContext.flowRunStepId selects the row.
  *
- * The chat session's `acpSessionId` (seeded from the same step in
+ * The chat session's `conversationId` (seeded from the same step in
  * chatSessions.ts:hydrateFromFlowRunStep) makes the user's next message
- * resume the flow agent's conversation. The agent sees a turn that says
- * "the user wants you to adjust your approach"; with `claude --resume`
- * (or the equivalent for other adapters) it picks up the prior context
- * and applies the steering input.
- *
- * Mid-run vs post-run: when the flow agent is still running, its JSONL
- * is being written by a process the chat dispatcher can't race against.
- * The chat dispatch is queued on the same pinned device, but
- * `claude --resume` can't open a file another instance has open. In
- * practice the steering message lands once the current node finishes
- * its turn — the panel will surface that the agent is busy and the
- * message will be replayed when the session frees up. (UI loop: send
- * → 500 from claude --resume → SSE error → user retries.) Cleaner
- * mid-run interruption is future work.
+ * resume the flow agent's durable conversation, pinned to the device that
+ * holds it. The agent sees a turn that says "the user wants you to adjust
+ * your approach" on top of its prior context and applies the steering
+ * input.
  */
 export const flowRunStepChatBuilder: PageSkillBuilder = async (ctx) => {
   const stepId = ctx.pageContext.flowRunStepId;
@@ -55,27 +45,14 @@ export const flowRunStepChatBuilder: PageSkillBuilder = async (ctx) => {
     limit: 5,
   });
 
-  // Look up the agent name for the most-recent run on this step, when
-  // possible. `agent_runs.spec` carries the kind/command, not the user
-  // agent's id; but `agents.name` is what the user sees in the UI, so
-  // we expose it in the skill markdown for context.
-  const userAgentIds = stepAgentRuns
-    .map((r) => {
-      const env = ((r.spec as { env?: Record<string, unknown> } | null)?.env ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const id = typeof env.OPENCARA_AGENT_ID === "string" ? env.OPENCARA_AGENT_ID : null;
-      return id;
-    })
-    .filter((id): id is string => !!id);
-  const userAgents =
-    userAgentIds.length > 0
-      ? await ctx.db.query.agents.findMany({
-          where: inArray(agents.id, userAgentIds),
-        })
-      : [];
-  const lastAgent = userAgents[0] ?? null;
+  // The agent that ran this step: agent-pool attempts stamp the candidate
+  // onto the step's inputJson (engine.runStepAttempt). `agents.name` is what
+  // the user sees in the UI, so we expose it in the skill markdown.
+  const attemptAgentId = (step.inputJson as { agentId?: unknown } | null)?.agentId;
+  const lastAgent =
+    typeof attemptAgentId === "string"
+      ? ((await ctx.db.query.agents.findFirst({ where: eq(agents.id, attemptAgentId) })) ?? null)
+      : null;
 
   const baseUrl = ctx.baseUrl.replace(/\/$/, "");
   const instructions = `# Skill: opencara-steering-chat
@@ -89,7 +66,7 @@ Context:
 - **Node:** \`${step.nodeId}\` (\`${step.nodeKind}\`, idx ${step.idx}, status \`${step.status}\`).
 - **Agent that ran this node:** ${lastAgent ? `\`${lastAgent.name}\`` : "(unknown)"}.
 
-The chat session is configured to **resume the agent's ACP session**, so
+The chat session is configured to **resume the agent's durable conversation**, so
 when you respond you have the full conversation context the flow agent
 saw — prior tool calls, intermediate plans, and the output it produced.
 
@@ -103,7 +80,7 @@ What "steering" means here:
 3. **The user wants a different approach** ("revert that change and try X
    instead"). Discard the prior plan and start the new approach.
 
-This skill exposes no MCP tools. If the node is an issue-implement-style
+This skill exposes no opencara tools. If the node is an issue-implement-style
 agent with a worktree, you can keep using the same \`gh\`, \`git\`, and
 shell tools you had during the flow run — \`GH_TOKEN\` is injected per
 turn the same way.
@@ -114,7 +91,7 @@ Hydrated stdin keys:
 - \`flow\` — the flow this run belongs to.
 - \`step\` — the flow_run_step the chat is anchored to.
 - \`agentRuns\` — recent agent_run rows for this step (status, host, exit).
-- \`agent\` — the user agent row that ran this step (name, kind), if known.
+- \`agent\` — the user agent row that ran this step (name, model), if known.
 `;
 
   return {
@@ -130,7 +107,7 @@ Hydrated stdin keys:
       step,
       agentRuns: stepAgentRuns,
       agent: lastAgent
-        ? { id: lastAgent.id, name: lastAgent.name, kind: lastAgent.kind }
+        ? { id: lastAgent.id, name: lastAgent.name, model: lastAgent.model }
         : null,
     },
     projectScope: projectId,

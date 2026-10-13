@@ -14,7 +14,9 @@ import { spawn } from "node:child_process";
 import { readConfig } from "../config/store.js";
 import { register } from "./register.js";
 import { WsClient } from "../transport/ws-client.js";
-import { runAcpJob, type AcpRunController } from "../runner/spawn.js";
+import { CONVERSATIONS_DIR } from "../config/paths.js";
+import { pruneConversations } from "../runner/conversations.js";
+import type * as DurableRunner from "../runner/durableRunner.js";
 import {
   HOST_PROTOCOL_VERSION,
   WS_CLOSE_PROTOCOL_TOO_OLD,
@@ -25,12 +27,17 @@ import {
   type SystemInfo,
 } from "@opencara/shared";
 
+type RunAgentTurn = typeof DurableRunner.runAgentTurn;
+
 // Baked at bundle time by build.mjs (`define` substitutes the literal).
 // In dev (`tsx watch src/bin.ts`) the env var isn't set, so fall back.
 const PKG_VERSION = process.env["OPENCARA_VERSION"] ?? "0.0.0-dev";
 
 const LOG_FLUSH_MS = 800;
 const MAX_CHUNK_SIZE = 4 * 1024;
+/** Conversations nobody resumed for this long are deleted from the device. */
+const CONVERSATION_MAX_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface PendingChunks {
   stdout: string;
@@ -53,6 +60,10 @@ export async function run(opts: RunOpts = {}): Promise<void> {
     if (!cfg) throw new Error("pairing did not save a config");
   }
   const wsUrl = cfg.orchestratorUrl.replace(/^http/, "ws") + "/api/devices/ws";
+  // Loaded here, not imported at the top: the runner pulls in pi-durable,
+  // pi-ai and node:sqlite (about a second), and every `opencara internal …`
+  // plumbing job starts this binary afresh without ever running a turn.
+  const { runAgentTurn } = await import("../runner/durableRunner.js");
 
   const client: WsClient = new WsClient({
     url: wsUrl,
@@ -64,15 +75,13 @@ export async function run(opts: RunOpts = {}): Promise<void> {
         platform: platform(),
         version: PKG_VERSION,
         protocolVersion: HOST_PROTOCOL_VERSION,
-        // Advertise ACP transport support. Pre-v0.30 devices reported
-        // "agent-call" (the fenced-stdout-block protocol); since the
-        // legacy path was removed, this version reports "acp" so the
-        // orchestrator knows the device can handle `spec.acp` jobs.
-        capabilities: ["acp"],
+        // Informational (stored on agent_hosts, never used for routing):
+        // this CLI runs agent turns in-process on pi-durable.
+        capabilities: ["pi-durable"],
         systemInfo: collectSystemInfo(),
       });
     },
-    onMessage: (msg: ServerToDeviceMessage) => handleServerMessage(msg, client, cfg),
+    onMessage: (msg: ServerToDeviceMessage) => handleServerMessage(msg, client, runAgentTurn),
     onClose: (code, reason) => {
       if (code === WS_CLOSE_PROTOCOL_TOO_OLD) {
         // WsClient already disabled reconnect for this code; make the
@@ -89,20 +98,25 @@ export async function run(opts: RunOpts = {}): Promise<void> {
     },
   });
   console.log(`[opencara] starting as ${cfg.deviceName} (${hostname()})`);
+  const prune = () => {
+    const pruned = pruneConversations(CONVERSATIONS_DIR, CONVERSATION_MAX_IDLE_MS);
+    if (pruned > 0) console.log(`[opencara] pruned ${pruned} idle conversation(s)`);
+  };
+  prune();
+  setInterval(prune, PRUNE_INTERVAL_MS).unref();
   client.start();
 }
 
 /**
- * In-flight ACP job controllers, keyed by runId. The WS receiver looks
- * up the controller when an `agent-call-result` frame arrives so the
- * matching tool-call promise resolves on the right run.
+ * In-flight agent turns, keyed by runId: `cancel` frames and the results
+ * of their opencara tool calls (`agent-call-result`) are routed here.
  */
-const acpControllers = new Map<string, AcpRunController>();
+const turnControllers = new Map<string, DurableRunner.TurnController>();
 
 function handleServerMessage(
   msg: ServerToDeviceMessage,
   client: WsClient,
-  _cfg: { agentHostId: string; deviceName: string },
+  runAgentTurn: RunAgentTurn,
 ): void {
   if (msg.type === "hello-ack") {
     console.log(`[opencara] acked as ${msg.deviceName} (${msg.agentHostId})`);
@@ -123,22 +137,18 @@ function handleServerMessage(
   }
   if (msg.type === "ping") return;
   if (msg.type === "job") {
-    void executeJob(msg, client);
+    void executeJob(msg, client, runAgentTurn);
     return;
   }
   if (msg.type === "agent-call-result") {
-    // Route to the active ACP run for this id. Stale results (run already
-    // ended) are dropped silently — same posture as a stale log frame.
-    acpControllers.get(msg.runId)?.onAgentCallResult(msg);
+    // Results for a turn that already ended are dropped, like stale logs.
+    turnControllers.get(msg.runId)?.onAgentCallResult(msg);
     return;
   }
   if (msg.type === "cancel") {
-    // Forward the orchestrator's stop signal to the in-flight ACP run.
-    // Late-arriving cancels (run already finished, controller removed
-    // in the finally block of executeJob) drop silently — same as
-    // agent-call-result above. The orchestrator has already flipped the
-    // agent_runs row to `cancelled` regardless.
-    const ctrl = acpControllers.get(msg.runId);
+    // The orchestrator has already flipped the agent_runs row to
+    // `cancelled`; a cancel for a finished turn has nothing left to stop.
+    const ctrl = turnControllers.get(msg.runId);
     if (ctrl) {
       console.log(
         `[opencara] job ${msg.runId.slice(-8)} cancel requested (${msg.reason})`,
@@ -149,9 +159,16 @@ function handleServerMessage(
   }
 }
 
-async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
+async function executeJob(
+  job: JobAssignment,
+  client: WsClient,
+  runAgentTurn: RunAgentTurn,
+): Promise<void> {
   const runId = job.run.id;
-  console.log(`[opencara] job ${runId.slice(-8)}: ${job.spec.command}`);
+  const { turn } = job.spec;
+  console.log(
+    `[opencara] job ${runId.slice(-8)}: ${turn ? `${job.spec.kind} (${turn.model})` : job.spec.command}`,
+  );
 
   let seq = 0;
   let pending: PendingChunks = { stdout: "", stderr: "" };
@@ -176,38 +193,26 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
     flushTimer = setTimeout(flush, LOG_FLUSH_MS);
   };
 
-  // `opencara internal …` jobs are CLI infrastructure (worktree
-  // allocate / write-session / remove), not agent runs — they have no
-  // prompt, no model, no tool-use surface. Route them through a
-  // non-ACP fast-path that re-invokes this same node + bundled bin.js
-  // and streams stdout/stderr back as log frames. Pre-PR-#41 these
-  // rode the legacy stdin-JSON path; that path got deleted on the
-  // device, but the orchestrator still dispatches them as legacy-
-  // shape jobs (nodeRunners.ts worktree create / write-session,
-  // worktrees/cleanup.ts remove) — which is fine: those jobs aren't
-  // and shouldn't be ACP, so the device just needs to handle them.
+  // `opencara internal …` jobs are CLI plumbing (worktree allocate /
+  // remove), not agent turns: re-invoke this same node + bin.js and stream
+  // its stdout/stderr back as log frames.
   if (isInternalCommand(job.spec)) {
     flush();
     await runInternalCommand(job, client);
     return;
   }
 
-  // ACP+MCP is the only AGENT dispatch path post-#30. Non-internal
-  // specs without `acp` are an orchestrator bug (or a stale device
-  // config); fail loudly instead of silently running a no-op.
-  if (!job.spec.acp) {
+  if (!turn) {
     flush();
-    const message =
-      `legacy stdin-JSON dispatch removed in v0.30 — orchestrator must send spec.acp. ` +
-      `Got command: ${job.spec.command}.`;
+    const message = `job is neither an agent turn nor an opencara internal command (command: ${job.spec.command ?? "none"})`;
     client.send({ type: "done", runId, status: "failed", errorMessage: message });
     console.error(`[opencara] job ${runId.slice(-8)} rejected: ${message}`);
     return;
   }
 
-  const handle = runAcpJob({
+  const handle = runAgentTurn({
     runId,
-    spec: job.spec as AgentSpec,
+    spec: job.spec,
     handlers: {
       onLog: (stream, chunk) => {
         pending[stream] += chunk;
@@ -216,27 +221,29 @@ async function executeJob(job: JobAssignment, client: WsClient): Promise<void> {
       sendAgentCall: (req) => client.send(req),
     },
   });
-  acpControllers.set(runId, handle.controller);
+  turnControllers.set(runId, handle.controller);
   try {
     const result = await handle.promise;
     flush();
     client.send({
       type: "done",
       runId,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
+      status: result.status,
       exitCode: result.exitCode,
-      acpSessionId: result.sessionId || null,
+      conversationId: result.conversationId,
+      ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
     });
     console.log(
-      `[opencara] job ${runId.slice(-8)} (acp) → ${result.stopReason} exit=${result.exitCode}`,
+      `[opencara] job ${runId.slice(-8)} → ${result.status}` +
+        (result.errorMessage ? `: ${result.errorMessage}` : ""),
     );
   } catch (err) {
     flush();
     const message = err instanceof Error ? err.message : String(err);
     client.send({ type: "done", runId, status: "failed", errorMessage: message });
-    console.error(`[opencara] job ${runId.slice(-8)} (acp) failed`, message);
+    console.error(`[opencara] job ${runId.slice(-8)} failed`, message);
   } finally {
-    acpControllers.delete(runId);
+    turnControllers.delete(runId);
   }
 }
 
@@ -260,9 +267,8 @@ export function isInternalCommand(spec: AgentSpec): boolean {
  * Run an `opencara internal …` job by re-invoking this same node
  * binary against the bundled bin.js (or src/bin.ts under tsx in dev).
  * Streams stdout/stderr back as `log` frames and emits a `done`
- * frame with the child's exit code. No ACP, no MCP, no agent
- * machinery — these jobs are git/fs plumbing dispatched by the flow
- * engine.
+ * frame with the child's exit code. No agent turn involved — these
+ * jobs are git/fs plumbing dispatched by the flow engine.
  *
  * `opts.binPath` / `opts.nodePath` exist for tests to point at a
  * fake binary; in production both fall through to `process.argv[1]`

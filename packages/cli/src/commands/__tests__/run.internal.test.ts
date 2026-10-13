@@ -1,10 +1,7 @@
-// Tests for the non-ACP fast-path in run.ts that handles
-// `opencara internal …` jobs (worktree create / write-session /
-// remove). Regression: pre-fix the device rejected these with
-// "legacy stdin-JSON dispatch removed in v0.30 — orchestrator must
-// send spec.acp" because the orchestrator dispatches them without
-// an `acp` block, and the device's blanket "no acp = reject" check
-// fired before any infrastructure-vs-agent distinction.
+// Tests for the plumbing fast-path in run.ts that handles
+// `opencara internal …` jobs (worktree create / remove): they carry no
+// agent turn, and must run as a re-invocation of this CLI rather than be
+// rejected as malformed agent jobs.
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -61,7 +58,7 @@ describe("isInternalCommand", () => {
   });
 
   it("rejects non-opencara commands and non-internal subcommands", () => {
-    assert.equal(isInternalCommand(spec({ command: "claude-acp" })), false);
+    assert.equal(isInternalCommand(spec({ command: undefined })), false);
     assert.equal(isInternalCommand(spec({ command: "node" })), false);
     assert.equal(isInternalCommand(spec({ args: ["status"] })), false);
     assert.equal(isInternalCommand(spec({ args: [] })), false);

@@ -108,7 +108,7 @@ describe("actionRunner scm.post_review stub guard", () => {
     );
   });
 
-  it("posts only agy's final structured review, never its narration", async () => {
+  it("posts only the final structured review, never the narration", async () => {
     const { ctx, requests } = ctxForPostReview(
       [
         "Let me inspect the diff.",
@@ -119,39 +119,27 @@ describe("actionRunner scm.post_review stub guard", () => {
         "## Findings",
         "None.",
       ].join("\n\n"),
-      "agy opus 4.6",
+      "sonnet",
     );
     await actionRunner(ctx, postReviewNode);
     assert.equal(
       requests[0]!.params.body,
-      "_Reviewed by **agy opus 4.6**_\n\n## Summary\n\nLooks correct.\n\n## Findings\n\nNone.",
+      "_Reviewed by **sonnet**_\n\n## Summary\n\nLooks correct.\n\n## Findings\n\nNone.",
     );
   });
 
-  it("refuses agy's unstructured narration", async () => {
-    const { ctx, requests } = ctxForPostReview(
-      "Let me inspect the diff.",
-      "agy gemini-flash",
-    );
-    await assert.rejects(
-      actionRunner(ctx, postReviewNode),
-      /agy output has no final verdict-bearing review body/,
-    );
-    assert.equal(requests.length, 0);
-  });
-
-  it("posts agy's valid follow-up review format", async () => {
+  it("posts a valid follow-up review format", async () => {
     const body = [
       "verdict: approve",
       "5 of 6 prior items resolved; 1 remains.",
       "### Prior Review Feedback Status",
       "- Fixed: disposal is idempotent.",
     ].join("\n\n");
-    const { ctx, requests } = ctxForPostReview(body, "agy gemini-flash");
+    const { ctx, requests } = ctxForPostReview(body, "sonnet");
     await actionRunner(ctx, postReviewNode);
     assert.equal(
       requests[0]!.params.body,
-      "_Reviewed by **agy gemini-flash**_\n\n" +
+      "_Reviewed by **sonnet**_\n\n" +
         "5 of 6 prior items resolved; 1 remains.\n\n" +
         "### Prior Review Feedback Status\n\n" +
         "- Fixed: disposal is idempotent.",

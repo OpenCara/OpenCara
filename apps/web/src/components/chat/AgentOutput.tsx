@@ -49,7 +49,7 @@ type Block =
 
 // ─── Block parsing ──────────────────────────────────────────────────
 //
-// The device's update translator (packages/cli/src/runner/acpRunner.ts)
+// The device's pi-durable runner (packages/cli/src/runner)
 // fences thought-chunk deltas between `\n[think]\n` / `\n[/think]\n`
 // markers and emits `\n[tool] <title> (<status>)\n` lines for tool
 // call lifecycle events. Everything else flows through verbatim as
@@ -430,8 +430,8 @@ export interface AgentLogLine {
 /**
  * Agent run log viewer with the chat output format as default: the stdout
  * stream is rendered through AgentOutputBlocks (markdown + thinking fences
- * + tool chips), and stderr — adapter diagnostics the block parser can't
- * model ([acp] unmodeled update, "v2 turn failed", …) — is kept verbatim in
+ * + tool chips), and stderr — runner diagnostics the block parser can't
+ * model — is kept verbatim in
  * a labelled red block underneath rather than corrupting the marker stream.
  */
 export function AgentLogStream({

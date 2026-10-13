@@ -46,27 +46,6 @@ export const flowStepStatusEnum = pgEnum("flow_step_status", [
   "cancelled",
 ]);
 
-// Supported agent kinds. `custom` is the escape hatch for arbitrary
-// Each kind maps to an ACP adapter in `src/agents/acp-gate.ts`. The
-// `custom` value is retained in the Postgres enum for backward
-// compatibility with rows from before the #30 cutover, but the
-// TypeScript layer's `AgentKind` no longer includes it; any row with
-// kind=custom will fail the `isAgentKind` validation at dispatch time
-// with a clear conversion message. Operators should re-save those
-// agents with a registered kind via the dashboard.
-export const agentKindEnum = pgEnum("agent_kind", [
-  "claude",
-  "codex",
-  "opencode",
-  "pi",
-  "custom",
-  "omp",
-  "cursor",
-  "agy",
-  "devin",
-  "commandcode",
-]);
-
 export const users = pgTable(
   "users",
   {
@@ -305,14 +284,10 @@ export const projects = pgTable(
     defaultImplementAgentId: text("default_implement_agent_id"),
     defaultImplementPromptId: text("default_implement_prompt_id"),
     // Repo-relative path of the canonical agent instructions file. The
-    // orchestrator forwards it to the ACP adapter, which resolves +
-    // stat-checks against the worktree and injects the content as the
-    // system prompt regardless of agent kind (see #130).
-    // Default '' = injection disabled. Defaulting to 'AGENTS.md' would
-    // silently flip behaviour for existing projects that happen to have
-    // a committed AGENTS.md AND rely on `claude auth login` keychain
-    // auth (the adapter adds `--bare` whenever the file resolves, and
-    // `--bare` disables keychain reads). Opt-in from project settings.
+    // orchestrator validates the setting and forwards it on the agent turn;
+    // the device reads it from the job's worktree and appends it to the
+    // instructions, skipping it when the file is absent (see #130).
+    // Default '' = injection disabled; opt-in from project settings.
     instructionsFile: text("instructions_file").notNull().default(""),
     addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
     removedAt: timestamp("removed_at", { withTimezone: true }),
@@ -571,41 +546,20 @@ export const agents = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    // `kind != 'custom'` selects a per-kind adapter (src/agents/kinds.ts)
-    // that builds the spec at dispatch time; for those rows, `command`/
-    // `args`/`cwd` columns are ignored (operators may still set `args`
-    // for kind-specific extras like `--model X --provider Y` that the
-    // adapter passes through). `kind = 'custom'` keeps the legacy
-    // opaque-subprocess behaviour and disables conversation resume.
-    kind: agentKindEnum("kind").notNull().default("claude"),
-    command: text("command").notNull(),
-    args: jsonb("args").$type<string[]>().notNull().default([]),
-    // Full ACP adapter args OVERRIDE. NULL = derive from kind: the adapter's
-    // base args (`ACP_ADAPTERS`) plus the per-kind model translation of `args`
-    // (see buildAcpSpec). When set, these are used verbatim as the adapter args
-    // (the command still comes from `kind`), so operators can fix
-    // adapter/version/model quirks themselves without a code change.
-    acpArgs: jsonb("acp_args").$type<string[] | null>(),
+    // Pi model reference, `<provider>/<modelId>` (split at the first slash
+    // by `parseModelRef`). Resolved on the device against pi's ModelRuntime.
+    model: text("model").notNull(),
     env: jsonb("env").$type<Record<string, string>>().notNull().default({}),
     cwd: text("cwd"),
     // Whether this agent's reasoning stream reaches the logs at all. The
-    // device drops `agent_thought_chunk` updates when false, so nothing is
+    // device drops reasoning at the source when false, so nothing is
     // written to agent_run_logs and there is no `[think]` block to render.
-    //
-    // Per-agent rather than per-kind because "is the reasoning worth the
-    // noise" is a property of how you use an agent, not of the adapter.
-    // Defaults true: claude/codex emit no thought chunks anyway, so the
-    // default only matters for the reasoners (omp, pi, cursor, agy, devin),
-    // and the safe default is "capture" — a run's thinking can't be recovered
-    // after the fact, but it can always be hidden.
+    // Defaults true: a run's thinking can't be recovered after the fact,
+    // but it can always be hidden.
     captureThinking: boolean("capture_thinking").notNull().default(true),
-    // Reasoning effort / thinking level requested for every run of this
-    // agent, selected on the device over ACP `session/set_config_option`
-    // (category `thought_level`). Free text because each adapter has its
-    // own vocabulary (claude: low…max, codex: minimal…xhigh, pi/omp:
-    // off…xhigh); the device matches it against what the adapter
-    // advertises and falls back to the adapter default on a miss.
-    // NULL = adapter default.
+    // Pi thinking level (`THINKING_LEVELS`) for every run of this agent; the
+    // device clamps it to what the model supports. NULL = the device's pi
+    // default (`defaultThinkingLevel` in pi's settings.json, else medium).
     thoughtLevel: text("thought_level"),
     // Optional pin to a specific agent host. NULL = "any idle device".
     // ON DELETE SET NULL so revoking a device doesn't break the agent —
@@ -964,7 +918,7 @@ export const CHAT_SESSION_SCOPE_KINDS = [
   "user",
   // Steering chat anchored to a single flow_run_step. Lets the user
   // continue (or steer) the agent that ran that node by resuming its
-  // ACP session. scope_id = flow_run_steps.id.
+  // durable conversation. scope_id = flow_run_steps.id.
   "flow_run_step",
 ] as const;
 export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
@@ -983,18 +937,15 @@ export type ChatSessionScopeKind = (typeof CHAT_SESSION_SCOPE_KINDS)[number];
 // scope-listing query.
 //
 // `threadKey` stays as the stable agent-facing session id (used by
-// chat.ts's resume lookup to find the row whose `acpSessionId` should be
-// passed as `priorSessionId`). It remains unique-per-row; new rows get
+// chat.ts's resume lookup to find the row whose `conversationId` should be
+// passed as `priorConversationId`). It remains unique-per-row; new rows get
 // a fresh ULID for both `id` and `threadKey`.
 //
-// `acpSessionId` is the UUID the device's ACP shim minted on the first turn
-// (`session/new` → claude-acp's `randomUUID()` → `claude --session-id <uuid>`).
-// Subsequent turns pass it back as `priorSessionId`, the shim flips to
-// `session/load`, and `claude --resume <uuid>` replays the on-disk JSONL.
-// `acpSessionHostId` pins those subsequent turns to the same device — the
-// JSONL lives under that machine's `~/.claude/projects/`, so routing
-// elsewhere would surface as a `--resume` failure. Both are cleared the
-// moment the user switches the agent pick on this row.
+// `conversationId` is the pi-durable conversation the device started on the
+// first turn; subsequent turns pass it back as `priorConversationId` to
+// resume it. `conversationHostId` pins those turns to the same device —
+// durable conversations are stored on the device that ran them. Both are
+// cleared the moment the user switches the agent pick on this row.
 //
 // `title` is the human-facing label for the History popover. Auto-set from
 // the first user message (slice of 60 chars) on the first POST to /chat/
@@ -1013,8 +964,8 @@ export const chatSessions = pgTable(
     scopeId: text("scope_id").notNull().default(""),
     threadKey: text("thread_key").notNull(),
     agentId: text("agent_id"),
-    acpSessionId: text("acp_session_id"),
-    acpSessionHostId: text("acp_session_host_id"),
+    conversationId: text("conversation_id"),
+    conversationHostId: text("conversation_host_id"),
     title: text("title"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

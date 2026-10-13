@@ -575,12 +575,9 @@ function InstructionsFileSection({
           Agent instructions file
         </Label>
         <p className="text-xs text-muted-foreground">
-          Repo-relative path. Read from the worktree at dispatch and
-          injected as the canonical project system prompt for every
-          agent — replaces each CLI's per-kind auto-discovery (e.g.{" "}
-          <code className="font-mono">~/.claude/CLAUDE.md</code>) so the
-          agent's instructions are identical across kinds. Leave empty
-          to disable injection.
+          Repo-relative path. Read from the worktree at dispatch; the
+          device appends it to every agent&apos;s instructions. Leave
+          empty to disable injection.
         </p>
         <div className="flex items-center gap-2">
           <Input

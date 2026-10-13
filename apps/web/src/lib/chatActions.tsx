@@ -11,12 +11,12 @@ import type { ReactNode } from "react";
 
 /**
  * Pages register handlers for "apply" actions the chat panel detects in the
- * agent's reply (e.g. ```command fenced blocks). The chat panel then exposes
+ * agent's reply (e.g. ```agent-env fenced blocks). The chat panel then exposes
  * an Apply button that invokes the registered handler with the block content.
  *
- * Action types are conventional, not enforced. The current panel recognises:
- *   - `command`  → fills an agent's Command input
- *   - `prompt`   → fills a prompt body
+ * Action types are conventional, not enforced. Examples:
+ *   - `agent-env` → fills the new agent's Env input
+ *   - `prompt`    → fills a prompt body
  * Pages opt in by calling useRegisterChatAction(type, fn) on mount.
  */
 

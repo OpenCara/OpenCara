@@ -51,7 +51,7 @@ function ctxForDispatch(): {
           exitCode: 0,
           stdoutCaptured: "",
           agentHostId: "host-1",
-          acpSessionId: null,
+          conversationId: null,
         };
       },
     } as never,

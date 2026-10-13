@@ -71,7 +71,7 @@ export async function applyKanbanWaveDispatch(
   }));
   await db.insert(pmWaveItems).values(itemRows);
 
-  // 4. Trigger a flow run for each issue, in parallel. The MCP tool
+  // 4. Trigger a flow run for each issue, in parallel. The tool
   //    description ("Dispatch up to 10 issues in parallel") was a lie
   //    for as long as this was a sequential for-await loop — a 10-item
   //    wave then took ~10× the per-flow latency. Fire every triggerFlow
