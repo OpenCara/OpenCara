@@ -34,9 +34,10 @@ Each flow has exactly one trigger, and the engine pre-filters every incoming web
    ```
 
    First start prints a pairing code and opens `/devices/pair` in your browser; confirm there, and the daemon stays connected waiting for jobs. Keep it running (tmux, systemd, …). Pair as many devices as you like.
-5. **Create an agent** (`/agents`): pick a model as `provider/modelId` (e.g. `anthropic/claude-sonnet-5-5`), optionally a thinking level, and set the provider API key in the agent's env — see [Agents](#agents). The device runs the agent itself; nothing else needs installing beyond the `opencara` CLI.
-6. **Bind agents to the flow**: open the project's flow and click a node — pick a prompt (optional) and add your agents in priority order. The first agent is the node's primary; the rest are fallbacks. On the reviewer node, set "Run in parallel" to the number of reviews you want per PR, "Preferred successes" to how many should come back, and "Minimum successes" to how few you can still ship on — 3 / 3 / 2 runs three reviewers and still delivers when one of them fails.
-7. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
+5. **Set up models on the device**: agents run on pi's model runtime, so the device's pi configuration decides which models are available. Sign in or add API keys with the [`pi`](https://pi.dev) CLI (`npm i -g @earendil-works/pi-coding-agent`, then `/login` inside `pi`), and add providers pi doesn't ship with `pi install npm:<package>` — see [Agents](#agents). `pi --list-models` shows what the device can run.
+6. **Create an agent** (`/agents`): pick a model as `provider/modelId` (e.g. `anthropic/claude-sonnet-5-5`, `devin/swe-2`) and optionally a thinking level. The device runs the agent itself.
+7. **Bind agents to the flow**: open the project's flow and click a node — pick a prompt (optional) and add your agents in priority order. The first agent is the node's primary; the rest are fallbacks. On the reviewer node, set "Run in parallel" to the number of reviews you want per PR, "Preferred successes" to how many should come back, and "Minimum successes" to how few you can still ship on — 3 / 3 / 2 runs three reviewers and still delivers when one of them fails.
+8. **Use it from GitHub**: move an issue to `Ready` on the linked Projects v2 board to get an implementation PR; open a PR to get a synthesized multi-agent review; submit a review or comment `@opencara fix` to send the agent back for fixes. Watch progress live on the project's flow-run pages.
 
 Self-hosting the orchestrator instead is just this repo + Postgres + your own GitHub App — see [Development](#development) and [Deployment](#deployment).
 
@@ -211,7 +212,7 @@ Azure DevOps **auto-disables a subscription** after repeated delivery failures, 
 
 Each agent run dispatched through a flow gets an ephemeral GitHub App installation token injected into its environment, so `gh` and any octokit-based tool work out of the box without per-host `gh auth login`:
 
-- `GH_TOKEN`, `GITHUB_TOKEN` — same value, ≤1h TTL, scoped to the project's repo with `contents: write, issues: write, pull_requests: write, checks: read` (`contents: write` is needed for the implement stage to push branches; `checks: read` lets agents query Check Run status for auto-merge gating).
+- `GH_TOKEN`, `GITHUB_TOKEN`, `OPENCARA_SCM_TOKEN` — same value, ≤1h TTL, scoped to the project's repo with `contents: write, issues: write, pull_requests: write, checks: read` (`contents: write` is needed for the implement stage to push branches; `checks: read` lets agents query Check Run status for auto-merge gating). `OPENCARA_SCM_TOKEN` is the platform-neutral name the worktree's git credential helper reads; on Azure DevOps it carries the connection's access token and `GH_TOKEN` is not set.
 - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` — pinned to `opencara[bot]` so commits attribute to the App and don't leak the host's global `~/.gitconfig` identity into the run.
 
 The token is minted per run and revoked when the agent finishes. Identity inside the agent: `gh api user` returns `apps/<slug>` (the App's bot identity); the persisted `agent_runs.spec.env` shows `<ephemeral>` for the token fields rather than the secret.
@@ -233,19 +234,19 @@ CLI side: `opencara internal worktree {create,remove,write-session,gc}`. **Keep 
 
 ## Agents
 
-Every agent runs in-process inside the device CLI on [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable) — there are no external adapters to install. An agent (`/agents`) is:
+Every agent runs in-process inside the device CLI on [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable) — no agent CLIs or adapters run underneath it. An agent (`/agents`) is:
 
 - **Model** — `provider/modelId` (provider = text before the first `/`), e.g. `anthropic/claude-sonnet-5-5` or `openai/gpt-5.5`. Run `pi --list-models` on the device to see what is usable there.
 - **Thinking level** — `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or empty for the device's pi default (`defaultThinkingLevel` in `~/.pi/agent/settings.json`, else `medium`). The device clamps it to what the model supports.
 - **Capture thinking** — when on, model reasoning is streamed into the run log as a `[think]` block.
-- **Env** — provider API keys (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) override the device's credentials per request; other variables reach the agent's `bash` tool.
+- **Env** — provider API keys (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) override the device's credentials per request; other variables reach the agent's `bash` tool. Values set here are stored with every run (`agent_runs.spec.env`), so keep provider keys in the device's pi configuration instead.
 - **Device** — optional pin to one paired device.
 
 Models and credentials come from pi: the device builds pi's model runtime from `~/.pi/agent/models.json`, `~/.pi/agent/auth.json` and the provider extensions of the pi packages installed there, so custom providers, base-URL overrides, subscription logins made with the `pi` CLI's `/login` and provider packages all work. A provider pi doesn't ship is a package away:
 
 | Provider | Install on the device | Models | Credentials |
 |---|---|---|---|
-| Command Code | `pi install npm:pi-commandcode-provider` | `commandcode/<id>` (e.g. `xiaomi/mimo-v2.5-pro`) | `COMMAND_CODE_API_KEY` in the agent's env, `/login` → Command Code, or the `commandcode` entry in `auth.json` |
+| Command Code | `pi install npm:pi-commandcode-provider` | `commandcode/<id>` (e.g. `xiaomi/mimo-v2.5-pro`) | `COMMAND_CODE_API_KEY` in the agent's env, `/login` → Command Code, or the `commandcode` entry in `auth.json`. Works on the Go plan, which has no Provider API access: the package falls back to the Command Code CLI's endpoint. |
 | Devin | `pi install npm:pi-devin-local` | `devin/<family>`; the thinking level picks the variant | the device's Devin CLI login, registered with `/login devin` |
 | Cursor | `pi install npm:pi-cursor-reins` | `cursor/<id>` (e.g. `grok-4.7-max`, `claude-opus-5-5-max`) | `/login cursor` |
 | Antigravity | `pi install npm:pi-provider-antigravity` | `antigravity/<id>` (e.g. `gemini-3.8-flash`) | `/login antigravity` |
@@ -261,6 +262,8 @@ Migration 0061 converted existing agents: the model comes from the old `--model`
 ## PR review → fix loop
 
 The `pr-review-fix` flow triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It dispatches the implement agent to a fresh checkout of the PR branch, preferring the device that produced the branch, in a fresh conversation (the review carries the feedback). The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
+
+**Commit-and-push contract.** The checkout is deleted when the attempt ends, so an edit that was never pushed is lost even though the run reports success. Every agent that works in a PR-head worktree and doesn't feed `scm.post_review` (the `pr-review-fix` fix node, `development-lifecycle`'s fix node) gets the `opencara-pr-review-fix-contract` skill: commit the changes and `git push` them to the PR branch before finishing, rebasing on a non-fast-forward rejection; a run that changed nothing says so instead. Reviewer nodes don't get it — their output is the review text.
 
 How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host; if the pinned host is offline at trigger time, the engine falls back to `pickIdle()`.
 
