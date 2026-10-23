@@ -13,7 +13,7 @@
 # would force a from-source build (or silently fall back).
 ###############################################################################
 
-ARG NODE_VERSION=24
+ARG NODE_VERSION=26
 
 # ---- builder: install all deps + compile every workspace -------------------
 FROM node:${NODE_VERSION}-slim AS builder
@@ -21,8 +21,9 @@ FROM node:${NODE_VERSION}-slim AS builder
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 # corepack pins pnpm to the `packageManager` field in package.json, so the
-# image build uses the exact same pnpm the lockfile was written with.
-RUN corepack enable
+# image build uses the exact same pnpm the lockfile was written with. Node 25+
+# no longer bundles corepack, so install it from npm first.
+RUN npm install -g corepack@0.36.0 && corepack enable
 
 WORKDIR /app
 
