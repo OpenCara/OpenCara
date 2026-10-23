@@ -18,5 +18,14 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "proxy-addr@<2.0.8": "^2.0.8",
+      "@modelcontextprotocol/sdk@<1.32.0": "^1.32.0",
+      "fast-uri@<3.1.7": "^3.1.7",
+      "ip-address@<10.3.1": "^10.3.1",
+      "shell-quote@<1.9.0": "^1.9.0"
+    }
   }
 }
