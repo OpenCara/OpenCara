@@ -37,6 +37,13 @@ describe("buildPrReviewFixContractSkill", () => {
     assert.match(skill.instructions, /empty diff is a legitimate outcome/i);
   });
 
+  it("scopes the fix to [Important] findings, whole class, unless a person asks", () => {
+    assert.match(skill.instructions, /Fix every \[Important\] finding/);
+    assert.match(skill.instructions, /fix every instance/);
+    assert.match(skill.instructions, /Leave \[Nit\] and \[Pre-existing\] findings alone unless a person asked/);
+    assert.match(skill.instructions, /`@opencara fix`/);
+  });
+
   it("explains the push is what re-triggers review", () => {
     assert.match(skill.instructions, /pull_request\.synchronize/);
   });

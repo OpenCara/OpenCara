@@ -23,6 +23,21 @@ describe("extractFindings", () => {
     );
   });
 
+  it("reads the reviewer skill's severity tags", () => {
+    const md = [
+      "1. **[Important]** `src/api/handler.ts:42`: dereferences a nil pointer",
+      "2. **[Nit]** `src/api/router.ts:3`: shadowed variable",
+      "3. **[Pre-existing]** `src/db/store.py:10`: unbatched writes",
+      "- the important part is `lib/util/util.go:1`",
+    ].join("\n");
+    const out = extractFindings(md, FILES);
+    assert.equal(out.get("src/api/handler.ts")![0]!.severity, "high");
+    assert.equal(out.get("src/api/router.ts")![0]!.severity, "low");
+    assert.equal(out.get("src/db/store.py")![0]!.severity, "info");
+    // Only the bracketed tag counts; prose "important" stays info.
+    assert.equal(out.get("lib/util/util.go")![0]!.severity, "info");
+  });
+
   it("reads ranges in :N-M and #LN-LM forms", () => {
     const md = "src/db/store.py:10-25 is unbatched\nsrc/api/router.ts#L3-L7 dup";
     const out = extractFindings(md, FILES);

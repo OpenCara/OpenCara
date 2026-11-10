@@ -12,9 +12,11 @@ import type { ReviewMapFinding, ReviewMapSeverity } from "@opencara/shared";
 const MAX_FINDING_TEXT = 300;
 
 // "-level" lookahead so "high-level summary" / "low-level detail" don't
-// read as severity markers.
+// read as severity markers. `[Important]` is the reviewer skill's blocking
+// tag (flows/skills/prReviewVerdict.ts); only the bracketed tag counts, so
+// prose like "the important part" stays info. `[Nit]` is caught by `nits?`.
 const SEVERITY_RULES: [ReviewMapSeverity, RegExp][] = [
-  ["high", /\b(?:critical|blocker|blocking|high(?!-level))\b/i],
+  ["high", /\[important\]|\b(?:critical|blocker|blocking|high(?!-level))\b/i],
   ["medium", /\b(?:medium|major)\b/i],
   ["low", /\b(?:low(?!-level)|minor|nits?|nitpicks?)\b/i],
 ];
