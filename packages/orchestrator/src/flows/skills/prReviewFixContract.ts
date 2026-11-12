@@ -55,8 +55,10 @@ OpenCara reviews tag each finding **[Important]**, **[Nit]** or
 - A review written by a person, without these tags, is in scope as a
   whole.
 - If an OpenCara review has no [Important] finding (for example, it says
-  it could not complete the review), there is nothing to fix: make no
-  edits, skip the commit and push, and say so.
+  it could not complete the review) and no person asked for changes, there
+  is nothing to fix: make no edits, skip the commit and push, and say so.
+  When a person did ask (an \`@opencara fix\` comment), do what they asked,
+  nits included.
 - If you are sure a finding is wrong, don't change code to satisfy it:
   explain why in your final response.
 

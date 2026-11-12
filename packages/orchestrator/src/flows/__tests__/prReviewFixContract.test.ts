@@ -51,6 +51,13 @@ describe("buildPrReviewFixContractSkill", () => {
     assert.match(skill.instructions, /make no\s+edits, skip the commit and push/);
   });
 
+  it("doesn't let the no-op override a person asking for the nits", () => {
+    // A nit-only review approves (no fixer), but `@opencara fix` still
+    // dispatches one: that run must do what the person asked (PR #274).
+    assert.match(skill.instructions, /no \[Important\] finding[\s\S]*and no person asked for changes/);
+    assert.match(skill.instructions, /When a person did ask[\s\S]*nits included/);
+  });
+
   it("explains the push is what re-triggers review", () => {
     assert.match(skill.instructions, /pull_request\.synchronize/);
   });
