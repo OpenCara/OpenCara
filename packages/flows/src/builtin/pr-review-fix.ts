@@ -6,13 +6,17 @@ import type { FlowDefinition } from "../types.js";
 //
 // The fix agent pushing commits emits `pull_request.synchronize`, which the
 // `pr-review` flow picks up for the next lighter review round; `maxIterations`
-// is the engine-level backstop on that loop (disabled by default). Node ids
-// match the legacy unified graph's stage so account-scope settings carry over.
+// caps that loop at 3 fix rounds per PR by default. Past that, rounds rarely
+// converge (the reviewer finds a few more old issues each pass), so the cap
+// posts one comment asking the author to step back and reconsider the
+// approach. Projects that customized the flow keep their own setting. Node
+// ids match the legacy unified graph's stage so account-scope settings carry
+// over.
 export const prReviewFixFlow: FlowDefinition = {
   slug: "pr-review-fix",
   name: "PR review → Fix",
   description:
-    "When a review is submitted on the PR (commented / changes requested by default) or someone comments `@opencara fix`, wake the implement agent in the PR's worktree to apply the feedback, then optionally auto-merge. maxIterations caps the review → fix loop per PR.",
+    "When a review is submitted on the PR (commented / changes requested by default) or someone comments `@opencara fix`, wake the implement agent in the PR's worktree to apply the feedback, then optionally auto-merge. maxIterations caps the review → fix loop per PR (3 rounds by default, then a comment asks the author to reconsider the approach).",
   nodes: [
     {
       id: "fix_trigger",
@@ -39,9 +43,9 @@ export const prReviewFixFlow: FlowDefinition = {
           mergeWithoutChanges: false,
         },
         maxIterations: {
-          enabled: false,
-          limit: null,
-          commentOnSkip: false,
+          enabled: true,
+          limit: 3,
+          commentOnSkip: true,
         },
         contextInjection: {
           env: [

@@ -91,7 +91,27 @@ describe("actionRunner scm.post_review stub guard", () => {
     assert.deepEqual(result.output, {
       reviewId: 42,
       htmlUrl: "https://github.com/o/r/pull/25#r42",
+      prNumber: 25,
+      headSha: "abc123",
+      verdict: "APPROVE",
+      reviewBody: "Ship it — clean diff.",
     });
+  });
+
+  it("records what the review covered for the next re-review, without the author stamp", async () => {
+    const { ctx } = ctxForPostReview(
+      "verdict: request_changes\n\n## Summary\n\n1 important\n\n## Findings\n\n1. **[Important]** `a.ts:3`: boom",
+      "codex",
+    );
+    const result = await actionRunner(ctx, postReviewNode);
+    const out = result.output as Record<string, unknown>;
+    assert.equal(out.prNumber, 25);
+    assert.equal(out.headSha, "abc123");
+    assert.equal(out.verdict, "REQUEST_CHANGES");
+    assert.equal(
+      out.reviewBody,
+      "## Summary\n\n1 important\n\n## Findings\n\n1. **[Important]** `a.ts:3`: boom",
+    );
   });
 
   it("stamps the upstream agent's name on the posted body", async () => {

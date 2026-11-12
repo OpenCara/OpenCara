@@ -23,6 +23,11 @@ import type { SkillEnvelope } from "../skills.js";
 // change (ShiningPie PR 115, run 01M3RPMK1KHZ5JE7S6PPTKVMH0, 2026-09-30:
 // 45 minutes of correct, validated fixes destroyed — the run still
 // reported `succeeded` and the remote branch never moved).
+//
+// It also scopes the work to the reviewer's severity tags (skills/
+// prReviewVerdict.ts): an agent author fixes every nit it is shown, and each
+// fix is another commit and another review round, so only [Important]
+// findings are in scope unless a person asked for more.
 export function buildPrReviewFixContractSkill(opts: {
   baseUrl: string;
   runId: string;
@@ -35,6 +40,27 @@ request's head branch. Your job is not finished when the code edits
 land on disk — it is finished only when your commits have been pushed
 back to the PR branch on the remote. The pull request already exists;
 you are updating it, not creating it.
+
+## Which findings to fix
+
+OpenCara reviews tag each finding **[Important]**, **[Nit]** or
+**[Pre-existing]**.
+
+- Fix every [Important] finding. When one names a class of problem or
+  lists several locations, fix every instance, including any the review
+  missed.
+- Leave [Nit] and [Pre-existing] findings alone unless a person asked for
+  them (an \`@opencara fix\` comment, or a review a person wrote). Every
+  extra change costs another review round.
+- A review written by a person, without these tags, is in scope as a
+  whole.
+- If an OpenCara review has no [Important] finding (for example, it says
+  it could not complete the review) and no person asked for changes, there
+  is nothing to fix: make no edits, skip the commit and push, and say so.
+  When a person did ask (an \`@opencara fix\` comment), do what they asked,
+  nits included.
+- If you are sure a finding is wrong, don't change code to satisfy it:
+  explain why in your final response.
 
 ## Required completion contract
 

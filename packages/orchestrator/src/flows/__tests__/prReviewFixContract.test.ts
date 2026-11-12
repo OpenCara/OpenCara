@@ -37,6 +37,27 @@ describe("buildPrReviewFixContractSkill", () => {
     assert.match(skill.instructions, /empty diff is a legitimate outcome/i);
   });
 
+  it("scopes the fix to [Important] findings, whole class, unless a person asks", () => {
+    assert.match(skill.instructions, /Fix every \[Important\] finding/);
+    assert.match(skill.instructions, /fix every instance/);
+    assert.match(skill.instructions, /Leave \[Nit\] and \[Pre-existing\] findings alone unless a person asked/);
+    assert.match(skill.instructions, /`@opencara fix`/);
+  });
+
+  it("treats an OpenCara review with no [Important] finding as a no-op", () => {
+    // `verdict: comment` (review incomplete) still fires the default fix
+    // trigger; the run must end with no edits rather than invent work.
+    assert.match(skill.instructions, /no \[Important\] finding/);
+    assert.match(skill.instructions, /make no\s+edits, skip the commit and push/);
+  });
+
+  it("doesn't let the no-op override a person asking for the nits", () => {
+    // A nit-only review approves (no fixer), but `@opencara fix` still
+    // dispatches one: that run must do what the person asked (PR #274).
+    assert.match(skill.instructions, /no \[Important\] finding[\s\S]*and no person asked for changes/);
+    assert.match(skill.instructions, /When a person did ask[\s\S]*nits included/);
+  });
+
   it("explains the push is what re-triggers review", () => {
     assert.match(skill.instructions, /pull_request\.synchronize/);
   });

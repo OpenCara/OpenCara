@@ -263,11 +263,21 @@ Migration 0061 converted existing agents: the model comes from the old `--model`
 
 The `pr-review-fix` flow triggers when a reviewer submits a review on the PR — `commented` and `changes_requested` states by default; `approved` skips it (adjust in the trigger node config) — or when someone comments `@opencara fix`. It dispatches the implement agent to a fresh checkout of the PR branch, preferring the device that produced the branch, in a fresh conversation (the review carries the feedback). The agent applies the feedback and pushes commits to the same branch; if the reviewer comes back, the cycle repeats.
 
+**Review contract.** Every agent that feeds `scm.post_review` gets the `opencara-pr-review-verdict` skill. Besides the `verdict:` line it sets how reviews are written, following the Claude Code team's [write-up on agent code review](https://claude.dev/blog/solving-code-review-at-anthropic/):
+
+- Every finding is tagged **[Important]** (a bug the PR introduces, which blocks merge), **[Nit]** (at most 3) or **[Pre-existing]** (a real problem the PR didn't introduce, never blocking). Each finding cites a `path:line`. A problem found in several places is reported once, with every location. Style-only findings are dropped unless they break a convention in the repository's instructions file.
+- The summary opens with a count, and says "Nothing to fix." when that's the case.
+- Verdict: `request_changes` when there is an [Important] finding, new or still open from an earlier review, otherwise `approve`. `comment` means the review couldn't be completed. An `approve` doesn't wake the fix agent, so nits never cost an automatic round.
+- The multi-review synthesizer keeps only findings it can confirm in the code or that at least two reviewers raised independently.
+- **Re-reviews.** Each posted review records the PR number, the head commit it reviewed, its verdict and its body in the `post_review` step's output. The next review on that PR receives them as `priorReview` and `OPENCARA_PR_LAST_REVIEWED_SHA`. It reviews what changed since that commit (`git diff <sha>..HEAD` when it has a checkout), reports the earlier [Important] findings as fixed or still open, and never repeats a posted finding. A second look at the same commit (`@opencara review`, `@opencara mreview`, a rerun) has no delta, so it reviews the whole PR and reports anything the previous review missed.
+
+The fix agent's contract scopes it to [Important] findings, fixing every instance of a class. It leaves [Nit] and [Pre-existing] findings alone unless a person asked for them, and a review with no [Important] finding (such as one that couldn't be completed) ends the fix run with no edits, unless a person asked for changes with `@opencara fix`.
+
 **Commit-and-push contract.** The checkout is deleted when the attempt ends, so an edit that was never pushed is lost even though the run reports success. Every agent that works in a PR-head worktree and doesn't feed `scm.post_review` (the `pr-review-fix` fix node, `development-lifecycle`'s fix node) gets the `opencara-pr-review-fix-contract` skill: commit the changes and `git push` them to the PR branch before finishing, rebasing on a non-fast-forward rejection; a run that changed nothing says so instead. Reviewer nodes don't get it — their output is the review text.
 
 How the device pin works: worktree allocation upserts a row in `worktree_pins(owner_repo, branch)` carrying the host that ran it. Subsequent flow runs for the same branch look up that row and dispatch to the same host; if the pinned host is offline at trigger time, the engine falls back to `pickIdle()`.
 
-**No iteration cap:** GitHub's review/push cycle is the bound. If the operator needs to stop a runaway loop, disable the flow.
+**Iteration cap.** The fix node's `maxIterations` caps the loop at **3** successful fix runs per PR by default. Once a PR reaches it, review-triggered and `@opencara fix` dispatches are skipped. OpenCara posts one comment asking the author to step back and reconsider the approach, because rounds that keep going rarely converge. Reviews still run on every push. A rerun from the run page bypasses the cap, and the limit is set on the fix node. Projects whose `pr-review-fix` graph was customized, or seeded from a template draft, keep their own setting.
 
 ## Scheduled flows
 

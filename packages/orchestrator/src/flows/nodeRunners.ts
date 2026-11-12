@@ -35,6 +35,7 @@ import type {
 import { buildIssueImplementContractSkill } from "./skills/issueImplementContract.js";
 import { buildPrReviewFixContractSkill } from "./skills/prReviewFixContract.js";
 import { buildPrReviewVerdictSkill } from "./skills/prReviewVerdict.js";
+import { loadPriorReview, truncateReviewBody, type PriorReview } from "./priorReview.js";
 import { markDraftPrReadyByHead } from "./draftPr.js";
 import { parseReviewVerdict } from "../agents/verdict.js";
 import { reviewBodyForPublication } from "../agents/reviewBody.js";
@@ -1227,6 +1228,20 @@ export async function runAgentAttempt(
     const prNumber = ctx.prContext?.envExtras["OPENCARA_PR_NUMBER"];
     if (reviewFixSkill && prNumber) env["OPENCARA_PR_NUMBER"] = prNumber;
 
+    // Re-review context for agents that feed `scm.post_review`: the last
+    // review OpenCara posted on this PR (its commit, verdict and body), so
+    // this pass covers what changed since and doesn't repeat posted
+    // findings. Stamped regardless of contextInjection.env, like
+    // OPENCARA_PR_NUMBER above, because the verdict skill names the var.
+    let priorReview: PriorReview | null = null;
+    if (ctx.hasDownstreamPostReview && ctx.prContext) {
+      const reviewedPr = Number(ctx.prContext.envExtras["OPENCARA_PR_NUMBER"]);
+      if (Number.isInteger(reviewedPr) && reviewedPr > 0) {
+        priorReview = await loadPriorReview(ctx.db, ctx.projectId, reviewedPr);
+      }
+      if (priorReview) env["OPENCARA_PR_LAST_REVIEWED_SHA"] = priorReview.headSha;
+    }
+
     // A worktree agent reads the PR via `git diff` in its checkout; the
     // inline diff (when one was fetched at all — see prContextNeeds) would
     // only duplicate it into the prompt at up to 20k lines.
@@ -1234,6 +1249,7 @@ export async function runAgentAttempt(
     const stdinJson = node.config.contextInjection.stdinJson
       ? {
           ...(prStdin ?? {}),
+          ...(priorReview ? { priorReview } : {}),
           ...(ctx.issueContext?.stdin ?? {}),
           ...(ctx.scheduleContext?.stdin ?? {}),
           previousOutput: ctx.previousOutput,
@@ -1286,6 +1302,12 @@ export async function runAgentAttempt(
       const verdictSkill = buildPrReviewVerdictSkill({
         baseUrl: ctx.publicBaseUrl,
         runId: agentRunId,
+        // Fed by other agents' output = the fan-in synthesizer, which
+        // verifies the reviewers' findings rather than reviewing afresh.
+        role: (ctx.previousOutput?.trim() ?? "").length > 0 ? "synthesizer" : "reviewer",
+        priorReview,
+        hasCheckout: Boolean(worktree?.workdir),
+        currentHeadSha: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_SHA"] ?? null,
       });
       systemPromptParts.push(verdictSkill.instructions);
       injectedSkills.push({
@@ -1352,6 +1374,7 @@ export async function runAgentAttempt(
     // out-of-band stdin envelope.
     const pageContext: Record<string, unknown> = {};
     if (prStdin) Object.assign(pageContext, prStdin);
+    if (priorReview) pageContext["priorReview"] = priorReview;
     if (ctx.issueContext) Object.assign(pageContext, ctx.issueContext.stdin);
 
     // Validate the project-level instructions file setting and forward the
@@ -1502,7 +1525,13 @@ async function enforceMaxIterations(ctx: NodeRunCtx, node: AgentNode): Promise<v
   const completed = await countCompletedFixRuns(ctx, { prNumber, headRef });
   if (completed < limit) return;
 
-  const reason = `opencara: reached maxIterations=${limit} on this PR; further @opencara fix / review comments will not dispatch until the count resets`;
+  // Hitting the cap is a signal about the approach, not a reason for one
+  // more patch: the reviewer and the fixer have stopped converging. Say so,
+  // and say how to continue deliberately.
+  const reason =
+    `opencara: this PR has been through ${limit} review → fix rounds (maxIterations=${limit}), so automatic fixes have stopped. ` +
+    `Rounds that keep going usually mean the approach needs another look rather than another patch: step back, reconsider the approach or split the PR, and push when ready (reviews still run on every push). ` +
+    `To run another fix anyway, rerun the fix step from its run page or raise maxIterations on the fix node.`;
   if (cfg.commentOnSkip && prNumber) {
     await postMaxIterationsCommentOnce(ctx, prNumber, reason);
   }
@@ -1922,6 +1951,13 @@ export const actionRunner: NodeRunner<ActionNode> = async (ctx, node) => {
           htmlUrl: res.htmlUrl,
           ...(res.downgradedFrom ? { downgradedFrom: res.downgradedFrom } : {}),
           ...(map ? { reviewMapUrl: map.pageUrl } : {}),
+          // What this review covered, for the next review on the PR
+          // (flows/priorReview.ts): it reviews the delta from `headSha` and
+          // doesn't repeat what `reviewBody` already said.
+          prNumber: pr.number,
+          headSha: pr.head.sha,
+          verdict: event,
+          reviewBody: truncateReviewBody(reviewContent),
         },
       };
     }
