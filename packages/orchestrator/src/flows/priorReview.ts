@@ -65,8 +65,7 @@ export async function loadPriorReview(
       select s.output_json as output
       from flow_run_steps s
       join flow_runs fr on fr.id = s.flow_run_id
-      join flows f on f.id = fr.flow_id
-      where f.project_id = ${projectId}
+      where fr.project_id = ${projectId}
         and s.node_kind in ('scm.post_review', 'github.post_review')
         and s.status = 'succeeded'
         and s.output_json->>'prNumber' = ${String(prNumber)}

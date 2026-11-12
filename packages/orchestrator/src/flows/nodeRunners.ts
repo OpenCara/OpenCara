@@ -1307,6 +1307,7 @@ export async function runAgentAttempt(
         role: (ctx.previousOutput?.trim() ?? "").length > 0 ? "synthesizer" : "reviewer",
         priorReview,
         hasCheckout: Boolean(worktree?.workdir),
+        currentHeadSha: ctx.prContext?.envExtras["OPENCARA_PR_HEAD_SHA"] ?? null,
       });
       systemPromptParts.push(verdictSkill.instructions);
       injectedSkills.push({

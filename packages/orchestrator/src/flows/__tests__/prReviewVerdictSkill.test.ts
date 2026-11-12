@@ -89,6 +89,34 @@ describe("buildPrReviewVerdictSkill", () => {
     assert.match(skill.instructions, /`request_changes` until every one is fixed/);
   });
 
+  it("falls back to the whole PR diff when the delta is empty or gone", () => {
+    const skill = buildPrReviewVerdictSkill({
+      ...base,
+      priorReview: { headSha: SHA, verdict: null, htmlUrl: null },
+      hasCheckout: true,
+      currentHeadSha: "fedcba9876543210fedcba9876543210fedcba98",
+    });
+    assert.match(skill.instructions, /or that diff is empty, review the whole PR diff/);
+  });
+
+  it("lets a second look at the same commit report new findings anywhere", () => {
+    // `@opencara review` / `mreview` and reruns hit the same head: an empty
+    // delta must not forbid what the second look was asked for (PR #274).
+    const skill = buildPrReviewVerdictSkill({
+      ...base,
+      priorReview: { headSha: SHA, verdict: "APPROVE", htmlUrl: null },
+      hasCheckout: true,
+      currentHeadSha: SHA.toUpperCase(),
+    });
+    assert.match(skill.instructions, /## This is a second look at the same commit/);
+    assert.match(skill.instructions, /Review the whole pull request diff/);
+    assert.doesNotMatch(skill.instructions, /git diff/);
+    assert.doesNotMatch(skill.instructions, /out of scope, unless/);
+    // The no-repeat and still-open rules still apply.
+    assert.match(skill.instructions, /Never repeat a finding/);
+    assert.match(skill.instructions, /`request_changes` until every one is fixed/);
+  });
+
   it("doesn't hand a git command to a reviewer without a checkout", () => {
     const skill = buildPrReviewVerdictSkill({
       ...base,

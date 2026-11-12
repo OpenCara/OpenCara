@@ -44,6 +44,13 @@ describe("buildPrReviewFixContractSkill", () => {
     assert.match(skill.instructions, /`@opencara fix`/);
   });
 
+  it("treats an OpenCara review with no [Important] finding as a no-op", () => {
+    // `verdict: comment` (review incomplete) still fires the default fix
+    // trigger; the run must end with no edits rather than invent work.
+    assert.match(skill.instructions, /no \[Important\] finding/);
+    assert.match(skill.instructions, /make no\s+edits, skip the commit and push/);
+  });
+
   it("explains the push is what re-triggers review", () => {
     assert.match(skill.instructions, /pull_request\.synchronize/);
   });

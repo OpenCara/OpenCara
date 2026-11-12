@@ -32,8 +32,14 @@ import type { SkillEnvelope } from "../skills.js";
 //     them blindly — their version of verifier agents voting on findings.
 //
 // The verdict rules matter for the loop: `request_changes` and `comment`
-// wake the pr-review-fix agent, `approve` doesn't. Nit-only reviews
-// therefore approve, so a nit never costs an automatic fix round.
+// wake the pr-review-fix agent (its default trigger), `approve` doesn't.
+// Nit-only reviews therefore approve, so a nit never costs an automatic fix
+// round; `comment` now only means "review incomplete", and the fix contract
+// turns a review with no [Important] finding into a no-op run.
+//
+// A re-review of the SAME head (an on-demand `@opencara review` / `mreview`,
+// a rerun) gets its own section: there is no delta, so it reviews the whole
+// PR and reports new findings normally, still without repeating posted ones.
 
 /** What the previous OpenCara review on this PR covered (see flows/priorReview.ts). */
 export interface PrReviewVerdictPriorReview {
@@ -52,6 +58,9 @@ export function buildPrReviewVerdictSkill(opts: {
   priorReview?: PrReviewVerdictPriorReview | null;
   /** True when the agent runs in a checkout of the PR head (can `git diff`). */
   hasCheckout?: boolean;
+  /** The PR head this review runs against; equal to the prior review's head
+   *  on an on-demand second look (`@opencara review` / `mreview`, reruns). */
+  currentHeadSha?: string | null;
 }): SkillEnvelope {
   const baseUrl = opts.baseUrl.replace(/\/$/, "");
   const role = opts.role ?? "reviewer";
@@ -62,7 +71,11 @@ export function buildPrReviewVerdictSkill(opts: {
     OUTPUT_CONTRACT,
   ];
   if (opts.priorReview) {
-    sections.push(reReviewSection(opts.priorReview, Boolean(opts.hasCheckout)));
+    sections.push(
+      sameHead(opts.priorReview.headSha, opts.currentHeadSha)
+        ? sameHeadReReviewSection(opts.priorReview)
+        : reReviewSection(opts.priorReview, Boolean(opts.hasCheckout)),
+    );
   }
   sections.push(OUT_OF_SCOPE);
   const instructions = sections.join("\n\n");
@@ -78,9 +91,9 @@ const INTRO = `# Skill: opencara-pr-review-verdict
 
 You are reviewing a pull request. Your output is posted to the PR as one
 review through the platform's Reviews API, and its verdict decides what
-happens next: \`request_changes\` and \`comment\` wake the fix agent,
-\`approve\` does not. The fix agent acts on every finding it is given (one
-more commit, one more review round), so post only what is worth that.`;
+happens next: \`request_changes\` wakes the fix agent, \`approve\` does
+not. The fix agent acts on every [Important] finding it is given (one more
+commit, one more review round), so post only what is worth that.`;
 
 const REVIEWER_ROLE = `## What to look for
 
@@ -162,36 +175,64 @@ One or two sentences: does the change do what it says?
 The summary's first line is the count. When there is nothing to fix, say
 so plainly ("Nothing to fix.") and write \`None.\` under Findings.`;
 
-function reReviewSection(prior: PrReviewVerdictPriorReview, hasCheckout: boolean): string {
-  const sha = prior.headSha;
-  const short = sha.slice(0, 12);
-  const previous = [
+function sameHead(prior: string, current: string | null | undefined): boolean {
+  return !!current && prior.toLowerCase() === current.toLowerCase();
+}
+
+function describePrior(prior: PrReviewVerdictPriorReview): string {
+  const parts = [
     prior.verdict ? `verdict ${prior.verdict.toLowerCase()}` : null,
     prior.htmlUrl ? prior.htmlUrl : null,
   ]
     .filter(Boolean)
     .join(", ");
-  const whereToLook = hasCheckout
-    ? `- Review what changed since then: \`git diff ${sha}..HEAD\` in your
-  checkout. If that commit is no longer in the history (a force-push or
-  rebase), review the whole diff, but still apply the rules below.`
-    : `- Your diff covers the whole PR, not just the new commits. Use the
-  previous review to tell what was already covered.`;
-  return `## This is a re-review
+  return parts ? ` (${parts})` : "";
+}
 
-OpenCara already reviewed this pull request at commit \`${short}\`${previous ? ` (${previous})` : ""}.
-That review's body is in your context as \`priorReview\`, and its commit is
-in \`$OPENCARA_PR_LAST_REVIEWED_SHA\`.
-
-${whereToLook}
-- Never repeat a finding the previous review already posted. Instead, add a
+const PRIOR_FINDINGS_RULES = `- Never repeat a finding the previous review already posted. Instead, add a
   \`## Prior findings\` section between Summary and Findings with one line
   per earlier [Important] finding: \`Fixed\` or \`Still open\`, with the
   \`path:line\` that shows it. Don't put severity tags on those lines.
 - An earlier [Important] finding that is still open counts toward the
   verdict: answer \`request_changes\` until every one is fixed, even when
-  this pass finds nothing new.
-- New findings belong on lines changed since \`${short}\`. Code the previous
+  this pass finds nothing new.`;
+
+// A second look at the SAME commit (an `@opencara review` / `mreview`
+// comment, a rerun, or a second flow reviewing the same push): there is no
+// delta, so scoping to "what changed since" would forbid exactly the new
+// findings the second look was asked for.
+function sameHeadReReviewSection(prior: PrReviewVerdictPriorReview): string {
+  const short = prior.headSha.slice(0, 12);
+  return `## This is a second look at the same commit
+
+OpenCara already reviewed this pull request at commit \`${short}\`${describePrior(prior)},
+and nothing has been pushed since. That review's body is in your context as
+\`priorReview\`, and its commit is in \`$OPENCARA_PR_LAST_REVIEWED_SHA\`.
+
+- Review the whole pull request diff, and report anything the previous
+  review missed under the normal rules.
+${PRIOR_FINDINGS_RULES}`;
+}
+
+function reReviewSection(prior: PrReviewVerdictPriorReview, hasCheckout: boolean): string {
+  const sha = prior.headSha;
+  const short = sha.slice(0, 12);
+  const whereToLook = hasCheckout
+    ? `- Review what changed since then: \`git diff ${sha}..HEAD\` in your
+  checkout. If that commit is no longer in the history (a force-push or
+  rebase), or that diff is empty, review the whole PR diff instead and
+  report new findings under the normal rules.`
+    : `- Your diff covers the whole PR, not just the new commits. Use the
+  previous review to tell what was already covered.`;
+  return `## This is a re-review
+
+OpenCara already reviewed this pull request at commit \`${short}\`${describePrior(prior)}.
+That review's body is in your context as \`priorReview\`, and its commit is
+in \`$OPENCARA_PR_LAST_REVIEWED_SHA\`.
+
+${whereToLook}
+${PRIOR_FINDINGS_RULES}
+- Otherwise, new findings belong on lines changed since \`${short}\`. Code the previous
   pass already saw is out of scope, unless it is an [Important] bug that
   would crash, lose data or open a security hole.`;
 }
