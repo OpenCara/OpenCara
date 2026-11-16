@@ -3,7 +3,7 @@ name: deploy
 # Release-deploy the OpenCara server to opencara.com.
 #
 # On every `v<semver>` tag we build a versioned Docker image, push it to GHCR,
-# and roll it out to the production host over SSH — gating the run on the new
+# and roll it out to the production host over Tailscale SSH — gating the run on the new
 # container reporting healthy. Because each release is a distinct, immutable
 # image tag in GHCR, rollback is "redeploy a prior tag" with no rebuild: use
 # the `workflow_dispatch` entry point (or run deploy/deploy.sh on the host).
@@ -122,21 +122,45 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Connect to Tailscale
+        # The host is reached over the tailnet, not the public internet: it
+        # exposes no sshd, only Tailscale SSH. The runner joins as an
+        # ephemeral node tagged tag:ci; the tailnet policy must let tag:ci
+        # SSH (action "accept", not "check") into the host as DEPLOY_SSH_USER.
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ secrets.DEPLOY_SSH_HOST }}
+
+      - name: Configure SSH target
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          # Tailscale SSH authenticates by tailnet identity — no key, and the
+          # tailnet already pins the peer, so don't prompt on the host key of
+          # an ephemeral runner with an empty known_hosts.
+          mkdir -p ~/.ssh
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-host
+            HostName ${DEPLOY_SSH_HOST}
+            User ${DEPLOY_SSH_USER}
+            BatchMode yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          EOF
+
       - name: Copy deploy assets to host
         # Repo is the source of truth for the compose file + deploy script; ship
         # the current versions every release so the host never drifts.
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_SSH_PORT }}
-          source: "deploy/docker-compose.prod.yml,deploy/deploy.sh"
-          target: "/opt/opencara"
-          strip_components: 1   # drop the leading deploy/ → land files in /opt/opencara
+        run: |
+          tar -C deploy -cf - docker-compose.prod.yml deploy.sh \
+            | ssh deploy-host 'tar -xf - -C /opt/opencara'
 
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Deploy over Tailscale SSH
         env:
           OPENCARA_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           # GHCR pull credential for the host. Preference order:
@@ -150,13 +174,13 @@ jobs:
           #      (anonymous pull succeeds), but login is harmless there.
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || github.token }}
-        with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_SSH_PORT }}
-          envs: OPENCARA_IMAGE_TAG,GHCR_USERNAME,GHCR_TOKEN
-          script: |
-            set -euo pipefail
-            chmod +x /opt/opencara/deploy.sh
-            /opt/opencara/deploy.sh
+        run: |
+          # The token goes over stdin, never onto the remote command line
+          # (where it would show up in the host's process list).
+          printf '%s\n' "$GHCR_TOKEN" | ssh deploy-host \
+            "OPENCARA_IMAGE_TAG=$(printf %q "$OPENCARA_IMAGE_TAG") GHCR_USERNAME=$(printf %q "$GHCR_USERNAME") bash -c '
+              set -euo pipefail
+              IFS= read -r GHCR_TOKEN; export GHCR_TOKEN OPENCARA_IMAGE_TAG GHCR_USERNAME
+              chmod +x /opt/opencara/deploy.sh
+              exec /opt/opencara/deploy.sh </dev/null
+            '"

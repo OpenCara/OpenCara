@@ -25,7 +25,9 @@ That single tag push triggers two independent workflows:
    orchestrator — and **push** it to GHCR as
    `ghcr.io/opencara/opencara/server:v1.0.2` and `:latest`
    (`:latest` is skipped for prereleases like `v1.0.2-rc.1`).
-3. **Deploy** over SSH: copy [`docker-compose.prod.yml`](./docker-compose.prod.yml)
+3. **Deploy** over [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh):
+   the runner joins the tailnet as an ephemeral `tag:ci` node, copies
+   [`docker-compose.prod.yml`](./docker-compose.prod.yml)
    and [`deploy.sh`](./deploy.sh) to the host, pull the new tag, and
    `docker compose up -d --wait` it.
 4. **Gate on health**: the run only goes green once the container reports
@@ -44,21 +46,33 @@ before any rollout):
 
 | Secret             | Purpose                                                             |
 | ------------------ | ------------------------------------------------------------------- |
-| `DEPLOY_SSH_HOST`  | Host/IP of the opencara.com server                                  |
-| `DEPLOY_SSH_USER`  | SSH user (must be able to run `docker`)                             |
-| `DEPLOY_SSH_KEY`   | Private SSH key (PEM) authorized on the host                        |
-| `DEPLOY_SSH_PORT`  | SSH port (e.g. `22`)                                                 |
+| `TS_OAUTH_CLIENT_ID` | Tailscale OAuth client ID (scope: `auth_keys` write, tag `tag:ci`) |
+| `TS_OAUTH_SECRET`  | Tailscale OAuth client secret                                       |
+| `DEPLOY_SSH_HOST`  | Tailnet name of the opencara.com server (MagicDNS, e.g. `nerd`)     |
+| `DEPLOY_SSH_USER`  | Host user (must be able to run `docker`)                            |
 | `GHCR_PULL_TOKEN`  | PAT with `read:packages` so the host can pull from GHCR. Omit if the GHCR package is public. |
 
 Pushing the image uses the built-in `GITHUB_TOKEN` (`packages: write`) — no
 secret needed for that half.
+
+There is no SSH key: Tailscale SSH authenticates by tailnet identity. The
+tailnet policy must own `tag:ci`, let it reach the host, and **accept** (not
+`check` — CI can't complete a browser re-auth) SSH into it:
+
+```jsonc
+"tagOwners": { "tag:ci": ["autogroup:admin"], "tag:server": ["autogroup:admin"] },
+"grants":    [{ "src": ["tag:ci"], "dst": ["tag:server"], "ip": ["tcp:22"] }],
+"ssh":       [{ "action": "accept", "src": ["tag:ci"], "dst": ["tag:server"], "users": ["quabug"] }]
+```
 
 ## One-time host setup
 
 On the deploy host:
 
 1. Install Docker Engine + the Compose plugin; ensure `DEPLOY_SSH_USER` can run
-   `docker` without sudo.
+   `docker` without sudo. Join the tailnet with Tailscale SSH enabled and the
+   host tag: `sudo tailscale up --ssh --advertise-tags=tag:server`. No public
+   `sshd` is needed.
 2. Create the deploy directory and the production env file (the workflow ships
    the compose file and script, but **never** secrets):
 
